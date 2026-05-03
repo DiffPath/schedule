@@ -1,0 +1,2450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Rota — Pathology Group Schedule</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<style>
+  :root {
+    --bg: #eaf3fb;
+    --bg-2: #d8eaf6;
+    --paper: #f3f9fe;
+    --paper-2: #eaf4fc;
+    --ink: #111827;
+    --ink-2: #3d5166;
+    --ink-3: #7a96b0;
+    --ink-4: #aec5d8;
+    --rule: #b8d4e8;
+    --rule-soft: #d0e6f4;
+    --rule-soft-2: #daeef8;
+    --accent: #1a5276;
+    --accent-soft: rgba(26,82,118,0.08);
+    --today-bg: rgba(254, 243, 199, 0.55);
+    --today-ring: #d4a72c;
+
+    /* Pathologist identity colors */
+    --p1: #b94e2a;   /* MM */
+    --p2: #1f5e5b;   /* IM */
+    --p3: #b88512;   /* JR */
+    --p4: #6b4a8e;   /* MR */
+
+    /* Pathologist light tint backgrounds (for service row highlights) */
+    --p1-bg: rgba(185, 78,  42,  0.09);
+    --p2-bg: rgba( 31, 94,  91,  0.09);
+    --p3-bg: rgba(184,133,  18,  0.09);
+    --p4-bg: rgba(107, 74, 142,  0.09);
+
+    /* Service colors */
+    --svc-cyto:    #c2410c;
+    --svc-bigs:    #155e75;
+    --svc-huntley: #65a30d;
+    --svc-wfh:     #7e22ce;
+
+    /* PTO styling */
+    --pto-bg:    #f1ebd8;
+    --pto-ink:   #6b5d3a;
+    --pto-stripe:#e2d8b8;
+
+    --serif: 'Instrument Serif', Georgia, serif;
+    --sans: 'Geist', system-ui, sans-serif;
+    --mono: 'JetBrains Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      radial-gradient(circle at 15% 20%, rgba(59,130,246,0.07) 0, transparent 40%),
+      radial-gradient(circle at 85% 80%, rgba(99,102,241,0.05) 0, transparent 40%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  button { font-family: inherit; }
+
+  .app {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    grid-template-rows: auto 1fr;
+    height: 100vh;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ─────────────────── HEADER ─────────────────── */
+  header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 32px 14px;
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg);
+    gap: 18px;
+  }
+  .brand { display: flex; align-items: baseline; gap: 14px; flex-shrink: 0; }
+  .brand h1 {
+    font-family: var(--serif);
+    font-size: 30px;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    line-height: 1;
+  }
+  .brand h1 em { font-style: italic; color: var(--accent); }
+  .brand .tag {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-3);
+    border-left: 1px solid var(--rule);
+    padding-left: 12px;
+    padding-bottom: 2px;
+  }
+
+  .header-center { display: flex; align-items: center; gap: 14px; }
+  .nav-group { display: flex; gap: 4px; }
+
+  .nav-btn, .today-btn {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border-radius: 6px;
+  }
+  .nav-btn { width: 30px; height: 30px; font-size: 16px; display: flex; align-items: center; justify-content: center; line-height: 1; }
+  .today-btn { padding: 7px 14px; font-size: 12px; font-weight: 500; letter-spacing: 0.02em; }
+  .nav-btn:hover, .today-btn:hover { background: var(--paper); border-color: var(--ink-3); color: var(--ink); }
+
+  .current-period {
+    font-family: var(--serif);
+    font-size: 22px;
+    min-width: 240px;
+    text-align: center;
+    letter-spacing: -0.01em;
+    line-height: 1.1;
+  }
+  .current-period .year { color: var(--ink-3); font-style: italic; margin-left: 6px; }
+
+  .view-tabs {
+    display: flex;
+    background: var(--bg-2);
+    border-radius: 8px;
+    padding: 3px;
+    gap: 2px;
+  }
+  .view-tab {
+    background: transparent;
+    border: none;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    transition: all 0.18s ease;
+  }
+  .view-tab:hover { color: var(--ink); }
+  .view-tab.active {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+
+  /* ─────────────────── SIDEBAR ─────────────────── */
+  aside {
+    border-right: 1px solid var(--rule);
+    padding: 22px 20px;
+    background: var(--bg);
+    overflow-y: auto;
+  }
+
+  .side-section { margin-bottom: 24px; }
+  .side-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-3);
+    margin-bottom: 12px;
+    display: block;
+  }
+
+  .oc-callout {
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin-bottom: 18px;
+  }
+  .oc-callout .label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .oc-callout .name {
+    font-family: var(--serif);
+    font-size: 18px;
+    line-height: 1.1;
+    color: var(--ink);
+  }
+  .oc-callout .week {
+    font-size: 11px;
+    color: var(--ink-3);
+    margin-top: 4px;
+  }
+
+  .path-card {
+    padding: 10px 12px;
+    border-radius: 7px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    margin-bottom: 6px;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .path-card .dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--c);
+    flex-shrink: 0;
+  }
+  .path-card .info { flex: 1; min-width: 0; }
+  .path-card .name {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink);
+    line-height: 1.2;
+  }
+  .path-card .meta {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+  .path-card .pto-pct {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-2);
+    flex-shrink: 0;
+  }
+
+  .legend-list { display: flex; flex-direction: column; gap: 7px; }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 12px;
+    color: var(--ink-2);
+  }
+  .legend-swatch {
+    width: 10px; height: 10px;
+    border-radius: 3px;
+    background: var(--c);
+    flex-shrink: 0;
+  }
+  .legend-pto {
+    width: 10px; height: 10px;
+    border-radius: 3px;
+    background: repeating-linear-gradient(45deg,
+      var(--pto-stripe) 0, var(--pto-stripe) 2px,
+      var(--pto-bg) 2px, var(--pto-bg) 4px);
+    border: 1px solid var(--rule);
+    flex-shrink: 0;
+  }
+  .legend-call {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    flex-shrink: 0;
+  }
+  .legend-off {
+    width: 10px; height: 10px;
+    border-radius: 3px;
+    background: transparent;
+    border: 1px dashed var(--ink-3);
+    flex-shrink: 0;
+  }
+
+  .add-pto-btn {
+    width: 100%;
+    background: var(--ink);
+    color: var(--paper);
+    border: none;
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+  }
+  .add-pto-btn:hover { background: var(--accent); }
+  .add-pto-btn .plus { font-size: 14px; line-height: 1; }
+
+  /* ─────────────────── MAIN ─────────────────── */
+  main {
+    overflow: auto;
+    padding: 18px 28px 28px;
+    background: var(--bg);
+  }
+
+  /* ─────────────────── WEEK VIEW ─────────────────── */
+  .week-view {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+    height: 100%;
+    min-height: 540px;
+  }
+  .week-day {
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    position: relative;
+  }
+  .week-day:hover { border-color: var(--ink-3); }
+  .week-day.today {
+    background: var(--today-bg);
+    border-color: var(--today-ring);
+    box-shadow: 0 0 0 1px var(--today-ring);
+  }
+  .week-day.weekend { background: var(--paper-2); }
+  .week-day.weekend.today { background: var(--today-bg); }
+  .week-day.holiday { background: #eef2ff; border-color: #a5b4fc; }
+  .week-day.holiday.today { background: var(--today-bg); border-color: var(--today-ring); }
+  .week-day.holiday:hover { border-color: #6366f1; }
+
+  .wd-head {
+    padding: 10px 12px 8px;
+    border-bottom: 1px solid var(--rule-soft);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+  .wd-head .dow {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--ink-3);
+  }
+  .wd-head .num {
+    font-family: var(--serif);
+    font-size: 22px;
+    line-height: 1;
+    color: var(--ink);
+  }
+  .week-day.today .wd-head .num { color: var(--accent); font-style: italic; }
+  .holiday-badge {
+    display: block;
+    font-family: var(--mono);
+    font-size: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #4338ca;
+    background: #e0e7ff;
+    border-top: 1px solid #c7d2fe;
+    padding: 3px 8px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Hard-rule violation indicator: shown when the rotation couldn't satisfy
+     the bigs-before-PTO / WFH-adjacency rules and a manual review is needed. */
+  .rule-flag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    background: rgba(185, 78, 42, 0.12);
+    color: #b94e2a;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    margin-left: 6px;
+    cursor: help;
+    flex-shrink: 0;
+  }
+  .month-view .day .num .rule-flag {
+    width: 13px;
+    height: 13px;
+    font-size: 9px;
+    margin-left: 4px;
+  }
+
+  .wd-rows { padding: 6px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+  .wd-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 7px;
+    border-radius: 5px;
+    background: var(--c-bg, var(--bg));
+    font-size: 11.5px;
+    line-height: 1.2;
+    position: relative;
+  }
+  .wd-row .pid {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--c);
+    width: 22px;
+    flex-shrink: 0;
+  }
+  .wd-row .svc {
+    flex: 1;
+    font-size: 10.5px;
+    color: var(--ink-2);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wd-row .svc .swatch {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 2px;
+    background: var(--sc);
+    margin-right: 5px;
+    vertical-align: -1px;
+  }
+  .wd-row.pto {
+    background: repeating-linear-gradient(45deg,
+      var(--pto-stripe) 0, var(--pto-stripe) 3px,
+      var(--pto-bg) 3px, var(--pto-bg) 6px);
+    color: var(--pto-ink);
+  }
+  .wd-row.pto .svc {
+    color: var(--pto-ink);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.08em;
+  }
+  .wd-row.off {
+    background: transparent;
+    border: 1px dashed var(--rule);
+  }
+  .wd-row.off .svc {
+    color: var(--ink-3);
+    font-style: italic;
+    font-size: 10.5px;
+  }
+  .wd-row.off .pid { opacity: 0.65; }
+  .wd-row .oc-mark {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .wd-row .oc-mark::after {
+    content: '';
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* ─────────────────── MONTH VIEW ─────────────────── */
+  .month-view {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 4px;
+    height: 100%;
+  }
+  .month-view .dow-h {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--ink-3);
+    text-align: center;
+    padding: 6px 0 8px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .month-view .day {
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+    padding: 0;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+    display: flex;
+    flex-direction: column;
+    min-height: 130px;
+    position: relative;
+    overflow: hidden;
+  }
+  .month-view .day:hover { border-color: var(--ink-3); }
+  .month-view .day.outside { background: transparent; opacity: 0.45; }
+  .month-view .day.weekend { background: var(--paper-2); }
+  .month-view .day.weekend.outside { background: transparent; }
+  .month-view .day.holiday { background: #eef2ff; border-color: #a5b4fc; }
+  .month-view .day.holiday.today { background: var(--today-bg); border-color: var(--today-ring); }
+  .month-view .day.holiday .num { color: #4338ca; }
+  .month-holiday-badge {
+    font-family: var(--mono);
+    font-size: 7.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #4338ca;
+    background: #e0e7ff;
+    border-radius: 2px;
+    padding: 1px 4px;
+    margin: 0 6px 3px;
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .month-view .day.today {
+    background: var(--today-bg);
+    border-color: var(--today-ring);
+    box-shadow: 0 0 0 1px var(--today-ring);
+  }
+  .month-view .day .num {
+    font-family: var(--serif);
+    font-size: 15px;
+    line-height: 1;
+    color: var(--ink);
+    padding: 7px 9px 4px;
+    flex-shrink: 0;
+  }
+  .month-view .day.today .num { color: var(--accent); font-style: italic; }
+
+  /* Month-cell rows reuse week-view .wd-row markup with tighter spacing */
+  .month-view .day .wd-rows {
+    padding: 2px 4px 4px;
+    gap: 2px;
+  }
+  .month-view .day .wd-row {
+    padding: 3px 6px;
+    gap: 5px;
+    font-size: 10.5px;
+  }
+  .month-view .day .wd-row .pid {
+    font-size: 9.5px;
+    width: 19px;
+  }
+  .month-view .day .wd-row .svc {
+    font-size: 9.5px;
+  }
+  .month-view .day .wd-row .svc .swatch {
+    width: 7px; height: 7px;
+    margin-right: 4px;
+  }
+  .month-view .day .wd-row .oc-mark {
+    width: 11px; height: 11px;
+  }
+  .month-view .day .wd-row .oc-mark::after {
+    width: 4px; height: 4px;
+  }
+  .month-view .day .wd-row.pto .svc,
+  .month-view .day .wd-row.off .svc {
+    font-size: 9px;
+  }
+
+  /* ─────────────────── YEAR VIEW ─────────────────── */
+  .year-view {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 18px;
+  }
+  .year-month {
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .year-month h4 {
+    font-family: var(--serif);
+    font-size: 17px;
+    font-weight: 400;
+    line-height: 1;
+    margin-bottom: 8px;
+    color: var(--ink);
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+  .year-month h4 .yr { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.16em; color: var(--ink-3); text-transform: uppercase; }
+  .year-month .mini-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 1px;
+  }
+  .year-month .mini-grid .mh {
+    font-family: var(--mono);
+    font-size: 8px;
+    text-align: center;
+    color: var(--ink-3);
+    padding: 2px 0;
+    letter-spacing: 0.04em;
+  }
+  .year-month .mini-grid .md {
+    aspect-ratio: 1 / 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--ink-2);
+    border-radius: 2px;
+    cursor: pointer;
+    position: relative;
+    background: transparent;
+    overflow: hidden;
+  }
+  .year-month .mini-grid .md:hover { filter: brightness(0.92); }
+  .year-month .mini-grid .md.outside { color: var(--ink-4); }
+  .year-month .mini-grid .md.outside:hover { filter: none; background: var(--bg-2); }
+  /* Today: thin ring overlay so it works on top of any background colour */
+  .year-month .mini-grid .md.today {
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+    font-weight: 700;
+  }
+  .year-month .mini-grid .md.holiday {
+    background: #e0e7ff !important;
+    color: #4338ca !important;
+    font-weight: 700;
+    box-shadow: inset 0 0 0 1.5px #818cf8;
+  }
+  .year-month .mini-grid .md.holiday.today {
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+  }
+  /* Cells with data — coloured by pathologist */
+  .year-month .mini-grid .md.has-data {
+    color: white;
+    font-weight: 600;
+    text-shadow: 0 1px 1px rgba(0,0,0,0.18);
+  }
+  .year-month .mini-grid .md .md-label {
+    font-family: var(--mono);
+    font-size: 8px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+  .year-month .mini-grid .md.has-data.multi .md-label {
+    font-size: 6.5px;
+    letter-spacing: 0;
+  }
+  .year-month .mini-grid .md.has-data.count .md-label {
+    font-size: 9px;
+    letter-spacing: 0;
+  }
+
+  .year-legend {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 10px 14px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 8px;
+    font-size: 11.5px;
+    color: var(--ink-2);
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+  }
+  .year-legend .mode-tabs {
+    display: flex;
+    background: var(--bg-2);
+    border-radius: 7px;
+    padding: 3px;
+    gap: 2px;
+  }
+  .year-legend .mode-tabs button {
+    background: transparent;
+    border: none;
+    padding: 5px 14px;
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    border-radius: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    transition: all 0.18s ease;
+  }
+  .year-legend .mode-tabs button:hover { color: var(--ink); }
+  .year-legend .mode-tabs button.active {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .year-legend .key {
+    margin-left: auto;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .year-legend .key-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-3);
+    margin-right: 2px;
+  }
+  .year-legend .key-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px 3px 4px;
+    border-radius: 11px;
+    background: var(--bg);
+    border: 1px solid var(--rule-soft);
+    font-size: 11px;
+    color: var(--ink-2);
+  }
+  .year-legend .key-pill .swatch {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--c);
+    color: white;
+    font-family: var(--mono);
+    font-size: 7.5px;
+    font-weight: 700;
+    text-align: center;
+    line-height: 14px;
+    letter-spacing: 0;
+  }
+  .year-legend .mode-hint {
+    font-style: italic;
+    color: var(--ink-3);
+    font-size: 11px;
+  }
+
+  /* ─────────────────── LOADING ─────────────────── */
+  .loading-overlay {
+    position: fixed; inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    gap: 18px;
+    transition: opacity 0.4s ease;
+  }
+  .loading-overlay.hidden { opacity: 0; pointer-events: none; }
+  .loading-overlay h2 {
+    font-family: var(--serif);
+    font-size: 38px;
+    font-weight: 400;
+  }
+  .loading-overlay h2 em { color: var(--accent); }
+  .loading-spinner {
+    width: 28px; height: 28px;
+    border: 2px solid var(--rule);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-status {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+  }
+
+  /* ─────────────────── MODALS ─────────────────── */
+  .modal-back {
+    position: fixed; inset: 0;
+    background: rgba(24,23,26,0.4);
+    backdrop-filter: blur(2px);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+    padding: 20px;
+  }
+  .modal-back.open { display: flex; }
+  .modal {
+    background: var(--paper);
+    border-radius: 10px;
+    padding: 22px 24px 20px;
+    width: 100%;
+    max-width: 460px;
+    border: 1px solid var(--rule);
+    box-shadow: 0 20px 50px rgba(24,23,26,0.18);
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  .modal h3 {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 400;
+    margin-bottom: 4px;
+  }
+  .modal .sub {
+    font-size: 12px;
+    color: var(--ink-3);
+    margin-bottom: 16px;
+  }
+  .modal label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-3);
+    margin: 12px 0 5px;
+  }
+  .modal input, .modal select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    font-family: var(--sans);
+    font-size: 13px;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  .modal input:focus, .modal select:focus { outline: 1px solid var(--ink-2); border-color: var(--ink-2); }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--rule-soft);
+  }
+  .modal-actions button {
+    padding: 8px 16px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--rule);
+    background: transparent;
+    color: var(--ink-2);
+    transition: all 0.15s ease;
+  }
+  .modal-actions button:hover { background: var(--bg); border-color: var(--ink-3); color: var(--ink); }
+  .modal-actions button.primary {
+    background: var(--ink);
+    color: var(--paper);
+    border-color: var(--ink);
+  }
+  .modal-actions button.primary:hover { background: var(--accent); border-color: var(--accent); }
+  .modal-actions button.danger {
+    color: #b94e2a;
+    border-color: rgba(185,78,42,0.3);
+  }
+  .modal-actions button.danger:hover { background: rgba(185,78,42,0.06); border-color: #b94e2a; color: #b94e2a; }
+
+  /* Day-detail modal */
+  .day-detail-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+  .day-detail-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--c-bg, var(--bg));
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+  }
+  .day-detail-row .ddot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--c);
+    flex-shrink: 0;
+  }
+  .day-detail-row .dname {
+    font-size: 13px;
+    color: var(--ink);
+    flex: 1;
+    font-weight: 500;
+  }
+  .day-detail-row .dservice {
+    font-size: 11.5px;
+    color: var(--ink-2);
+  }
+  .day-detail-row .dservice .swatch {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 2px;
+    background: var(--sc);
+    margin-right: 6px;
+    vertical-align: -1px;
+  }
+  .day-detail-row .doc-pill {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    background: var(--accent);
+    color: var(--paper);
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .day-detail-row.pto-row {
+    background: repeating-linear-gradient(45deg,
+      var(--pto-stripe) 0, var(--pto-stripe) 4px,
+      var(--pto-bg) 4px, var(--pto-bg) 8px);
+    color: var(--pto-ink);
+  }
+  .day-detail-row.pto-row .dservice { color: var(--pto-ink); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; font-size: 10.5px; }
+  .day-detail-row.off-row {
+    background: transparent;
+    border: 1px dashed var(--rule);
+  }
+  .day-detail-row.off-row .dservice {
+    color: var(--ink-3);
+    font-style: italic;
+  }
+
+  .day-detail-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+  .day-detail-actions button {
+    flex: 1;
+    min-width: 110px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--rule);
+    background: var(--bg);
+    color: var(--ink-2);
+    transition: all 0.15s ease;
+  }
+  .day-detail-actions button:hover { background: var(--paper); border-color: var(--ink-3); color: var(--ink); }
+
+  /* PTO list inside modal */
+  .pto-list { margin-top: 10px; max-height: 220px; overflow-y: auto; }
+  .pto-list-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 5px;
+    margin-bottom: 5px;
+    font-size: 12px;
+  }
+  .pto-list-item .pdot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--c);
+    flex-shrink: 0;
+  }
+  .pto-list-item .prange { flex: 1; }
+  .pto-list-item .prange .pname { font-weight: 500; color: var(--ink); }
+  .pto-list-item .prange .pdates { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+  .pto-list-item button {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--ink-3);
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+  .pto-list-item button:hover { color: #b94e2a; border-color: #b94e2a; }
+  .pto-list .empty {
+    text-align: center;
+    color: var(--ink-3);
+    font-style: italic;
+    padding: 16px;
+    font-family: var(--serif);
+    font-size: 14px;
+  }
+
+  /* On-call scope toggle (day vs week) */
+  .oc-scope-toggle {
+    display: flex;
+    gap: 4px;
+    margin: 12px 0 4px;
+    background: var(--bg-2);
+    border-radius: 7px;
+    padding: 3px;
+  }
+  .oc-scope-opt {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 7px 12px;
+    border-radius: 5px;
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    user-select: none;
+    letter-spacing: 0.02em;
+  }
+  .oc-scope-opt:has(input:checked) {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  }
+  .oc-scope-opt input[type="radio"] { display: none; }
+
+  /* responsive */
+  @media (max-width: 1100px) {
+    .app { grid-template-columns: 220px 1fr; }
+    .year-view { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 800px) {
+    .app { grid-template-columns: 1fr; }
+    aside { display: none; }
+    header { flex-wrap: wrap; gap: 12px; padding: 14px 16px; }
+    .week-view { grid-template-columns: 1fr; min-height: auto; }
+    .year-view { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <h2>R<em>ot</em>a</h2>
+  <div class="loading-status" id="loadingStatus">Connecting to cloud…</div>
+</div>
+
+<div class="app">
+
+  <header>
+    <div class="brand">
+      <h1>R<em>ot</em>a</h1>
+      <span class="tag">Pathology Group</span>
+    </div>
+
+    <div class="header-center">
+      <button class="today-btn" id="todayBtn">Today</button>
+      <div class="nav-group">
+        <button class="nav-btn" id="prevBtn" title="Previous">‹</button>
+        <button class="nav-btn" id="nextBtn" title="Next">›</button>
+      </div>
+      <div class="current-period" id="currentPeriod">—</div>
+    </div>
+
+    <div class="view-tabs" id="viewTabs">
+      <button class="view-tab active" data-view="week">Week</button>
+      <button class="view-tab" data-view="month">Month</button>
+      <button class="view-tab" data-view="year">Year</button>
+    </div>
+  </header>
+
+  <aside>
+    <div class="oc-callout" id="ocCallout"></div>
+
+    <div class="side-section">
+      <span class="side-label">Pathologists</span>
+      <div id="pathList"></div>
+    </div>
+
+    <div class="side-section">
+      <span class="side-label">Services</span>
+      <div class="legend-list">
+        <div class="legend-item"><span class="legend-swatch" style="--c:var(--svc-cyto)"></span>McHenry Cyto / Gross</div>
+        <div class="legend-item"><span class="legend-swatch" style="--c:var(--svc-bigs)"></span>McHenry Bigs</div>
+        <div class="legend-item"><span class="legend-swatch" style="--c:var(--svc-huntley)"></span>Huntley</div>
+        <div class="legend-item"><span class="legend-swatch" style="--c:var(--svc-wfh)"></span>Breast Bx / WFH</div>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <span class="side-label">Status</span>
+      <div class="legend-list">
+        <div class="legend-item"><span class="legend-pto"></span>PTO</div>
+        <div class="legend-item"><span class="legend-off"></span>Off (weekend / unstaffed)</div>
+        <div class="legend-item"><span class="legend-call"></span>On call (week)</div>
+      </div>
+    </div>
+
+    <button class="add-pto-btn" id="addPtoBtn"><span class="plus">+</span> Manage PTO</button>
+  </aside>
+
+  <main id="main"></main>
+
+</div>
+
+<!-- Add/edit PTO modal -->
+<div class="modal-back" id="ptoModalBack">
+  <div class="modal">
+    <h3>Manage PTO</h3>
+    <div class="sub">Add a new PTO range or remove an existing one.</div>
+
+    <label>Pathologist</label>
+    <select id="ptoPath"></select>
+    <label>Start date</label>
+    <input type="date" id="ptoStart" />
+    <label>End date (inclusive)</label>
+    <input type="date" id="ptoEnd" />
+
+    <label style="margin-top:18px;">Existing PTO</label>
+    <div class="pto-list" id="ptoList"></div>
+
+    <div class="modal-actions">
+      <button id="ptoCancel">Close</button>
+      <button class="primary" id="ptoSave">Add PTO</button>
+    </div>
+  </div>
+</div>
+
+<!-- Day detail modal -->
+<div class="modal-back" id="dayModalBack">
+  <div class="modal">
+    <h3 id="dayModalTitle">Day</h3>
+    <div class="sub" id="dayModalSub">—</div>
+
+    <div class="day-detail-rows" id="dayDetailRows"></div>
+
+    <div class="day-detail-actions">
+      <button id="dayAddPto">+ Add PTO for this day</button>
+      <button id="dayChangeOnCall">Change who's on call</button>
+      <button id="dayChangeService">Override services this day</button>
+    </div>
+
+    <div class="modal-actions">
+      <button id="dayClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- On-call override modal -->
+<div class="modal-back" id="ocModalBack">
+  <div class="modal">
+    <h3>Change who's on call</h3>
+    <div class="sub" id="ocModalSub">—</div>
+
+    <div class="oc-scope-toggle">
+      <label class="oc-scope-opt">
+        <input type="radio" name="ocScope" value="day" id="ocScopeDay">
+        This day only
+      </label>
+      <label class="oc-scope-opt">
+        <input type="radio" name="ocScope" value="week" id="ocScopeWeek">
+        Full week
+      </label>
+    </div>
+
+    <label>Pathologist on call</label>
+    <select id="ocPath"></select>
+
+    <div class="modal-actions">
+      <button id="ocReset" class="danger">Reset to default</button>
+      <button id="ocCancel">Cancel</button>
+      <button class="primary" id="ocSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Service override modal -->
+<div class="modal-back" id="svcModalBack">
+  <div class="modal">
+    <h3>Override services for this day</h3>
+    <div class="sub" id="svcModalSub">—</div>
+
+    <div id="svcAssignments"></div>
+
+    <div class="modal-actions">
+      <button id="svcReset" class="danger">Reset to default</button>
+      <button id="svcCancel">Cancel</button>
+      <button class="primary" id="svcSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ────────────── FIREBASE INIT ──────────────
+  const firebaseConfig = {
+    apiKey: "AIzaSyDuNpgf8Gtd2treHdaQt66HYcNjCrhBjlM",
+    authDomain: "scheduler-f54c7.firebaseapp.com",
+    databaseURL: "https://scheduler-f54c7-default-rtdb.firebaseio.com",
+    projectId: "scheduler-f54c7",
+    storageBucket: "scheduler-f54c7.firebasestorage.app",
+    messagingSenderId: "529858873691",
+    appId: "1:529858873691:web:2f4f60038da8db4a0af27e",
+    measurementId: "G-WEKS3DWMCG"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  // ────────────── SEEDS (only used if Firebase is empty) ──────────────
+  const SEED_PATHOLOGISTS = [
+    { id: 1, name: 'Dr. Michael Moravek', initials: 'MM', color: 'var(--p1)', vacationAllotted: 35 },
+    { id: 2, name: 'Dr. Imaad Mujeeb',    initials: 'IM', color: 'var(--p2)', vacationAllotted: 35 },
+    { id: 3, name: 'Dr. Jamaal Rehman',   initials: 'JR', color: 'var(--p3)', vacationAllotted: 35 },
+    { id: 4, name: 'Dr. Maryam Raouf',    initials: 'MR', color: 'var(--p4)', vacationAllotted: 35 },
+  ];
+
+  // ────────────── CONSTANTS ──────────────
+  const SERVICES = [
+    { id: 'cyto',    name: 'McHenry Cyto / Gross', short: 'McH Cyto/Gross', abbr: 'CYT', cssVar: '--svc-cyto' },
+    { id: 'bigs',    name: 'McHenry Bigs',         short: 'McH Bigs',       abbr: 'BIG', cssVar: '--svc-bigs' },
+    { id: 'huntley', name: 'Huntley',              short: 'Huntley',        abbr: 'HUN', cssVar: '--svc-huntley' },
+    { id: 'wfh',     name: 'Breast Bx / WFH',      short: 'Breast/WFH',     abbr: 'WFH', cssVar: '--svc-wfh' },
+  ];
+  const SERVICE_BY_ID = Object.fromEntries(SERVICES.map(s => [s.id, s]));
+
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const DOW_MINI = ['S','M','T','W','T','F','S'];
+
+  // ────────────── STATE ──────────────
+  let pathologists = [];
+  let vacations = [];                  // [{ key, pathologistId, start: Date, end: Date }]
+  let onCallOverrides = {};            // { weekKey: pathologistId }
+  let onCallDayOverrides = {};         // { dayKey: pathologistId }
+  let serviceOverrides = {};           // { weekKey: { pathId: serviceId } }
+
+  let pathologistsReady = false;
+  let vacationsReady = false;
+
+  let view = 'week';                    // 'week' | 'month' | 'year'
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  let cursor = new Date(today);
+
+  // Year view mode: 'pto' shows PTO schedule, 'call' shows on-call schedule
+  let yearMode = 'pto';
+
+  // ────────────── DATE HELPERS ──────────────
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const parseDate = s => { const d = new Date(s + 'T00:00:00'); d.setHours(0,0,0,0); return d; };
+  const sameDay = (a,b) => a.getFullYear()===b.getFullYear() && a.getMonth()===b.getMonth() && a.getDate()===b.getDate();
+  const startOfWeek = d => { const x = new Date(d); x.setDate(x.getDate() - x.getDay()); x.setHours(0,0,0,0); return x; };
+
+  // Given a pathologist color value like 'var(--p2)', returns the matching
+  // light-tint background CSS variable string for service row highlighting.
+  function pathBgColor(colorVar) {
+    const m = colorVar && colorVar.match(/--p(\d+)/);
+    return m ? `var(--p${m[1]}-bg)` : '';
+  }
+  const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  const daysBetween = (a, b) => Math.round((b - a) / 86400000);
+  const isWeekend = d => d.getDay() === 0 || d.getDay() === 6;
+  const weekKey = d => fmt(startOfWeek(d));
+
+  // Next/previous workday — skips weekends. Used by hard-rule logic so that
+  // "the day before Monday" resolves to the previous Friday.
+  function nextWorkday(date) {
+    let d = addDays(date, 1);
+    while (isWeekend(d)) d = addDays(d, 1);
+    return d;
+  }
+  function prevWorkday(date) {
+    let d = addDays(date, -1);
+    while (isWeekend(d)) d = addDays(d, -1);
+    return d;
+  }
+
+  // ────────────── FEDERAL HOLIDAYS ──────────────
+  // Returns the holiday name for the given date, or null if not a federal holiday.
+  function getFederalHoliday(date) {
+    const m   = date.getMonth();  // 0-indexed
+    const d   = date.getDate();
+    const dow = date.getDay();    // 0=Sun … 6=Sat
+    const y   = date.getFullYear();
+
+    // New Year's Day — January 1
+    if (m === 0 && d === 1) return "New Year's Day";
+
+    // Memorial Day — last Monday of May
+    if (m === 4 && dow === 1) {
+      const nextWeek = new Date(y, 4, d + 7);
+      if (nextWeek.getMonth() !== 4) return 'Memorial Day';
+    }
+
+    // Independence Day — July 4
+    if (m === 6 && d === 4) return 'Independence Day';
+
+    // Labor Day — first Monday of September
+    if (m === 8 && dow === 1 && d <= 7) return 'Labor Day';
+
+    // Thanksgiving — 4th Thursday of November
+    if (m === 10 && dow === 4 && d >= 22 && d <= 28) return 'Thanksgiving';
+
+    // Christmas Day — December 25
+    if (m === 11 && d === 25) return 'Christmas Day';
+
+    return null;
+  }
+
+  // ────────────── ROTATION (defaults) ──────────────
+  // Weekly on-call anchor (Sundays): Jan 7 2024 = pathologist[0]
+  const WEEK_ANCHOR = new Date(2024, 0, 7);
+  WEEK_ANCHOR.setHours(0,0,0,0);
+
+  // Daily service rotation anchor (Mondays): Jan 1 2024 = workDay 0
+  // On workDay 0: pathologist[0]=cyto, [1]=bigs, [2]=huntley, [3]=wfh
+  // Each weekday advances every pathologist's service by 1 (cyto→bigs→huntley→wfh→cyto)
+  const WORK_ANCHOR = new Date(2024, 0, 1);
+  WORK_ANCHOR.setHours(0,0,0,0);
+
+  function weekIndex(date) {
+    const sw = startOfWeek(date);
+    return Math.floor(daysBetween(WEEK_ANCHOR, sw) / 7);
+  }
+
+  // Workday index — counts weekdays since WORK_ANCHOR (Mon Jan 1 2024 = 0).
+  // Returns null for weekend dates (no service).
+  function workDayIndex(date) {
+    if (isWeekend(date)) return null;
+    const ds = daysBetween(WORK_ANCHOR, date);
+    const fullWeeks = Math.floor(ds / 7);
+    const remainder = ((ds % 7) + 7) % 7;   // 0=Mon, 1=Tue, … 4=Fri (anchor is Mon)
+    return fullWeeks * 5 + remainder;
+  }
+
+  // Default on-call: cycles through pathologists (sorted by id) one per week
+  function defaultOnCallId(weekStart) {
+    if (pathologists.length === 0) return null;
+    const w = weekIndex(weekStart);
+    const idx = ((w % pathologists.length) + pathologists.length) % pathologists.length;
+    return pathologists[idx].id;
+  }
+
+  // Default service for a pathologist on a given DAY — rotates daily through services
+  function defaultServiceId(pathId, date) {
+    const pIdx = pathologists.findIndex(p => p.id === pathId);
+    if (pIdx < 0) return SERVICES[0].id;
+    const wdi = workDayIndex(date);
+    if (wdi === null) return null;   // weekend: no service
+    const sIdx = ((pIdx + wdi) % SERVICES.length + SERVICES.length) % SERVICES.length;
+    return SERVICES[sIdx].id;
+  }
+
+  // ────────────── EFFECTIVE LOOKUPS (overrides win) ──────────────
+  function onCallIdForWeek(weekStart) {
+    const k = fmt(weekStart);
+    if (onCallOverrides[k]) return onCallOverrides[k];
+    return defaultOnCallId(weekStart);
+  }
+
+  // Day-level on-call lookup: day overrides win over week overrides over default.
+  function onCallIdForDay(date) {
+    const dk = fmt(date);
+    if (onCallDayOverrides[dk]) return onCallDayOverrides[dk];
+    return onCallIdForWeek(startOfWeek(date));
+  }
+
+  function isOnPto(pathId, date) {
+    const t = date.getTime();
+    return vacations.find(v =>
+      v.pathologistId === pathId &&
+      t >= v.start.getTime() &&
+      t <= v.end.getTime()
+    );
+  }
+
+  // Compute the NATURAL service assignments for ALL pathologists on a single date —
+  // i.e. plain rotation + PTO cascade + manual overrides, BEFORE the hard-rule swap
+  // pass. Hard-rule fix-ups happen in getDayAssignments() (the public function) so
+  // that look-ahead/look-back logic can use this natural baseline as input.
+  // Returns: { [pathId]: { type: 'service'|'pto'|'off', service, onCall } }
+  //
+  // Rules:
+  //   - Weekends: no service (all pathologists "off"); on-call still applies (weekly).
+  //   - Weekdays: each pathologist rotates daily through cyto → bigs → huntley → wfh.
+  //   - When ANY pathologist is on PTO, WFH is unstaffed; whoever was on WFH steps in
+  //     to cover the PTO pathologist's slot. With multiple PTO, drop services from the
+  //     bottom of the priority list (wfh, then huntley, then bigs).
+  //   - Manual day-level service overrides are applied last (overrides win).
+  const _naturalCache = new Map();
+  function getNaturalDayAssignments(date) {
+    const cacheKey = fmt(date) + '|' + pathologists.length;
+    if (_naturalCache.has(cacheKey)) return _naturalCache.get(cacheKey);
+
+    const onCallId = onCallIdForDay(date);
+    const result = {};
+
+    // Weekend or federal holiday: nobody on service, but on-call status applies
+    if (isWeekend(date) || getFederalHoliday(date)) {
+      pathologists.forEach(p => {
+        const onPto = !!isOnPto(p.id, date);
+        result[p.id] = {
+          type: onPto ? 'pto' : 'off',
+          service: null,
+          onCall: onCallId === p.id,
+        };
+      });
+      _naturalCache.set(cacheKey, result);
+      return result;
+    }
+
+    // Weekday — start with default daily rotation
+    const slots = pathologists.map((p, pIdx) => ({
+      pathId: p.id,
+      pIdx,
+      onPto: !!isOnPto(p.id, date),
+      serviceId: defaultServiceId(p.id, date),
+    }));
+
+    // PTO/WFH cascade: drop services from the bottom of the priority list.
+    // 1 PTO → drop wfh; 2 PTO → drop wfh+huntley; 3 PTO → drop wfh+huntley+bigs.
+    const ptoCount = slots.filter(s => s.onPto).length;
+    if (ptoCount > 0) {
+      const numToDrop = Math.min(ptoCount, SERVICES.length - 1);
+      const droppedIds = SERVICES.slice(SERVICES.length - numToDrop).map(s => s.id);
+
+      // Mark PTO slots as having no service
+      slots.forEach(s => { if (s.onPto) s.serviceId = null; });
+
+      // Slots whose default service was dropped (and aren't on PTO) must be reassigned
+      const displaced = slots.filter(s => !s.onPto && droppedIds.includes(s.serviceId));
+      const fixed    = slots.filter(s => !s.onPto && !droppedIds.includes(s.serviceId));
+      const fixedIds = fixed.map(s => s.serviceId);
+      const activeIds = SERVICES.filter(s => !droppedIds.includes(s.id)).map(s => s.id);
+
+      // Vacant active services (sorted by priority — cyto first)
+      const vacantIds = activeIds
+        .filter(id => !fixedIds.includes(id))
+        .sort((a, b) => SERVICES.findIndex(s => s.id === a) - SERVICES.findIndex(s => s.id === b));
+
+      // Sort displaced deterministically by pathologist index, fill vacancies in order
+      displaced.sort((a, b) => a.pIdx - b.pIdx);
+      displaced.forEach((s, i) => { s.serviceId = vacantIds[i] || null; });
+
+      // Skip-same-service: if a displaced pathologist's newly assigned service matches
+      // their previous workday's natural service, "skip" that service by swapping with
+      // the fixed pathologist who holds the next-higher-priority (lower-index) service.
+      // This prevents the same service appearing two workdays in a row due to the PTO
+      // cascade — instead of filling the PTO slot, the displaced pathologist advances
+      // to a higher-priority service and the fixed pathologist takes the vacated slot.
+      if (daysBetween(WORK_ANCHOR, date) > 0) {
+        const yest = prevWorkday(date);
+        const yestNatural = getNaturalDayAssignments(yest);
+        for (const d of displaced) {
+          if (!d.serviceId) continue;
+          const yestSvcId = (yestNatural[d.pathId] && yestNatural[d.pathId].service)
+                              ? yestNatural[d.pathId].service.id : null;
+          if (!yestSvcId || yestSvcId !== d.serviceId) continue;
+          // Same service as previous workday — advance to next-higher-priority service
+          const svcIdx = SERVICES.findIndex(s => s.id === d.serviceId);
+          const skipId = SERVICES[(svcIdx - 1 + SERVICES.length) % SERVICES.length].id;
+          const target = fixed.find(f => f.serviceId === skipId);
+          if (!target) continue;   // no eligible swap partner — leave as-is
+          target.serviceId = d.serviceId;
+          d.serviceId      = skipId;
+        }
+      }
+    }
+
+    // Apply per-day service overrides (overrides win for that pathologist)
+    const dayKey = fmt(date);
+    const dayOv = serviceOverrides[dayKey] || {};
+    slots.forEach(s => {
+      if (!s.onPto && dayOv[s.pathId]) s.serviceId = dayOv[s.pathId];
+    });
+
+    // Build result
+    slots.forEach(s => {
+      if (s.onPto) {
+        result[s.pathId] = { type: 'pto', service: null, onCall: onCallId === s.pathId };
+      } else if (!s.serviceId) {
+        result[s.pathId] = { type: 'off', service: null, onCall: onCallId === s.pathId };
+      } else {
+        result[s.pathId] = {
+          type: 'service',
+          service: SERVICE_BY_ID[s.serviceId],
+          onCall: onCallId === s.pathId,
+        };
+      }
+    });
+
+    _naturalCache.set(cacheKey, result);
+    return result;
+  }
+
+  // ────────────── HARD-RULE LAYER ──────────────
+  //
+  // After computing the natural rotation, we enforce two cross-day constraints:
+  //   Rule 1: A pathologist cannot be on McH Bigs the workday before they begin
+  //           PTO of more than 1 (work)day.
+  //   Rule 2: A pathologist cannot be on Bigs or Breast Bx/WFH the workday before
+  //           they are on Breast Bx/WFH service.
+  //
+  // "The day before" is the previous *workday* (so Monday's day-before is the
+  // previous Friday). Multi-day PTO is 2+ workdays in a row (a Fri+Mon range
+  // counts as multi-day even though there's a weekend in between).
+  //
+  // When a violation exists, we swap the offending pathologist's service with
+  // another pathologist's service for that same day, picking a partner whose
+  // post-swap services don't introduce new violations. If no clean swap exists
+  // we apply the best-effort swap and flag the day so it's visibly marked.
+
+  const _dayCache = new Map();
+  const _violationFlags = new Map();   // dayKey → array of issue strings (display only)
+
+  // True iff `pathId` has PTO on `tomorrow` AND on the workday after that —
+  // i.e. the start of "more than 1 day" of PTO. Skips weekends so a Fri→Mon
+  // PTO range counts as multi-day.
+  function isMultiDayPtoStartingOn(pathId, tomorrow) {
+    if (!isOnPto(pathId, tomorrow)) return false;
+    const dayAfter = nextWorkday(tomorrow);
+    return !!isOnPto(pathId, dayAfter);
+  }
+
+  // Reasons a pathologist's assignment on `date` would be a hard-rule violation.
+  // Uses naturalToday (today's services) and naturalTomorrow / naturalYesterday
+  // to look across days. Returns an array of human-readable issue strings; empty
+  // array = no violation.
+  function violationsFor(pId, todaySvcId, date, naturalTomorrow, naturalYesterday) {
+    if (!todaySvcId) return [];
+    const issues = [];
+    const tomorrow = nextWorkday(date);
+
+    // Rule 1: can't be on bigs the day before multi-day PTO begins.
+    if (todaySvcId === 'bigs' && isMultiDayPtoStartingOn(pId, tomorrow)) {
+      issues.push('Rule 1: Bigs day before multi-day PTO');
+    }
+
+    // Rule 2 forward: can't be on bigs/wfh today if WFH tomorrow.
+    const tmrwSvc = naturalTomorrow[pId] && naturalTomorrow[pId].service
+                      ? naturalTomorrow[pId].service.id : null;
+    if ((todaySvcId === 'bigs' || todaySvcId === 'wfh') && tmrwSvc === 'wfh') {
+      issues.push('Rule 2: ' + (todaySvcId === 'bigs' ? 'Bigs' : 'WFH') + ' day before WFH');
+    }
+
+    // Rule 2 backward: if today is WFH, the previous workday can't have been
+    // bigs or wfh for the same pathologist. (Mostly catches swap-induced cases.)
+    if (todaySvcId === 'wfh' && naturalYesterday) {
+      const yestSvc = naturalYesterday[pId] && naturalYesterday[pId].service
+                        ? naturalYesterday[pId].service.id : null;
+      if (yestSvc === 'bigs' || yestSvc === 'wfh') {
+        issues.push('Rule 2: WFH following ' + (yestSvc === 'bigs' ? 'Bigs' : 'WFH'));
+      }
+    }
+    return issues;
+  }
+
+  // Apply hard-rule swaps to today's natural assignments.
+  // Pathologists with a manual day-level service override on this date are
+  // "locked" — the rule pass won't move them. (They CAN still be flagged.)
+  function applyHardRules(date, naturalToday, naturalTomorrow, naturalYesterday) {
+    // Shallow-clone each slot so we can mutate `service` without touching the cache.
+    const result = {};
+    for (const pid in naturalToday) {
+      result[pid] = Object.assign({}, naturalToday[pid]);
+    }
+    const dayKey = fmt(date);
+    const overrides = serviceOverrides[dayKey] || {};
+    const isLocked = pid => Object.prototype.hasOwnProperty.call(overrides, String(pid))
+                          || Object.prototype.hasOwnProperty.call(overrides, pid);
+
+    // Helper: list of issues if pathologist `pId` is assigned `svcId` on this date.
+    const issuesIf = (pId, svcId) =>
+      violationsFor(pId, svcId, date, naturalTomorrow, naturalYesterday);
+
+    // Iterate up to a few passes — one swap can occasionally surface another.
+    for (let pass = 0; pass < 4; pass++) {
+      let changed = false;
+
+      for (const p of pathologists) {
+        const a = result[p.id];
+        if (!a || a.type !== 'service') continue;
+        if (isLocked(p.id)) continue;     // manual override pin — leave alone
+        const curSvc = a.service.id;
+        if (issuesIf(p.id, curSvc).length === 0) continue;   // no violation for P right now
+
+        // Try every other working pathologist as a swap partner. Score each:
+        //   +10 if P's new service produces zero violations
+        //   +10 if Q's new service produces zero violations
+        //   −(remaining issues) so we prefer swaps that reduce total violations
+        let best = null;
+        let bestScore = -Infinity;
+
+        for (const q of pathologists) {
+          if (q.id === p.id) continue;
+          if (isLocked(q.id)) continue;   // can't swap into a pinned slot
+          const qa = result[q.id];
+          if (!qa || qa.type !== 'service') continue;
+
+          const pNewSvc = qa.service.id;
+          const qNewSvc = curSvc;
+          const pIssues = issuesIf(p.id, pNewSvc).length;
+          const qIssues = issuesIf(q.id, qNewSvc).length;
+
+          let score = 0;
+          if (pIssues === 0) score += 10;
+          if (qIssues === 0) score += 10;
+          score -= (pIssues + qIssues);
+
+          if (score > bestScore) {
+            bestScore = score;
+            best = q;
+          }
+        }
+
+        if (best) {
+          const tmp = result[p.id].service;
+          result[p.id].service = result[best.id].service;
+          result[best.id].service = tmp;
+          changed = true;
+        }
+      }
+
+      if (!changed) break;
+    }
+
+    // Collect any remaining (unfixable) violations so we can flag the day.
+    const remaining = [];
+    for (const p of pathologists) {
+      const a = result[p.id];
+      if (!a || a.type !== 'service') continue;
+      const issues = issuesIf(p.id, a.service.id);
+      issues.forEach(msg => {
+        remaining.push(p.name.replace(/^Dr\. /, '') + ' — ' + msg);
+      });
+    }
+    if (remaining.length > 0) _violationFlags.set(dayKey, remaining);
+    else _violationFlags.delete(dayKey);
+
+    return result;
+  }
+
+  // Public day-assignment lookup (used by all renderers and modals).
+  // Wraps the natural rotation with the hard-rule swap layer.
+  function getDayAssignments(date) {
+    const cacheKey = fmt(date) + '|' + pathologists.length + '|R';
+    if (_dayCache.has(cacheKey)) return _dayCache.get(cacheKey);
+
+    const natural = getNaturalDayAssignments(date);
+
+    // Weekend or federal holiday: no service rotation, no hard rules to apply.
+    if (isWeekend(date) || getFederalHoliday(date)) {
+      _dayCache.set(cacheKey, natural);
+      return natural;
+    }
+
+    // For look-ahead/look-back we use the NATURAL baseline of neighbouring
+    // workdays — this avoids recursive dependencies between days.
+    const tmrw = nextWorkday(date);
+    const yest = prevWorkday(date);
+    const naturalTomorrow = getNaturalDayAssignments(tmrw);
+    const naturalYesterday = getNaturalDayAssignments(yest);
+
+    const result = applyHardRules(date, natural, naturalTomorrow, naturalYesterday);
+    _dayCache.set(cacheKey, result);
+    return result;
+  }
+
+  // Returns the array of unfixable-violation messages for the given date, or
+  // null if the day has no flagged issues. The hard-rule pass populates this
+  // map as a side effect, so we make sure the day has been computed first.
+  function violationsForDay(date) {
+    getDayAssignments(date);   // ensure flags map is populated for this date
+    const list = _violationFlags.get(fmt(date));
+    return (list && list.length > 0) ? list : null;
+  }
+
+  function getAssignment(pathId, date) {
+    return getDayAssignments(date)[pathId];
+  }
+
+  function clearDayCache() {
+    _dayCache.clear();
+    _naturalCache.clear();
+    _violationFlags.clear();
+  }
+
+  function ptoDaysScheduled(pathId) {
+    let count = 0;
+    vacations.filter(v => v.pathologistId === pathId).forEach(v => {
+      count += daysBetween(v.start, v.end) + 1;
+    });
+    return count;
+  }
+
+  // ────────────── LOADING ──────────────
+  function setLoadingStatus(msg) {
+    const el = document.getElementById('loadingStatus');
+    if (el) el.textContent = msg;
+  }
+  function hideLoading() {
+    const el = document.getElementById('loadingOverlay');
+    if (!el) return;
+    el.classList.add('hidden');
+    setTimeout(() => el.remove(), 500);
+  }
+  function checkReady() {
+    if (pathologistsReady && vacationsReady) {
+      hideLoading();
+      renderAll();
+    }
+  }
+
+  // ────────────── FIREBASE LISTENERS ──────────────
+  db.ref('scheduler/pathologists').on('value', async snap => {
+    if (!snap.exists()) {
+      setLoadingStatus('Seeding pathologists…');
+      const batch = {};
+      SEED_PATHOLOGISTS.forEach(p => { batch[p.id] = p; });
+      await db.ref('scheduler/pathologists').set(batch);
+      return;
+    }
+    const raw = snap.val();
+    pathologists = Object.values(raw).sort((a, b) => a.id - b.id);
+    clearDayCache();
+    if (!pathologistsReady) {
+      pathologistsReady = true;
+      setLoadingStatus('Loading PTO…');
+    }
+    checkReady();
+    if (vacationsReady) renderAll();
+  }, err => {
+    setLoadingStatus('Firebase error: ' + err.message);
+    console.error('Firebase pathologists error:', err);
+  });
+
+  db.ref('scheduler/vacations').on('value', snap => {
+    if (!snap.exists()) {
+      vacations = [];
+    } else {
+      const raw = snap.val();
+      vacations = Object.entries(raw).map(([key, v]) => ({
+        key,
+        pathologistId: v.pathologistId,
+        start: parseDate(v.start),
+        end:   parseDate(v.end),
+      }));
+    }
+    clearDayCache();
+    if (!vacationsReady) vacationsReady = true;
+    checkReady();
+    if (pathologistsReady) renderAll();
+  }, err => {
+    console.error('Firebase vacations error:', err);
+  });
+
+  db.ref('scheduler/onCallOverrides').on('value', snap => {
+    onCallOverrides = snap.exists() ? snap.val() : {};
+    clearDayCache();
+    if (pathologistsReady && vacationsReady) renderAll();
+  });
+
+  db.ref('scheduler/onCallDayOverrides').on('value', snap => {
+    onCallDayOverrides = snap.exists() ? snap.val() : {};
+    clearDayCache();
+    if (pathologistsReady && vacationsReady) renderAll();
+  });
+
+  db.ref('scheduler/serviceOverrides').on('value', snap => {
+    serviceOverrides = snap.exists() ? snap.val() : {};
+    clearDayCache();
+    if (pathologistsReady && vacationsReady) renderAll();
+  });
+
+  // ────────────── SIDEBAR ──────────────
+  function renderSidebar() {
+    // On-call callout
+    const sw = startOfWeek(today);
+    const ocId = onCallIdForDay(today);
+    const oc = pathologists.find(p => p.id === ocId);
+    const we = addDays(sw, 6);
+    const ocEl = document.getElementById('ocCallout');
+    if (oc) {
+      ocEl.innerHTML = `
+        <div class="label">On call this week</div>
+        <div class="name">${oc.name.replace(/^Dr\. /, '')}</div>
+        <div class="week">${MONTHS_SHORT[sw.getMonth()]} ${sw.getDate()} – ${MONTHS_SHORT[we.getMonth()]} ${we.getDate()}</div>
+      `;
+    }
+
+    // Pathologist list (compact)
+    const list = document.getElementById('pathList');
+    list.innerHTML = pathologists.map(p => {
+      const used = ptoDaysScheduled(p.id);
+      const allot = p.vacationAllotted;
+      return `<div class="path-card" style="--c:${p.color}">
+        <div class="dot"></div>
+        <div class="info">
+          <div class="name">${p.name.replace(/^Dr\. /, '')}</div>
+          <div class="meta">${p.initials} · ${used}/${allot} PTO</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // Returns a small "!" flag pill if the day has hard-rule violations that
+  // couldn't be resolved by swapping. Empty string otherwise.
+  function flagHtml(date) {
+    if (isWeekend(date)) return '';
+    const issues = violationsForDay(date);
+    if (!issues) return '';
+    const tip = 'Hard-rule conflict — manual review needed:\n• ' + issues.join('\n• ');
+    return `<span class="rule-flag" title="${tip.replace(/"/g, '&quot;')}">!</span>`;
+  }
+
+  // ────────────── PERIOD LABEL ──────────────
+  function renderPeriodLabel() {
+    const el = document.getElementById('currentPeriod');
+    if (view === 'week') {
+      const s = startOfWeek(cursor);
+      const e = addDays(s, 6);
+      const sameMonth = s.getMonth() === e.getMonth();
+      if (sameMonth) {
+        el.innerHTML = `${MONTHS[s.getMonth()]} ${s.getDate()}–${e.getDate()} <span class="year">${s.getFullYear()}</span>`;
+      } else {
+        el.innerHTML = `${MONTHS_SHORT[s.getMonth()]} ${s.getDate()} – ${MONTHS_SHORT[e.getMonth()]} ${e.getDate()} <span class="year">${e.getFullYear()}</span>`;
+      }
+    } else if (view === 'month') {
+      el.innerHTML = `${MONTHS[cursor.getMonth()]} <span class="year">${cursor.getFullYear()}</span>`;
+    } else {
+      el.innerHTML = `<span class="year">${cursor.getFullYear()}</span>`;
+    }
+  }
+
+  // ────────────── WEEK VIEW ──────────────
+  function renderWeek() {
+    const main = document.getElementById('main');
+    const start = startOfWeek(cursor);
+    let html = `<div class="week-view">`;
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(start, i);
+      const td = sameDay(d, today);
+      const we = isWeekend(d);
+      const holiday = getFederalHoliday(d);
+      const dayAssign = getDayAssignments(d);
+      let rows = '';
+      pathologists.forEach(p => {
+        const a = dayAssign[p.id];
+        const oc = a.onCall ? `<span class="oc-mark" title="On call this week"></span>` : '';
+        if (a.type === 'pto') {
+          rows += `<div class="wd-row pto" style="--c:${p.color}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc">PTO</span>
+            ${oc}
+          </div>`;
+        } else if (a.type === 'off') {
+          rows += `<div class="wd-row off" style="--c:${p.color}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc">${(we || holiday) ? 'Off' : 'Unstaffed'}</span>
+            ${oc}
+          </div>`;
+        } else {
+          const cbg = pathBgColor(p.color);
+          rows += `<div class="wd-row" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc"><span class="swatch"></span>${a.service.short}</span>
+            ${oc}
+          </div>`;
+        }
+      });
+      const holidayBadge = holiday ? `<span class="holiday-badge" title="${holiday}">⭐ ${holiday}</span>` : '';
+      html += `<div class="week-day ${td ? 'today' : ''} ${we ? 'weekend' : ''} ${holiday ? 'holiday' : ''}" data-date="${fmt(d)}">
+        <div class="wd-head">
+          <span class="dow">${DOW[d.getDay()]}</span>
+          <span class="num">${d.getDate()}${flagHtml(d)}</span>
+        </div>
+        ${holidayBadge}
+        <div class="wd-rows">${rows}</div>
+      </div>`;
+    }
+    html += `</div>`;
+    main.innerHTML = html;
+    attachDayClickHandlers();
+  }
+
+  // ────────────── MONTH VIEW ──────────────
+  function renderMonth() {
+    const main = document.getElementById('main');
+    const y = cursor.getFullYear();
+    const m = cursor.getMonth();
+    const first = new Date(y, m, 1);
+    const last = new Date(y, m + 1, 0);
+    const gridStart = startOfWeek(first);
+    const totalCells = Math.ceil((last.getDate() + first.getDay()) / 7) * 7;
+
+    let html = `<div class="month-view">`;
+    DOW.forEach(d => { html += `<div class="dow-h">${d}</div>`; });
+
+    for (let i = 0; i < totalCells; i++) {
+      const date = addDays(gridStart, i);
+      const inMonth = date.getMonth() === m;
+      const td = sameDay(date, today);
+      const we = isWeekend(date);
+      const holiday = inMonth ? getFederalHoliday(date) : null;
+      const dayAssign = getDayAssignments(date);
+
+      let rows = '';
+      pathologists.forEach(p => {
+        const a = dayAssign[p.id];
+        const oc = a.onCall ? `<span class="oc-mark" title="On call this week"></span>` : '';
+        if (a.type === 'pto') {
+          rows += `<div class="wd-row pto" style="--c:${p.color}" title="${p.name} — PTO${a.onCall ? ' · On call' : ''}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc">PTO</span>
+            ${oc}
+          </div>`;
+        } else if (a.type === 'off') {
+          rows += `<div class="wd-row off" style="--c:${p.color}" title="${p.name} — ${(we || holiday) ? 'Off' : 'Unstaffed'}${a.onCall ? ' · On call' : ''}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc">${(we || holiday) ? 'Off' : 'Unstaffed'}</span>
+            ${oc}
+          </div>`;
+        } else {
+          const cbg = pathBgColor(p.color);
+          rows += `<div class="wd-row" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc"><span class="swatch"></span>${a.service.short}</span>
+            ${oc}
+          </div>`;
+        }
+      });
+
+      const holidayBadge = holiday ? `<span class="month-holiday-badge" title="${holiday}">⭐ ${holiday}</span>` : '';
+      html += `<div class="day ${inMonth ? '' : 'outside'} ${we ? 'weekend' : ''} ${holiday ? 'holiday' : ''} ${td ? 'today' : ''}" data-date="${fmt(date)}">
+        <span class="num">${date.getDate()}${inMonth ? flagHtml(date) : ''}</span>
+        ${holidayBadge}
+        <div class="wd-rows">${rows}</div>
+      </div>`;
+    }
+    html += `</div>`;
+    main.innerHTML = html;
+    attachDayClickHandlers();
+  }
+
+  // ────────────── YEAR VIEW ──────────────
+
+  // Build a CSS background string from a list of pathologist colour vars.
+  // 1 → solid colour; 2 → diagonal split; 3 → 3-stripe; 4 → 4-stripe.
+  function gradientFor(colors) {
+    if (colors.length === 0) return 'transparent';
+    if (colors.length === 1) return colors[0];
+    if (colors.length === 2) {
+      return `linear-gradient(135deg, ${colors[0]} 50%, ${colors[1]} 50%)`;
+    }
+    if (colors.length === 3) {
+      return `linear-gradient(135deg, ${colors[0]} 33.33%, ${colors[1]} 33.33%, ${colors[1]} 66.66%, ${colors[2]} 66.66%)`;
+    }
+    // 4+: distribute evenly
+    const stops = [];
+    const step = 100 / colors.length;
+    colors.forEach((c, i) => {
+      const s = (i * step).toFixed(2) + '%';
+      const e = ((i + 1) * step).toFixed(2) + '%';
+      stops.push(`${c} ${s} ${e}`);
+    });
+    return `linear-gradient(135deg, ${stops.join(', ')})`;
+  }
+
+  // What to display in a cell, given the current yearMode.
+  // Returns: { folks: [pathologist], background, label, title }
+  function cellContent(date) {
+    if (yearMode === 'pto') {
+      const folks = pathologists.filter(p => isOnPto(p.id, date));
+      if (folks.length === 0) return null;
+      const colors = folks.map(p => p.color);
+      const initials = folks.map(p => p.initials);
+      const names = folks.map(p => p.name.replace(/^Dr\. /, ''));
+      const title = `${names.join(', ')} — PTO`;
+      let label;
+      if (folks.length === 1) label = initials[0];
+      else if (folks.length <= 2) label = initials.join('/');
+      else label = String(folks.length);   // 3+ → just count
+      return {
+        folks,
+        background: gradientFor(colors),
+        label,
+        title,
+        multi: folks.length > 1,
+        count: folks.length > 2,
+      };
+    }
+    // Call mode — exactly one pathologist on call for the whole week
+    const ocId = onCallIdForWeek(startOfWeek(date));
+    const oc = pathologists.find(p => p.id === ocId);
+    if (!oc) return null;
+    return {
+      folks: [oc],
+      background: oc.color,
+      label: oc.initials,
+      title: `${oc.name.replace(/^Dr\. /, '')} — On call (week)`,
+      multi: false,
+      count: false,
+    };
+  }
+
+  function renderYear() {
+    const main = document.getElementById('main');
+    const y = cursor.getFullYear();
+
+    // Mode tabs + pathologist key
+    const modeTabsHtml = `
+      <div class="mode-tabs" role="tablist">
+        <button class="${yearMode === 'pto' ? 'active' : ''}" data-mode="pto">PTO</button>
+        <button class="${yearMode === 'call' ? 'active' : ''}" data-mode="call">Call</button>
+      </div>`;
+
+    const keyHtml = `
+      <div class="key">
+        <span class="key-label">Pathologists</span>
+        ${pathologists.map(p =>
+          `<span class="key-pill"><span class="swatch" style="--c:${p.color}">${p.initials}</span>${p.name.replace(/^Dr\. /, '')}</span>`
+        ).join('')}
+      </div>`;
+
+    const hint = yearMode === 'pto'
+      ? 'Each coloured day shows who is on PTO.'
+      : 'Each coloured week shows who is on call.';
+
+    let html = `<div class="year-view">
+      <div class="year-legend">
+        ${modeTabsHtml}
+        <span class="mode-hint">${hint}</span>
+        ${keyHtml}
+      </div>`;
+
+    for (let m = 0; m < 12; m++) {
+      const first = new Date(y, m, 1);
+      const last = new Date(y, m + 1, 0);
+      const gridStart = startOfWeek(first);
+      const totalCells = Math.ceil((last.getDate() + first.getDay()) / 7) * 7;
+
+      let cells = DOW_MINI.map(d => `<div class="mh">${d}</div>`).join('');
+      for (let i = 0; i < totalCells; i++) {
+        const date = addDays(gridStart, i);
+        const inMonth = date.getMonth() === m;
+        const td = sameDay(date, today);
+
+        const content = inMonth ? cellContent(date) : null;
+        const classes = ['md'];
+        if (!inMonth) classes.push('outside');
+        if (td) classes.push('today');
+        const holiday = inMonth ? getFederalHoliday(date) : null;
+        if (holiday) classes.push('holiday');
+        if (content) {
+          classes.push('has-data');
+          if (content.multi) classes.push('multi');
+          if (content.count) classes.push('count');
+        }
+
+        const styleAttr = content ? ` style="background:${content.background}"` : '';
+        const titleAttr = (content || holiday)
+          ? ` title="${holiday ? holiday + (content ? ' · ' : '') : ''}${content ? content.title : ''}"`
+          : '';
+        const inner = content
+          ? `<span class="md-label">${content.label}</span>`
+          : `${date.getDate()}`;
+
+        cells += `<div class="${classes.join(' ')}" data-date="${fmt(date)}"${styleAttr}${titleAttr}>${inner}</div>`;
+      }
+
+      html += `<div class="year-month">
+        <h4>${MONTHS[m]} <span class="yr">${MONTHS_SHORT[m]}</span></h4>
+        <div class="mini-grid">${cells}</div>
+      </div>`;
+    }
+
+    html += `</div>`;
+    main.innerHTML = html;
+
+    // Mode toggle handlers
+    main.querySelectorAll('.mode-tabs button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        yearMode = btn.dataset.mode;
+        renderYear();
+      });
+    });
+
+    // Click any day in the year view → jump to month view
+    main.querySelectorAll('.md').forEach(el => {
+      if (el.classList.contains('outside')) return;
+      el.addEventListener('click', () => {
+        const ds = el.dataset.date;
+        if (!ds) return;
+        cursor = parseDate(ds);
+        view = 'month';
+        document.querySelectorAll('.view-tab').forEach(t => t.classList.toggle('active', t.dataset.view === 'month'));
+        renderMain();
+      });
+    });
+  }
+
+  // ────────────── DAY DETAIL MODAL ──────────────
+  let activeDayDate = null;
+
+  function attachDayClickHandlers() {
+    document.querySelectorAll('[data-date]').forEach(el => {
+      el.addEventListener('click', () => {
+        const ds = el.dataset.date;
+        if (!ds) return;
+        openDayDetail(parseDate(ds));
+      });
+    });
+  }
+
+  function openDayDetail(date) {
+    activeDayDate = date;
+    const title = document.getElementById('dayModalTitle');
+    const sub = document.getElementById('dayModalSub');
+    const rows = document.getElementById('dayDetailRows');
+
+    title.textContent = `${DOW[date.getDay()]}, ${MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+    const sw = startOfWeek(date);
+    const we = addDays(sw, 6);
+    const isWk = isWeekend(date);
+    const holiday = getFederalHoliday(date);
+    let subText = isWk
+      ? `Weekend — no service rotation. On-call still applies.`
+      : `Week of ${MONTHS_SHORT[sw.getMonth()]} ${sw.getDate()} – ${MONTHS_SHORT[we.getMonth()]} ${we.getDate()}`;
+    if (holiday) subText += `  •  ⭐ Federal Holiday: ${holiday}`;
+    const issues = (isWk || holiday) ? null : violationsForDay(date);
+    if (issues) {
+      subText += '  •  ⚠ Hard-rule conflict: ' + issues.join('; ');
+    }
+    sub.textContent = subText;
+
+    const dayAssign = getDayAssignments(date);
+    rows.innerHTML = pathologists.map(p => {
+      const a = dayAssign[p.id];
+      const ocPill = a.onCall ? `<span class="doc-pill">On Call</span>` : '';
+      if (a.type === 'pto') {
+        return `<div class="day-detail-row pto-row" style="--c:${p.color}">
+          <div class="ddot"></div>
+          <div class="dname">${p.name}</div>
+          <div class="dservice">PTO</div>
+          ${ocPill}
+        </div>`;
+      }
+      if (a.type === 'off') {
+        return `<div class="day-detail-row off-row" style="--c:${p.color}">
+          <div class="ddot"></div>
+          <div class="dname">${p.name}</div>
+          <div class="dservice">${(isWk || holiday) ? 'Off' : 'Unstaffed'}</div>
+          ${ocPill}
+        </div>`;
+      }
+      const cbg = pathBgColor(p.color);
+      return `<div class="day-detail-row" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+        <div class="ddot"></div>
+        <div class="dname">${p.name}</div>
+        <div class="dservice"><span class="swatch"></span>${a.service.name}</div>
+        ${ocPill}
+      </div>`;
+    }).join('');
+
+    // Hide "change service rotation" button on weekends and federal holidays
+    const svcBtn = document.getElementById('dayChangeService');
+    if (svcBtn) svcBtn.style.display = (isWk || holiday) ? 'none' : '';
+
+    document.getElementById('dayModalBack').classList.add('open');
+  }
+
+  document.getElementById('dayClose').addEventListener('click', () => {
+    document.getElementById('dayModalBack').classList.remove('open');
+  });
+  document.getElementById('dayModalBack').addEventListener('click', e => {
+    if (e.target.id === 'dayModalBack') e.target.classList.remove('open');
+  });
+
+  document.getElementById('dayAddPto').addEventListener('click', () => {
+    document.getElementById('dayModalBack').classList.remove('open');
+    openPtoModal(activeDayDate);
+  });
+  document.getElementById('dayChangeOnCall').addEventListener('click', () => {
+    document.getElementById('dayModalBack').classList.remove('open');
+    openOnCallModal(activeDayDate);
+  });
+  document.getElementById('dayChangeService').addEventListener('click', () => {
+    document.getElementById('dayModalBack').classList.remove('open');
+    openServiceModal(activeDayDate);
+  });
+
+  // ────────────── PTO MODAL ──────────────
+  function openPtoModal(prefillDate) {
+    const sel = document.getElementById('ptoPath');
+    sel.innerHTML = pathologists.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+    const d = prefillDate || today;
+    document.getElementById('ptoStart').value = fmt(d);
+    document.getElementById('ptoEnd').value = fmt(d);
+    renderPtoList();
+    document.getElementById('ptoModalBack').classList.add('open');
+  }
+
+  function renderPtoList() {
+    const list = document.getElementById('ptoList');
+    const upcoming = vacations
+      .filter(v => v.end >= today)
+      .sort((a, b) => a.start - b.start)
+      .slice(0, 30);
+    if (upcoming.length === 0) {
+      list.innerHTML = `<div class="empty">No upcoming PTO scheduled.</div>`;
+      return;
+    }
+    list.innerHTML = upcoming.map(v => {
+      const p = pathologists.find(x => x.id === v.pathologistId);
+      if (!p) return '';
+      const same = sameDay(v.start, v.end);
+      const range = same
+        ? `${MONTHS_SHORT[v.start.getMonth()]} ${v.start.getDate()}, ${v.start.getFullYear()}`
+        : `${MONTHS_SHORT[v.start.getMonth()]} ${v.start.getDate()} – ${MONTHS_SHORT[v.end.getMonth()]} ${v.end.getDate()}, ${v.end.getFullYear()}`;
+      return `<div class="pto-list-item" style="--c:${p.color}">
+        <div class="pdot"></div>
+        <div class="prange">
+          <div class="pname">${p.name.replace(/^Dr\. /, '')}</div>
+          <div class="pdates">${range}</div>
+        </div>
+        <button data-key="${v.key}">Remove</button>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('button[data-key]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const key = btn.dataset.key;
+        if (!confirm('Remove this PTO entry?')) return;
+        await db.ref('scheduler/vacations/' + key).remove();
+      });
+    });
+  }
+
+  document.getElementById('addPtoBtn').addEventListener('click', () => openPtoModal(null));
+  document.getElementById('ptoCancel').addEventListener('click', () => {
+    document.getElementById('ptoModalBack').classList.remove('open');
+  });
+  document.getElementById('ptoModalBack').addEventListener('click', e => {
+    if (e.target.id === 'ptoModalBack') e.target.classList.remove('open');
+  });
+  document.getElementById('ptoSave').addEventListener('click', async () => {
+    const pid = parseInt(document.getElementById('ptoPath').value, 10);
+    const sStr = document.getElementById('ptoStart').value;
+    const eStr = document.getElementById('ptoEnd').value;
+    if (!sStr || !eStr) { alert('Please choose start and end dates.'); return; }
+    const s = new Date(sStr + 'T00:00:00');
+    const e = new Date(eStr + 'T00:00:00');
+    if (isNaN(s) || isNaN(e) || e < s) { alert('Please enter a valid date range.'); return; }
+    await db.ref('scheduler/vacations').push({
+      pathologistId: pid,
+      start: fmt(s),
+      end:   fmt(e),
+    });
+    renderPtoList();
+  });
+
+  // ────────────── ON-CALL OVERRIDE MODAL ──────────────
+  let activeOcWeekKey = null;
+  let activeOcDayKey  = null;
+  let activeOcDate    = null;
+
+  function updateOcSubLabel() {
+    const scope = document.querySelector('input[name="ocScope"]:checked').value;
+    if (scope === 'day') {
+      const d = activeOcDate;
+      document.getElementById('ocModalSub').textContent =
+        `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+    } else {
+      const sw = startOfWeek(activeOcDate);
+      const we = addDays(sw, 6);
+      document.getElementById('ocModalSub').textContent =
+        `Week of ${MONTHS_SHORT[sw.getMonth()]} ${sw.getDate()} – ${MONTHS_SHORT[we.getMonth()]} ${we.getDate()}, ${we.getFullYear()}`;
+    }
+  }
+
+  function openOnCallModal(date) {
+    const sw = startOfWeek(date);
+    activeOcWeekKey = fmt(sw);
+    activeOcDayKey  = fmt(date);
+    activeOcDate    = date;
+
+    // Default to "day only"
+    document.getElementById('ocScopeDay').checked = true;
+
+    updateOcSubLabel();
+
+    const sel = document.getElementById('ocPath');
+    const currentId = onCallIdForDay(date);
+    sel.innerHTML = pathologists.map(p =>
+      `<option value="${p.id}" ${p.id === currentId ? 'selected' : ''}>${p.name}</option>`
+    ).join('');
+    document.getElementById('ocModalBack').classList.add('open');
+  }
+
+  document.querySelectorAll('input[name="ocScope"]').forEach(radio => {
+    radio.addEventListener('change', updateOcSubLabel);
+  });
+
+  document.getElementById('ocCancel').addEventListener('click', () => {
+    document.getElementById('ocModalBack').classList.remove('open');
+  });
+  document.getElementById('ocModalBack').addEventListener('click', e => {
+    if (e.target.id === 'ocModalBack') e.target.classList.remove('open');
+  });
+  document.getElementById('ocSave').addEventListener('click', async () => {
+    const pid   = parseInt(document.getElementById('ocPath').value, 10);
+    const scope = document.querySelector('input[name="ocScope"]:checked').value;
+    if (scope === 'day') {
+      await db.ref('scheduler/onCallDayOverrides/' + activeOcDayKey).set(pid);
+    } else {
+      await db.ref('scheduler/onCallOverrides/' + activeOcWeekKey).set(pid);
+    }
+    document.getElementById('ocModalBack').classList.remove('open');
+  });
+  document.getElementById('ocReset').addEventListener('click', async () => {
+    const scope = document.querySelector('input[name="ocScope"]:checked').value;
+    if (scope === 'day') {
+      await db.ref('scheduler/onCallDayOverrides/' + activeOcDayKey).remove();
+    } else {
+      await db.ref('scheduler/onCallOverrides/' + activeOcWeekKey).remove();
+    }
+    document.getElementById('ocModalBack').classList.remove('open');
+  });
+
+  // ────────────── SERVICE OVERRIDE MODAL (per day) ──────────────
+  let activeSvcDayKey = null;
+  function openServiceModal(date) {
+    if (isWeekend(date)) return;   // no service rotation on weekends
+    if (getFederalHoliday(date)) return;  // no service rotation on federal holidays
+    activeSvcDayKey = fmt(date);
+    document.getElementById('svcModalSub').textContent =
+      `${DOW[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}. PTO pathologists are skipped — manage PTO separately.`;
+    const dayAssign = getDayAssignments(date);
+    const container = document.getElementById('svcAssignments');
+    container.innerHTML = pathologists.map(p => {
+      const a = dayAssign[p.id];
+      if (a.type === 'pto') {
+        return `<label style="margin-top:10px;">${p.name}</label>
+          <select disabled><option>On PTO</option></select>`;
+      }
+      const currentId = a.type === 'service' ? a.service.id : '';
+      const opts = SERVICES.map(s =>
+        `<option value="${s.id}" ${s.id === currentId ? 'selected' : ''}>${s.name}</option>`
+      ).join('');
+      const noneOpt = `<option value="" ${currentId === '' ? 'selected' : ''}>— No service —</option>`;
+      return `<label style="margin-top:10px;">${p.name}</label>
+        <select data-pid="${p.id}">${noneOpt}${opts}</select>`;
+    }).join('');
+    document.getElementById('svcModalBack').classList.add('open');
+  }
+  document.getElementById('svcCancel').addEventListener('click', () => {
+    document.getElementById('svcModalBack').classList.remove('open');
+  });
+  document.getElementById('svcModalBack').addEventListener('click', e => {
+    if (e.target.id === 'svcModalBack') e.target.classList.remove('open');
+  });
+  document.getElementById('svcSave').addEventListener('click', async () => {
+    const selects = document.querySelectorAll('#svcAssignments select[data-pid]');
+    const update = {};
+    selects.forEach(s => {
+      if (s.value) update[s.dataset.pid] = s.value;
+    });
+    if (Object.keys(update).length === 0) {
+      await db.ref('scheduler/serviceOverrides/' + activeSvcDayKey).remove();
+    } else {
+      await db.ref('scheduler/serviceOverrides/' + activeSvcDayKey).set(update);
+    }
+    document.getElementById('svcModalBack').classList.remove('open');
+  });
+  document.getElementById('svcReset').addEventListener('click', async () => {
+    await db.ref('scheduler/serviceOverrides/' + activeSvcDayKey).remove();
+    document.getElementById('svcModalBack').classList.remove('open');
+  });
+
+  // ────────────── DISPATCH ──────────────
+  function renderMain() {
+    renderPeriodLabel();
+    if (view === 'week') renderWeek();
+    else if (view === 'month') renderMonth();
+    else renderYear();
+  }
+  function renderAll() {
+    if (!pathologistsReady || !vacationsReady || pathologists.length === 0) return;
+    renderSidebar();
+    renderMain();
+  }
+
+  // ────────────── NAV EVENTS ──────────────
+  document.getElementById('viewTabs').addEventListener('click', e => {
+    const btn = e.target.closest('.view-tab');
+    if (!btn) return;
+    document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    view = btn.dataset.view;
+    renderMain();
+  });
+
+  document.getElementById('prevBtn').addEventListener('click', () => {
+    if (view === 'week') cursor = addDays(cursor, -7);
+    else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+    else cursor = new Date(cursor.getFullYear() - 1, cursor.getMonth(), 1);
+    renderMain();
+  });
+  document.getElementById('nextBtn').addEventListener('click', () => {
+    if (view === 'week') cursor = addDays(cursor, 7);
+    else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+    else cursor = new Date(cursor.getFullYear() + 1, cursor.getMonth(), 1);
+    renderMain();
+  });
+  document.getElementById('todayBtn').addEventListener('click', () => {
+    cursor = new Date(today);
+    renderMain();
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (document.querySelector('.modal-back.open')) return;
+    if (e.key === 'ArrowLeft') document.getElementById('prevBtn').click();
+    else if (e.key === 'ArrowRight') document.getElementById('nextBtn').click();
+    else if (e.key === 't' || e.key === 'T') document.getElementById('todayBtn').click();
+    else if (e.key === '1') document.querySelector('.view-tab[data-view="week"]').click();
+    else if (e.key === '2') document.querySelector('.view-tab[data-view="month"]').click();
+    else if (e.key === '3') document.querySelector('.view-tab[data-view="year"]').click();
+  });
+</script>
+</body>
+</html>

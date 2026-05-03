@@ -1567,28 +1567,357 @@
             }
         }
 
+        /* ─────────────────── MOBILE: ≤ 800px ─────────────────── */
         @media (max-width: 800px) {
-            .app {
-                grid-template-columns: 1fr;
+
+            /* Switch from fixed-viewport layout to natural document scroll.
+               This is what fixes the "content gets cut off" problem — the desktop
+               app uses overflow:hidden on body and 100vh on .app, which clips
+               content on small screens. */
+            html,
+            body {
+                height: auto;
+                overflow: auto;
+                overscroll-behavior-y: contain;
             }
 
-            aside {
+            .app {
+                grid-template-columns: 1fr;
+                grid-template-rows: auto auto 1fr;
+                height: auto;
+                min-height: 100vh;
+            }
+
+            /* ── Header: wrap into a tidy 3-row stack ── */
+            header {
+                flex-wrap: wrap;
+                gap: 10px;
+                padding: 12px 14px;
+                row-gap: 10px;
+            }
+
+            .brand {
+                flex: 1 1 auto;
+            }
+
+            .brand h1 {
+                font-size: 24px;
+            }
+
+            .brand .tag {
+                /* hide "Pathology Group" subtitle to save space */
                 display: none;
             }
 
-            header {
-                flex-wrap: wrap;
-                gap: 12px;
-                padding: 14px 16px;
+            /* The path-filter + view-tabs container — push to its own row */
+            header > div:last-child {
+                flex: 1 1 100%;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 8px;
+                order: 3;
             }
 
+            .path-filter {
+                margin-right: 0;
+                font-size: 11.5px;
+                padding: 6px 8px 6px 10px;
+                max-width: 55%;
+            }
+
+            .view-tabs {
+                flex: 0 1 auto;
+            }
+
+            .view-tab {
+                padding: 5px 10px;
+                font-size: 11px;
+                letter-spacing: 0.05em;
+            }
+
+            .header-center {
+                flex: 1 1 100%;
+                justify-content: center;
+                flex-wrap: wrap;
+                gap: 10px;
+                order: 2;
+            }
+
+            .current-period {
+                font-size: 18px;
+                min-width: 0;
+                flex: 1 1 auto;
+                text-align: center;
+            }
+
+            /* ── Aside: turn into a horizontal banner with on-call info ── */
+            aside {
+                display: flex;
+                flex-direction: row;
+                align-items: stretch;
+                gap: 10px;
+                padding: 10px 14px;
+                border-right: none;
+                border-bottom: 1px solid var(--rule);
+                overflow: visible;
+            }
+
+            /* Hide everything in the sidebar except the on-call callout
+               and the Manage PTO button. Export is hidden per request. */
+            aside .side-section,
+            aside #exportBtn,
+            aside .signin-info {
+                display: none !important;
+            }
+
+            /* On-call callout — compact horizontal pill */
+            .oc-callout {
+                flex: 1 1 auto;
+                padding: 8px 12px;
+                margin-bottom: 0;
+                display: flex;
+                align-items: center;
+                gap: 10px 14px;
+                flex-wrap: wrap;
+                min-width: 0;
+            }
+
+            .oc-callout .label {
+                margin-bottom: 0;
+                font-size: 8.5px;
+                flex: 0 0 auto;
+            }
+
+            .oc-callout .name {
+                font-size: 15px;
+                flex: 1 1 auto;
+                min-width: 0;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+
+            .oc-callout .week {
+                margin-top: 0;
+                font-size: 10.5px;
+                font-family: var(--mono);
+                letter-spacing: 0.04em;
+                flex: 0 0 auto;
+            }
+
+            /* Compact Manage PTO button — keep it accessible */
+            .add-pto-btn {
+                width: auto;
+                flex: 0 0 auto;
+                padding: 0 12px;
+                font-size: 11px;
+                white-space: nowrap;
+            }
+
+            .add-pto-btn .plus {
+                font-size: 13px;
+            }
+
+            /* ── Main content ── */
+            main {
+                overflow: visible;
+                padding: 14px 12px 24px;
+                height: auto;
+            }
+
+            /* Week view: each day as its own card, stacked */
             .week-view {
                 grid-template-columns: 1fr;
                 min-height: auto;
+                height: auto;
+                gap: 8px;
             }
 
+            .week-day {
+                min-height: 0;
+            }
+
+            /* Month view: tighter cells, hide service text labels to fit */
+            .month-view {
+                gap: 2px;
+            }
+
+            .month-view .day {
+                min-height: 64px;
+                border-radius: 4px;
+            }
+
+            .month-view .day .day-num-row {
+                padding: 4px 5px 2px;
+            }
+
+            .month-view .day .num {
+                font-size: 12px;
+            }
+
+            .month-view .day .wd-rows {
+                padding: 1px 2px 2px;
+                gap: 1px;
+            }
+
+            .month-view .day .wd-row {
+                padding: 2px 4px;
+                gap: 3px;
+                font-size: 9px;
+            }
+
+            .month-view .day .wd-row .pid {
+                font-size: 8.5px;
+                width: auto;
+            }
+
+            /* Hide the service-name text in month cells; the colored swatch
+               in the pid + the on-call mark still convey the info, and the
+               full detail is one tap away in the day modal. */
+            .month-view .day .wd-row .svc {
+                display: none;
+            }
+
+            .month-view .day .wd-row .oc-mark {
+                font-size: 6.5px;
+                padding: 1px 3px;
+                letter-spacing: 0.04em;
+            }
+
+            .month-view .dow-h {
+                font-size: 9px;
+                padding: 4px 0 6px;
+                letter-spacing: 0.08em;
+            }
+
+            .holiday-badge,
+            .month-holiday-badge {
+                font-size: 7px;
+                padding: 1px 3px;
+                letter-spacing: 0.04em;
+            }
+
+            /* Year view */
             .year-view {
                 grid-template-columns: repeat(2, 1fr);
+                gap: 12px;
+            }
+
+            .year-month {
+                padding: 10px;
+            }
+
+            .year-month h4 {
+                font-size: 14px;
+            }
+
+            .year-legend {
+                gap: 10px;
+                padding: 8px 10px;
+                font-size: 11px;
+            }
+
+            .year-legend .key {
+                margin-left: 0;
+                width: 100%;
+            }
+
+            /* ── Modals: better fit on narrow screens ── */
+            .modal-back {
+                padding: 12px;
+                align-items: flex-start;
+                padding-top: 5vh;
+            }
+
+            .modal {
+                padding: 18px 18px 16px;
+                max-width: 100%;
+                max-height: 88vh;
+            }
+
+            .modal h3 {
+                font-size: 19px;
+            }
+
+            .day-detail-actions {
+                flex-direction: column;
+                gap: 6px;
+            }
+
+            .day-detail-actions button {
+                flex: 1 1 100%;
+                min-width: 0;
+            }
+
+            .modal-actions {
+                flex-wrap: wrap;
+            }
+        }
+
+        /* ─────────────────── MOBILE: ≤ 480px (narrow phones) ─────────────────── */
+        @media (max-width: 480px) {
+            .brand h1 {
+                font-size: 20px;
+            }
+
+            .nav-btn {
+                width: 28px;
+                height: 28px;
+                font-size: 15px;
+            }
+
+            .today-btn {
+                padding: 5px 10px;
+                font-size: 11px;
+            }
+
+            .current-period {
+                font-size: 16px;
+            }
+
+            .view-tab {
+                padding: 5px 8px;
+                font-size: 10px;
+                letter-spacing: 0.04em;
+            }
+
+            .path-filter {
+                font-size: 11px;
+                max-width: 48%;
+            }
+
+            /* On-call banner stacks below Manage PTO button at very narrow widths */
+            aside {
+                flex-wrap: wrap;
+            }
+
+            .oc-callout {
+                flex: 1 1 100%;
+            }
+
+            .add-pto-btn {
+                flex: 1 1 100%;
+                padding: 8px 10px;
+            }
+
+            /* Year view: single column on tiny phones */
+            .year-view {
+                grid-template-columns: 1fr;
+            }
+
+            /* Month cells: even tighter at extra-narrow widths */
+            .month-view .day {
+                min-height: 52px;
+            }
+
+            .month-view .day .num {
+                font-size: 11px;
+            }
+
+            /* On-call modal scope toggle: stack vertically if it gets squeezed */
+            .oc-scope-toggle {
+                flex-wrap: wrap;
             }
         }
 

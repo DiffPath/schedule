@@ -1569,40 +1569,26 @@
 
         /* ─────────────────── MOBILE: ≤ 800px ─────────────────── */
         @media (max-width: 800px) {
-
-            /* Switch from fixed-viewport layout to natural document scroll.
-               The desktop app uses overflow:hidden on body and 100vh on .app
-               with internal scroll on aside/main. On mobile we want the
-               document itself to scroll (much better touch behaviour),
-               so we drop the height clamps and prevent any horizontal
-               overflow in case a child miscalculates its width. */
             html,
             body {
                 height: auto;
-                overflow-y: auto;
-                overflow-x: hidden;
+                overflow: visible;
                 overscroll-behavior-y: contain;
-                width: 100%;
             }
 
-            /* Stop using CSS grid on mobile — switch to plain block flow.
-               Grid with `1fr` rows constrains main's height to the remaining
-               viewport, which is what was preventing vertical scrolling. */
             .app {
-                display: block;
+                grid-template-columns: 1fr;
+                grid-template-rows: auto auto 1fr;
                 height: auto;
                 min-height: 100vh;
-                max-width: 100%;
-                overflow-x: hidden;
             }
 
-            /* ── Header: wrap into a tidy multi-row stack ── */
+            /* ── Header: wrap into a tidy 3-row stack ── */
             header {
                 flex-wrap: wrap;
                 gap: 10px;
                 padding: 12px 14px;
                 row-gap: 10px;
-                max-width: 100%;
             }
 
             .brand {
@@ -1618,41 +1604,31 @@
                 display: none;
             }
 
-            /* The path-filter + view-tabs container — push to its own row
-               and let it wrap internally when there isn't room for both
-               the dropdown and all four view tabs in a single line. This
-               is the fix for horizontal overflow on narrow phones. */
+            /* The path-filter + view-tabs container — push to its own row */
             header > div:last-child {
                 flex: 1 1 100%;
                 display: flex;
-                flex-wrap: wrap;
                 justify-content: space-between;
                 align-items: center;
                 gap: 8px;
                 order: 3;
-                max-width: 100%;
             }
 
             .path-filter {
                 margin-right: 0;
                 font-size: 11.5px;
                 padding: 6px 8px 6px 10px;
-                flex: 1 1 140px;
-                min-width: 0;
-                max-width: 100%;
+                max-width: 55%;
             }
 
             .view-tabs {
-                flex: 1 1 auto;
-                justify-content: center;
-                max-width: 100%;
+                flex: 0 1 auto;
             }
 
             .view-tab {
-                padding: 5px 9px;
-                font-size: 10.5px;
+                padding: 5px 10px;
+                font-size: 11px;
                 letter-spacing: 0.05em;
-                flex: 1 1 auto;
             }
 
             .header-center {
@@ -1680,7 +1656,6 @@
                 border-right: none;
                 border-bottom: 1px solid var(--rule);
                 overflow: visible;
-                max-width: 100%;
             }
 
             /* Hide everything in the sidebar except the on-call callout
@@ -1741,11 +1716,9 @@
 
             /* ── Main content ── */
             main {
-                overflow-x: hidden;
-                overflow-y: visible;
+                overflow: visible;
                 padding: 14px 12px 24px;
                 height: auto;
-                max-width: 100%;
             }
 
             /* Week view: each day as its own card, stacked */

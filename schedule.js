@@ -985,27 +985,59 @@ function getVisiblePendingCount() {
     return arr.filter(([, r]) => r.requesterId === loggedInPathId).length;
 }
 
-// Show / hide the sidebar Requests button and its red badge
+// Show / hide the sidebar Requests button and its red badge.
+// Also drives the mobile hamburger menu's red alert dot and its
+// in-menu Requests badge so phone users get notified the same way.
 function updateRequestsBadge() {
     const btn = document.getElementById('requestsBtn');
     const badge = document.getElementById('requestsBadge');
     const lbl = document.getElementById('requestsBtnLabel');
-    if (!btn || !badge) return;
+
+    // Mobile menu equivalents
+    const menuBtn        = document.getElementById('menuBtn');
+    const menuReqItem    = document.getElementById('menuRequestsItem');
+    const menuReqBadge   = document.getElementById('menuRequestsBadge');
+    const menuReqLabel   = document.getElementById('menuRequestsLabel');
+    const menuPtoLabel   = document.getElementById('menuPtoLabel');
+    const menuExportItem = document.getElementById('menuExportItem');
 
     // Hide entirely if not signed in
     if (loggedInPathId === null) {
-        btn.style.display = 'none';
+        if (btn) btn.style.display = 'none';
+        if (menuBtn) menuBtn.classList.remove('has-alert');
+        if (menuReqItem) menuReqItem.style.display = 'none';
+        if (menuExportItem) menuExportItem.style.display = 'none';
         return;
     }
-    btn.style.display = '';
-    if (lbl) lbl.textContent = isAdmin() ? 'Requests' : 'My Requests';
 
+    // ── Sidebar button (desktop) ──
+    if (btn) {
+        btn.style.display = '';
+        if (lbl) lbl.textContent = isAdmin() ? 'Requests' : 'My Requests';
+    }
+
+    // ── Mobile menu items ──
+    if (menuPtoLabel) menuPtoLabel.textContent = isAdmin() ? 'Manage PTO' : 'Request PTO';
+    if (menuReqItem)  menuReqItem.style.display = '';
+    if (menuReqLabel) menuReqLabel.textContent  = isAdmin() ? 'Requests' : 'My Requests';
+    if (menuExportItem) menuExportItem.style.display = isAdmin() ? '' : 'none';
+
+    // ── Pending count → badges + alert dot ──
     const pending = getVisiblePendingCount();
     if (pending > 0) {
-        badge.style.display = '';
-        badge.textContent = String(pending);
+        if (badge) {
+            badge.style.display = '';
+            badge.textContent = String(pending);
+        }
+        if (menuReqBadge) {
+            menuReqBadge.style.display = '';
+            menuReqBadge.textContent = String(pending);
+        }
+        if (menuBtn) menuBtn.classList.add('has-alert');
     } else {
-        badge.style.display = 'none';
+        if (badge) badge.style.display = 'none';
+        if (menuReqBadge) menuReqBadge.style.display = 'none';
+        if (menuBtn) menuBtn.classList.remove('has-alert');
     }
 }
 
@@ -1352,6 +1384,21 @@ function flagHtml(date) {
 }
 
 // ────────────── PERIOD LABEL ──────────────
+// Returns true when the cursor's current period (week/month/year)
+// already contains today — used to toggle the "off-today" affordance.
+function periodContainsToday() {
+    if (view === 'week') {
+        const s = startOfWeek(cursor);
+        const e = addDays(s, 6);
+        return today >= s && today <= addDays(e, 1);
+    } else if (view === 'month') {
+        return cursor.getFullYear() === today.getFullYear() &&
+               cursor.getMonth() === today.getMonth();
+    } else { // year, agenda
+        return cursor.getFullYear() === today.getFullYear();
+    }
+}
+
 function renderPeriodLabel() {
     const el = document.getElementById('currentPeriod');
     if (view === 'week') {
@@ -1368,6 +1415,8 @@ function renderPeriodLabel() {
     } else {
         el.innerHTML = `<span class="year">${cursor.getFullYear()}</span>`;
     }
+    // Show the small "•" affordance + tap-to-today cursor when not viewing today
+    el.classList.toggle('off-today', !periodContainsToday());
 }
 
 // ────────────── WEEK VIEW ──────────────
@@ -2321,6 +2370,73 @@ document.getElementById('pathTabs').addEventListener('click', e => {
     if (!btn) return;
     const filter = btn.dataset.filter === 'me' ? String(loggedInPathId) : 'all';
     setPathFilter(filter);
+    renderMain();
+});
+
+// ────────────── MOBILE HAMBURGER MENU ──────────────
+// On phones, Manage PTO / Requests / Export to Outlook live in a dropdown
+// behind a hamburger icon to free up vertical real estate. The menu items
+// just delegate to the existing sidebar button click handlers so behavior
+// stays in lock-step between the two surfaces.
+(function wireHamburgerMenu() {
+    const menuBtn  = document.getElementById('menuBtn');
+    const dropdown = document.getElementById('menuDropdown');
+    if (!menuBtn || !dropdown) return;
+
+    function openMenu() {
+        dropdown.classList.add('open');
+        menuBtn.setAttribute('aria-expanded', 'true');
+        dropdown.setAttribute('aria-hidden', 'false');
+    }
+    function closeMenu() {
+        dropdown.classList.remove('open');
+        menuBtn.setAttribute('aria-expanded', 'false');
+        dropdown.setAttribute('aria-hidden', 'true');
+    }
+    function toggleMenu() {
+        dropdown.classList.contains('open') ? closeMenu() : openMenu();
+    }
+
+    menuBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        toggleMenu();
+    });
+
+    // Click outside to close
+    document.addEventListener('click', e => {
+        if (!dropdown.classList.contains('open')) return;
+        if (dropdown.contains(e.target) || menuBtn.contains(e.target)) return;
+        closeMenu();
+    });
+
+    // Esc to close
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && dropdown.classList.contains('open')) closeMenu();
+    });
+
+    // Item routing — each item triggers the matching existing sidebar button
+    // so we don't duplicate any modal-opening logic.
+    dropdown.addEventListener('click', e => {
+        const item = e.target.closest('.menu-item');
+        if (!item) return;
+        const action = item.dataset.action;
+        closeMenu();
+        if (action === 'pto') {
+            document.getElementById('addPtoBtn').click();
+        } else if (action === 'requests') {
+            document.getElementById('requestsBtn').click();
+        } else if (action === 'export') {
+            document.getElementById('exportBtn').click();
+        }
+    });
+})();
+
+// Tap-to-today on the period label.  On desktop this only fires when
+// you're not already viewing today (the label gets the "off-today" class
+// via renderPeriodLabel); on mobile it always fires since we removed the
+// dedicated Today button to save space.
+document.getElementById('currentPeriod').addEventListener('click', () => {
+    cursor = new Date(today);
     renderMain();
 });
 

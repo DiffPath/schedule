@@ -42,7 +42,25 @@
     <div class="app">
 
         <header>
-            <div style="display: flex; align-items: center;">
+            <!-- Hamburger menu (mobile only) — holds Manage PTO, Requests, Export -->
+            <button class="menu-btn" id="menuBtn" aria-label="Menu" aria-expanded="false">
+                <span class="menu-icon"></span>
+                <span class="menu-dot" id="menuDot" aria-hidden="true"></span>
+            </button>
+            <div class="menu-dropdown" id="menuDropdown" role="menu" aria-hidden="true">
+                <button class="menu-item" data-action="pto" role="menuitem">
+                    <span class="menu-item-label" id="menuPtoLabel">Manage PTO</span>
+                </button>
+                <button class="menu-item" data-action="requests" id="menuRequestsItem" role="menuitem">
+                    <span class="menu-item-label" id="menuRequestsLabel">Requests</span>
+                    <span class="req-badge menu-req-badge" id="menuRequestsBadge" style="display:none;">0</span>
+                </button>
+                <button class="menu-item" data-action="export" id="menuExportItem" role="menuitem" style="display:none;">
+                    <span class="menu-item-label">Export to Outlook</span>
+                </button>
+            </div>
+
+            <div class="header-pathtabs-wrap">
                 <div class="path-tabs" id="pathTabs">
                     <button class="path-tab active" data-filter="all">All Pathologists</button>
                     <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;">Just Me</button>
@@ -55,10 +73,10 @@
                     <button class="nav-btn" id="prevBtn" title="Previous">‹</button>
                     <button class="nav-btn" id="nextBtn" title="Next">›</button>
                 </div>
-                <div class="current-period" id="currentPeriod">—</div>
+                <button class="current-period" id="currentPeriod" type="button" title="Tap to jump to today">—</button>
             </div>
 
-            <div style="display: flex; align-items: center;">
+            <div class="header-viewtabs-wrap">
                 <div class="view-tabs" id="viewTabs">
                     <button class="view-tab active" data-view="week">Week</button>
                     <button class="view-tab" data-view="month">Month</button>

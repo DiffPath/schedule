@@ -45,6 +45,12 @@ const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_MINI = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
+// Earliest date for which the app shows schedule data. Anything before this
+// date renders as blank (no rotation, no PTO, no on-call shown).
+const EARLIEST_DATE = new Date(2025, 8, 1); // September 1, 2025
+EARLIEST_DATE.setHours(0, 0, 0, 0);
+const isBeforeEarliest = d => d.getTime() < EARLIEST_DATE.getTime();
+
 // ────────────── STATE ──────────────
 let pathologists = [];
 let vacations = [];                  // [{ key, pathologistId, start: Date, end: Date }]
@@ -560,6 +566,16 @@ function getDayAssignments(date) {
     const cacheKey = fmt(date) + '|' + pathologists.length + '|R';
     if (_dayCache.has(cacheKey)) return _dayCache.get(cacheKey);
 
+    // Pre-cutoff dates render as blank — no rotation, no PTO, no on-call.
+    if (isBeforeEarliest(date)) {
+        const blank = {};
+        pathologists.forEach(p => {
+            blank[p.id] = { type: 'blank', service: null, onCall: false };
+        });
+        _dayCache.set(cacheKey, blank);
+        return blank;
+    }
+
     const natural = getNaturalDayAssignments(date);
 
     // Weekend or federal holiday: no service rotation, no hard rules to apply.
@@ -601,9 +617,37 @@ function clearDayCache() {
 }
 
 function ptoDaysScheduled(pathId) {
-    let count = 0;
+    // Collect and clamp all ranges for this pathologist.
+    const ranges = [];
     vacations.filter(v => v.pathologistId === pathId).forEach(v => {
-        count += daysBetween(v.start, v.end) + 1;
+        const effStart = v.start.getTime() < EARLIEST_DATE.getTime() ? EARLIEST_DATE : v.start;
+        if (v.end.getTime() < effStart.getTime()) return;
+        ranges.push({ start: new Date(effStart), end: new Date(v.end) });
+    });
+
+    if (ranges.length === 0) return 0;
+
+    // Sort by start date, then merge overlapping or duplicate ranges to avoid
+    // double-counting days when the same PTO period has been entered more than once.
+    ranges.sort((a, b) => a.start.getTime() - b.start.getTime());
+    const merged = [{ start: ranges[0].start, end: ranges[0].end }];
+    for (let i = 1; i < ranges.length; i++) {
+        const last = merged[merged.length - 1];
+        const cur = ranges[i];
+        if (cur.start.getTime() <= addDays(last.end, 1).getTime()) {
+            // Overlapping or adjacent — extend the merged range if needed.
+            if (cur.end.getTime() > last.end.getTime()) last.end = cur.end;
+        } else {
+            merged.push({ start: cur.start, end: cur.end });
+        }
+    }
+
+    // Count working days (weekdays, non-holidays) across the merged ranges.
+    let count = 0;
+    merged.forEach(r => {
+        for (let d = new Date(r.start); d.getTime() <= r.end.getTime(); d = addDays(d, 1)) {
+            if (!isWeekend(d) && !getFederalHoliday(d)) count++;
+        }
     });
     return count;
 }
@@ -1437,6 +1481,7 @@ function renderWeek() {
 
         activePathologists.forEach(p => {
             const a = dayAssign[p.id];
+            if (a.type === 'blank') return; // pre-cutoff date — render no rows
             const oc = a.onCall ? `<span class="oc-mark" title="On call this week">On Call</span>` : '';
             if (a.type === 'pto') {
                 rows += `<div class="wd-row pto" style="--c:${p.color}">
@@ -1502,6 +1547,7 @@ function renderMonth() {
 
         activePathologists.forEach(p => {
             const a = dayAssign[p.id];
+            if (a.type === 'blank') return; // pre-cutoff date — render no rows
             const oc = a.onCall ? `<span class="oc-mark" title="On call this week">On Call</span>` : '';
             if (a.type === 'pto') {
                 rows += `<div class="wd-row pto" style="--c:${p.color}" title="${p.name} — PTO${a.onCall ? ' · On call' : ''}">
@@ -1563,6 +1609,9 @@ function gradientFor(colors) {
     return `linear-gradient(135deg, ${stops.join(', ')})`;
 }
 function cellContent(date) {
+    // Pre-cutoff dates render as blank in year view too.
+    if (isBeforeEarliest(date)) return null;
+
     // Check if a specific pathologist is selected in the dropdown
     const filterId = currentPathFilter === 'all' ? null : parseInt(currentPathFilter);
 
@@ -1741,6 +1790,7 @@ function openDayDetail(date) {
     const dayAssign = getDayAssignments(date);
     rows.innerHTML = pathologists.map(p => {
         const a = dayAssign[p.id];
+        if (a.type === 'blank') return ''; // pre-cutoff date — no row
         const ocPill = a.onCall ? `<span class="doc-pill">On Call</span>` : '';
         if (a.type === 'pto') {
             return `<div class="day-detail-row pto-row" style="--c:${p.color}">
@@ -1775,7 +1825,7 @@ function openDayDetail(date) {
     const admin = isAdmin();
     const ptoBtn = document.getElementById('dayAddPto');
     const ocBtn = document.getElementById('dayChangeOnCall');
-    if (ptoBtn) ptoBtn.textContent = admin ? '+ Add PTO for this day' : '+ Request PTO for this day';
+    if (ptoBtn) ptoBtn.textContent = admin ? 'Add PTO for this day' : '+ Request PTO for this day';
     if (ocBtn) ocBtn.textContent = admin ? "Change who's on call" : "Request on-call change";
     if (svcBtn && !(isWk || holiday)) {
         svcBtn.textContent = admin ? 'Override services this day' : 'Request service change';
@@ -2105,6 +2155,10 @@ function openServiceModal(date) {
 
     container.innerHTML = visiblePaths.map(p => {
         const a = dayAssign[p.id];
+        if (a.type === 'blank') {
+            return `<label style="margin-top:10px;">${p.name}</label>
+          <select disabled><option>Date is before scheduling start</option></select>`;
+        }
         if (a.type === 'pto') {
             return `<label style="margin-top:10px;">${p.name}</label>
           <select disabled><option>On PTO</option></select>`;
@@ -2226,7 +2280,7 @@ function renderAgenda() {
         for (let i = 0; i < 60; i++) {
             const d = addDays(today, i);
             const a = getDayAssignments(d)[pid];
-            if (!a || a.type === 'off') continue;
+            if (!a || a.type === 'off' || a.type === 'blank') continue;
 
             found++;
             const isPto = a.type === 'pto';
@@ -2271,7 +2325,7 @@ function renderAgenda() {
         // Check if any pathologist has something noteworthy today
         const hasContent = activePaths.some(p => {
             const a = dayAssign[p.id];
-            return a && a.type !== 'off';
+            return a && a.type !== 'off' && a.type !== 'blank';
         });
         if (!hasContent && !holiday) continue;
 
@@ -2290,7 +2344,7 @@ function renderAgenda() {
 
         activePaths.forEach(p => {
             const a = dayAssign[p.id];
-            if (!a || a.type === 'off') return;
+            if (!a || a.type === 'off' || a.type === 'blank') return;
 
             const isPto = a.type === 'pto';
             const svcStr = isPto

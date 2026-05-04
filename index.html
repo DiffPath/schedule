@@ -4,8 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Rota — Pathology Group Schedule</title>
-    <link rel="icon" type="image/png" href="faviconSchedule.png">
+    <title>Pathology Group Schedule</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -19,7 +18,6 @@
     <!-- Login overlay (first-time use on device) -->
     <div class="login-overlay" id="loginOverlay" style="display:none;">
         <div class="login-card">
-            <h2>R<em>ot</em>a</h2>
             <div class="login-sub">Sign in to your schedule</div>
 
             <label>Pathologist</label>
@@ -38,16 +36,17 @@
 
     <div class="loading-overlay" id="loadingOverlay">
         <div class="loading-spinner"></div>
-        <h2>R<em>ot</em>a</h2>
         <div class="loading-status" id="loadingStatus">Connecting to cloud…</div>
     </div>
 
     <div class="app">
 
         <header>
-            <div class="brand">
-                <h1>R<em>ot</em>a</h1>
-                <span class="tag">Pathology Group</span>
+            <div style="display: flex; align-items: center;">
+                <div class="path-tabs" id="pathTabs">
+                    <button class="path-tab active" data-filter="all">All Pathologists</button>
+                    <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;">Just Me</button>
+                </div>
             </div>
 
             <div class="header-center">
@@ -60,14 +59,11 @@
             </div>
 
             <div style="display: flex; align-items: center;">
-                <select id="pathFilter" class="path-filter">
-                    <option value="all">All Pathologists</option>
-                </select>
                 <div class="view-tabs" id="viewTabs">
                     <button class="view-tab active" data-view="week">Week</button>
                     <button class="view-tab" data-view="month">Month</button>
                     <button class="view-tab" data-view="year">Year</button>
-                    <button class="view-tab" data-view="agenda">Agenda</button>
+                    <button class="view-tab" data-view="agenda">Compact</button>
                 </div>
             </div>
         </header>
@@ -94,13 +90,13 @@
                 </div>
             </div>
 
-            <button class="add-pto-btn" id="addPtoBtn"><span class="plus">+</span> Manage PTO</button>
-            <button class="add-pto-btn" id="exportBtn" style="margin-top:8px;"><span class="plus">↓</span> Export to Outlook</button>
-
-            <div class="signin-info" id="signinInfo" style="display:none;">
-                <span class="who" id="signinWho">—</span>
-                <button id="signOutBtn" title="Sign out on this device">Sign out</button>
-            </div>
+            <button class="add-pto-btn" id="addPtoBtn"><span class="plus">+</span> <span id="addPtoBtnLabel">Manage PTO</span></button>
+            <button class="add-pto-btn" id="requestsBtn" style="margin-top:8px; display:none;">
+                <span class="plus">📥</span>
+                <span id="requestsBtnLabel">Requests</span>
+                <span class="req-badge" id="requestsBadge" style="display:none;">0</span>
+            </button>
+            <button class="add-pto-btn" id="exportBtn" style="margin-top:8px; display:none;"><span class="plus">↓</span> Export to Outlook</button>
         </aside>
 
         <main id="main"></main>
@@ -120,7 +116,13 @@
             <label>End date (inclusive)</label>
             <input type="date" id="ptoEnd" />
 
-            <label style="margin-top:18px;">Existing PTO</label>
+            <div id="ptoNoteWrap" style="display:none;">
+                <label>Note for admin (optional)</label>
+                <textarea id="ptoNote" rows="2" placeholder="e.g. family wedding, conference travel…"
+                    style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+            </div>
+
+            <label style="margin-top:18px;" id="ptoListLabel">Existing PTO</label>
             <div class="pto-list" id="ptoList"></div>
 
             <div class="modal-actions">
@@ -170,6 +172,12 @@
             <label>Pathologist on call</label>
             <select id="ocPath"></select>
 
+            <div id="ocNoteWrap" style="display:none;">
+                <label style="margin-top:14px;">Note for admin (optional)</label>
+                <textarea id="ocNote" rows="2" placeholder="Reason for swap…"
+                    style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+            </div>
+
             <div class="modal-actions">
                 <button id="ocReset" class="danger">Reset to default</button>
                 <button id="ocCancel">Cancel</button>
@@ -184,7 +192,24 @@
             <h3>Override services for this day</h3>
             <div class="sub" id="svcModalSub">—</div>
 
+            <div class="oc-scope-toggle" id="svcScopeToggle">
+                <label class="oc-scope-opt">
+                    <input type="radio" name="svcScope" value="day" id="svcScopeDay" checked>
+                    This day only
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="svcScope" value="week" id="svcScopeWeek">
+                    Full call week
+                </label>
+            </div>
+
             <div id="svcAssignments"></div>
+
+            <div id="svcNoteWrap" style="display:none;">
+                <label style="margin-top:14px;">Note for admin (optional)</label>
+                <textarea id="svcNote" rows="2" placeholder="Reason for change…"
+                    style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+            </div>
 
             <div class="modal-actions">
                 <button id="svcReset" class="danger">Reset to default</button>
@@ -228,6 +253,25 @@
             <div class="modal-actions">
                 <button id="exportCancel">Cancel</button>
                 <button class="primary" id="exportDownload">Download .ics</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Requests modal (admin: approve/deny; non-admin: see own history) -->
+    <div class="modal-back" id="requestsModalBack">
+        <div class="modal modal-wide">
+            <h3 id="requestsModalTitle">Pending Requests</h3>
+            <div class="sub" id="requestsModalSub">Review schedule change requests.</div>
+
+            <div class="req-tabs" id="reqTabs">
+                <button class="req-tab active" data-rtab="pending">Pending</button>
+                <button class="req-tab" data-rtab="history">History</button>
+            </div>
+
+            <div class="req-list" id="requestsList"></div>
+
+            <div class="modal-actions">
+                <button id="requestsClose">Close</button>
             </div>
         </div>
     </div>

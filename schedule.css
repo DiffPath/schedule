@@ -1607,7 +1607,7 @@ main {
         display: none;
     }
 
-    /* The path-filter + view-tabs container — push to its own row */
+    /* The path-tabs + view-tabs container — push to its own row */
     header>div:last-child {
         flex: 1 1 100%;
         display: flex;
@@ -1617,12 +1617,16 @@ main {
         order: 3;
     }
 
-    .path-filter {
+    .path-tabs {
         flex: 1 1 100%;
         max-width: 100%;
         margin-right: 0;
-        font-size: 11.5px;
-        padding: 6px 8px 6px 10px;
+        justify-content: stretch;
+    }
+
+    .path-tab {
+        flex: 1 1 0;
+        text-align: center;
     }
 
     .view-tabs {
@@ -1884,7 +1888,7 @@ main {
         letter-spacing: 0.04em;
     }
 
-    .path-filter {
+    .path-tab {
         font-size: 11px;
         max-width: 100%;
     }
@@ -1923,20 +1927,261 @@ main {
     }
 }
 
-.path-filter {
-    background: var(--paper);
-    border: 1px solid var(--rule);
-    color: var(--ink);
-    padding: 6px 10px 6px 14px;
-    border-radius: 6px;
-    font-family: var(--sans);
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
+.path-tabs {
+    display: flex;
+    background: var(--bg-2);
+    border-radius: 8px;
+    padding: 3px;
+    gap: 2px;
     margin-right: 12px;
-    outline: none;
 }
 
-.path-filter:hover {
-    border-color: var(--ink-3);
+.path-tab {
+    background: transparent;
+    border: none;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    transition: all 0.18s ease;
 }
+
+.path-tab:hover {
+    color: var(--ink);
+}
+
+.path-tab.active {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+/* ─────────────────── REQUESTS UI (admin & user) ─────────────────── */
+
+/* Pending count badge on the sidebar Requests button */
+.req-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: #d8492a;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--mono);
+    margin-left: 4px;
+    box-shadow: 0 0 0 0 rgba(216, 73, 42, 0.55);
+    animation: req-pulse 2.2s ease-out infinite;
+}
+
+@keyframes req-pulse {
+    0%   { box-shadow: 0 0 0 0   rgba(216, 73, 42, 0.55); }
+    70%  { box-shadow: 0 0 0 8px rgba(216, 73, 42, 0); }
+    100% { box-shadow: 0 0 0 0   rgba(216, 73, 42, 0); }
+}
+
+/* Wider modal for the request inbox so long titles fit */
+.modal.modal-wide {
+    max-width: 640px;
+    width: calc(100vw - 40px);
+}
+
+/* Toggle between Pending / History inside the requests modal */
+.req-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--bg);
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+    padding: 3px;
+    margin: 14px 0 12px;
+    width: fit-content;
+}
+
+.req-tabs .req-tab {
+    background: transparent;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-family: inherit;
+}
+
+.req-tabs .req-tab:hover { color: var(--ink); }
+
+.req-tabs .req-tab.active {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* Scrollable list of request cards */
+.req-list {
+    max-height: 50vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-right: 4px;
+}
+
+.req-list .empty {
+    text-align: center;
+    color: var(--ink-3);
+    font-style: italic;
+    padding: 24px 16px;
+    font-size: 13px;
+}
+
+/* Individual request card */
+.req-card {
+    border: 1px solid var(--rule-soft);
+    border-radius: 7px;
+    padding: 12px 14px;
+    background: var(--paper);
+    position: relative;
+}
+
+.req-card.status-pending  { border-left: 3px solid #d8a32a; }
+.req-card.status-approved { border-left: 3px solid #2a8c46; }
+.req-card.status-denied   { border-left: 3px solid #b94e2a; }
+
+.req-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+
+.req-card .req-who {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--ink);
+}
+
+.req-card .req-type {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+    background: var(--bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-left: 8px;
+    white-space: nowrap;
+}
+
+.req-card .req-status-pill {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 7px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.req-card .req-status-pill.pending  { background: rgba(216, 163, 42, 0.15); color: #8a6614; }
+.req-card .req-status-pill.approved { background: rgba(42, 140, 70, 0.15);  color: #1f6b34; }
+.req-card .req-status-pill.denied   { background: rgba(185, 78, 42, 0.15);  color: #8a3c20; }
+
+.req-card .req-detail {
+    font-size: 13px;
+    color: var(--ink-2);
+    line-height: 1.5;
+    margin: 4px 0;
+}
+
+.req-card .req-detail strong { color: var(--ink); font-weight: 500; }
+
+.req-card .req-note {
+    font-size: 12px;
+    color: var(--ink-3);
+    font-style: italic;
+    margin-top: 6px;
+    padding-left: 9px;
+    border-left: 2px solid var(--rule-soft);
+}
+
+.req-card .req-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-3);
+    margin-top: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.req-card-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    justify-content: flex-end;
+}
+
+.req-card-actions button {
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--rule);
+    background: transparent;
+    color: var(--ink-2);
+    transition: all 0.15s ease;
+    font-family: inherit;
+}
+
+.req-card-actions button:hover {
+    background: var(--bg);
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+
+.req-card-actions button.approve {
+    background: #2a8c46;
+    color: #fff;
+    border-color: #2a8c46;
+}
+
+.req-card-actions button.approve:hover {
+    background: #226e37;
+    border-color: #226e37;
+}
+
+.req-card-actions button.deny {
+    color: #b94e2a;
+    border-color: rgba(185, 78, 42, 0.3);
+}
+
+.req-card-actions button.deny:hover {
+    background: rgba(185, 78, 42, 0.06);
+    border-color: #b94e2a;
+}
+
+/* Read-only banner shown inside the standard modals when a non-admin
+   is using them in "request" mode, to make the workflow obvious. */
+.req-mode-banner {
+    background: rgba(216, 163, 42, 0.10);
+    border: 1px solid rgba(216, 163, 42, 0.30);
+    color: #6b4f10;
+    padding: 8px 12px;
+    border-radius: 5px;
+    font-size: 12px;
+    margin: 8px 0 14px;
+    line-height: 1.5;
+}
+
+.req-mode-banner strong { font-weight: 600; }

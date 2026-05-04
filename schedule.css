@@ -183,6 +183,37 @@ header {
     text-align: center;
     letter-spacing: -0.01em;
     line-height: 1.1;
+    /* Button reset — element is <button> so it can act as tap-to-today on mobile */
+    background: transparent;
+    border: none;
+    color: var(--ink);
+    padding: 4px 8px;
+    border-radius: 6px;
+    cursor: default;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+/* On desktop, only allow the period itself to be tap-to-today when not viewing today */
+.current-period.off-today {
+    cursor: pointer;
+}
+
+.current-period.off-today:hover {
+    background: var(--paper);
+}
+
+/* Subtle dot indicator when not on today — same visual language as iOS unread dot */
+.current-period.off-today::after {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-left: 8px;
+    vertical-align: middle;
+    transform: translateY(-2px);
+    opacity: 0.6;
 }
 
 .current-period .year {
@@ -221,6 +252,133 @@ header {
     background: var(--paper);
     color: var(--ink);
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* ─────────────────── HAMBURGER MENU (mobile) ─────────────────── */
+/* Hidden on desktop — sidebar holds Manage PTO / Requests / Export there */
+.menu-btn {
+    display: none;
+    position: relative;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+}
+
+.menu-btn:hover,
+.menu-btn[aria-expanded="true"] {
+    background: var(--paper);
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+
+/* Three-line hamburger drawn in CSS — no icon font dependency */
+.menu-icon,
+.menu-icon::before,
+.menu-icon::after {
+    content: '';
+    display: block;
+    width: 16px;
+    height: 1.5px;
+    background: currentColor;
+    border-radius: 1px;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+}
+.menu-icon { top: 50%; transform: translate(-50%, -50%); }
+.menu-icon::before { top: -5px; }
+.menu-icon::after  { top: 5px; }
+
+/* Red alert dot on hamburger when there are pending requests */
+.menu-dot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #d8492a;
+    box-shadow: 0 0 0 2px var(--bg);
+    display: none;
+    animation: req-pulse 2.2s ease-out infinite;
+}
+
+.menu-btn.has-alert .menu-dot { display: block; }
+
+.menu-dropdown {
+    display: none;
+    position: absolute;
+    top: 56px;
+    left: 14px;
+    z-index: 200;
+    min-width: 220px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(17, 24, 39, 0.12),
+                0 2px 4px rgba(17, 24, 39, 0.06);
+    padding: 6px;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.menu-dropdown.open {
+    display: flex;
+    animation: menu-fade-in 0.14s ease-out;
+}
+
+@keyframes menu-fade-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease;
+}
+
+.menu-item:hover,
+.menu-item:focus-visible {
+    background: var(--bg-2);
+    outline: none;
+}
+
+.menu-item:active {
+    background: var(--accent-soft);
+}
+
+.menu-item .menu-item-label {
+    flex: 1 1 auto;
+}
+
+/* Tweak the existing red badge to fit menu items */
+.menu-req-badge {
+    margin-left: 0;
+    animation: none;
+    box-shadow: none;
 }
 
 /* ─────────────────── SIDEBAR ─────────────────── */
@@ -1578,151 +1736,141 @@ main {
     }
 
     .app {
+        /* No sidebar on mobile — single column, header then main */
         grid-template-columns: 1fr;
-        grid-template-rows: auto auto 1fr;
+        grid-template-rows: auto 1fr;
         height: auto;
         min-height: 100vh;
         max-width: 100%;
         overflow-x: hidden;
+        position: relative;
     }
 
-    /* ── Header: wrap into a tidy 3-row stack ── */
+    /* ── Header: 2 tight rows ──
+       Row 1: [☰] [‹] [Period] [›]      ← centered, period tappable=today
+       Row 2: [All|Me]   [Week|Month|Year|Compact]
+    */
     header {
-        flex-wrap: wrap;
-        gap: 10px;
-        padding: 12px 14px;
-        row-gap: 10px;
-    }
-
-    .brand {
-        flex: 1 1 auto;
-    }
-
-    .brand h1 {
-        font-size: 24px;
-    }
-
-    .brand .tag {
-        /* hide "Pathology Group" subtitle to save space */
-        display: none;
-    }
-
-    /* The path-tabs + view-tabs container — push to its own row */
-    header>div:last-child {
-        flex: 1 1 100%;
-        display: flex;
-        flex-wrap: wrap;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        grid-template-rows: auto auto;
+        column-gap: 8px;
+        row-gap: 8px;
+        padding: 10px 14px;
         align-items: center;
-        gap: 8px;
-        order: 3;
+    }
+
+    /* Row 1 placement */
+    .menu-btn {
+        display: inline-flex;            /* show hamburger on mobile */
+        grid-column: 1;
+        grid-row: 1;
+    }
+
+    .header-center {
+        grid-column: 2 / span 2;          /* nav + period takes the rest of row 1 */
+        grid-row: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        flex-wrap: nowrap;
+        min-width: 0;
+    }
+
+    /* Today button hidden — period itself becomes tap-to-today on mobile */
+    .today-btn { display: none; }
+
+    .nav-btn {
+        width: 30px;
+        height: 30px;
+        font-size: 16px;
+    }
+
+    .current-period {
+        font-size: 17px;
+        min-width: 0;
+        flex: 0 1 auto;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        cursor: pointer;                  /* always tappable on mobile */
+        padding: 4px 6px;
+    }
+
+    .current-period.off-today::after {
+        margin-left: 6px;
+        width: 4px;
+        height: 4px;
+    }
+
+    .current-period .year {
+        margin-left: 4px;
+    }
+
+    /* Row 2 placement */
+    .header-pathtabs-wrap {
+        grid-column: 1 / span 2;
+        grid-row: 2;
+        display: flex;
+        align-items: stretch;
+        min-width: 0;
+    }
+
+    .header-viewtabs-wrap {
+        grid-column: 3;
+        grid-row: 2;
+        display: flex;
+        align-items: stretch;
+        min-width: 0;
     }
 
     .path-tabs {
-        flex: 1 1 100%;
-        max-width: 100%;
+        flex: 1 1 auto;
         margin-right: 0;
-        justify-content: stretch;
+        padding: 2px;
     }
 
     .path-tab {
         flex: 1 1 0;
         text-align: center;
+        padding: 6px 8px;
+        font-size: 10.5px;
+        letter-spacing: 0.04em;
+        white-space: nowrap;
     }
 
     .view-tabs {
-        flex: 1 1 100%;
-        justify-content: stretch;
+        padding: 2px;
+        gap: 1px;
     }
 
     .view-tab {
-        flex: 1 1 0;
+        flex: 0 1 auto;
         text-align: center;
-        padding: 6px 4px;
+        padding: 6px 9px;
         font-size: 10.5px;
         letter-spacing: 0.04em;
     }
 
-    .header-center {
-        flex: 1 1 100%;
-        justify-content: center;
-        flex-wrap: wrap;
-        gap: 10px;
-        order: 2;
+    /* Menu dropdown: position fixed so it stays anchored to the hamburger
+       even if the user has scrolled the page (mobile pages aren't a fixed
+       viewport like desktop). */
+    .menu-dropdown {
+        position: fixed;
+        top: 52px;
+        left: 14px;
+        right: auto;
+        min-width: 230px;
+        max-width: calc(100vw - 28px);
     }
 
-    .current-period {
-        font-size: 18px;
-        min-width: 0;
-        flex: 1 1 auto;
-        text-align: center;
-    }
-
-    /* ── Aside: turn into a horizontal banner with on-call info ── */
+    /* ── Aside: hidden entirely on phone (per request) ──
+       Manage PTO, Requests, and Export are reachable through the hamburger;
+       the on-call callout is removed to free up vertical space. */
     aside {
-        display: flex;
-        flex-direction: row;
-        align-items: stretch;
-        gap: 10px;
-        padding: 10px 14px;
-        border-right: none;
-        border-bottom: 1px solid var(--rule);
-        overflow: visible;
-    }
-
-    /* Hide everything in the sidebar except the on-call callout
-               and the Manage PTO button. Export is hidden per request. */
-    aside .side-section,
-    aside #exportBtn,
-    aside .signin-info {
         display: none !important;
-    }
-
-    /* On-call callout — compact horizontal pill */
-    .oc-callout {
-        flex: 1 1 auto;
-        padding: 8px 12px;
-        margin-bottom: 0;
-        display: flex;
-        align-items: center;
-        gap: 10px 14px;
-        flex-wrap: wrap;
-        min-width: 0;
-    }
-
-    .oc-callout .label {
-        margin-bottom: 0;
-        font-size: 8.5px;
-        flex: 0 0 auto;
-    }
-
-    .oc-callout .name {
-        font-size: 15px;
-        flex: 1 1 auto;
-        min-width: 0;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .oc-callout .week {
-        margin-top: 0;
-        font-size: 10.5px;
-        font-family: var(--mono);
-        letter-spacing: 0.04em;
-        flex: 0 0 auto;
-    }
-
-    /* Compact Manage PTO button — keep it accessible */
-    .add-pto-btn {
-        width: auto;
-        flex: 0 0 auto;
-        padding: 0 12px;
-        font-size: 11px;
-        white-space: nowrap;
-    }
-
-    .add-pto-btn .plus {
-        font-size: 13px;
     }
 
     /* ── Main content ── */
@@ -1779,8 +1927,8 @@ main {
     }
 
     /* Hide the service-name text in month cells; the colored swatch
-               in the pid + the on-call mark still convey the info, and the
-               full detail is one tap away in the day modal. */
+       in the pid + the on-call mark still convey the info, and the
+       full detail is one tap away in the day modal. */
     .month-view .day .wd-row .svc {
         display: none;
     }
@@ -1863,8 +2011,14 @@ main {
 
 /* ─────────────────── MOBILE: ≤ 480px (narrow phones) ─────────────────── */
 @media (max-width: 480px) {
-    .brand h1 {
-        font-size: 20px;
+    header {
+        padding: 8px 10px;
+        column-gap: 6px;
+    }
+
+    .menu-btn {
+        width: 34px;
+        height: 34px;
     }
 
     .nav-btn {
@@ -1873,38 +2027,27 @@ main {
         font-size: 15px;
     }
 
-    .today-btn {
-        padding: 5px 10px;
-        font-size: 11px;
-    }
-
     .current-period {
-        font-size: 16px;
+        font-size: 15px;
+        padding: 3px 4px;
     }
 
     .view-tab {
-        padding: 5px 8px;
+        padding: 5px 7px;
         font-size: 10px;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.03em;
     }
 
     .path-tab {
-        font-size: 11px;
+        font-size: 10px;
+        padding: 5px 6px;
         max-width: 100%;
     }
 
-    /* On-call banner stacks below Manage PTO button at very narrow widths */
-    aside {
-        flex-wrap: wrap;
-    }
-
-    .oc-callout {
-        flex: 1 1 100%;
-    }
-
-    .add-pto-btn {
-        flex: 1 1 100%;
-        padding: 8px 10px;
+    .menu-dropdown {
+        top: 48px;
+        left: 10px;
+        min-width: 210px;
     }
 
     /* Year view: single column on tiny phones */
@@ -1934,6 +2077,15 @@ main {
     padding: 3px;
     gap: 2px;
     margin-right: 12px;
+}
+
+/* Wrapper divs around path-tabs and view-tabs in the header.
+   Provide sensible defaults so they sit properly on desktop; the
+   mobile media query overrides them to participate in the grid. */
+.header-pathtabs-wrap,
+.header-viewtabs-wrap {
+    display: flex;
+    align-items: center;
 }
 
 .path-tab {

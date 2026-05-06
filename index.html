@@ -6,7 +6,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pathology Group Schedule</title>
     <link rel="icon" type="image/x-icon" href="faviconSchedule.png">
-
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -57,15 +56,18 @@
                     <span class="menu-item-label" id="menuRequestsLabel">Requests</span>
                     <span class="req-badge menu-req-badge" id="menuRequestsBadge" style="display:none;">0</span>
                 </button>
-                <button class="menu-item" data-action="export" id="menuExportItem" role="menuitem" style="display:none;">
+                <button class="menu-item" data-action="export" id="menuExportItem" role="menuitem"
+                    style="display:none;">
                     <span class="menu-item-label">Export to Outlook</span>
                 </button>
             </div>
 
             <div class="header-pathtabs-wrap">
                 <div class="path-tabs" id="pathTabs">
-                    <button class="path-tab active" data-filter="all">All Pathologists</button>
-                    <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;">Just Me</button>
+                    <button class="path-tab active" data-filter="all"><span class="tab-full">All
+                            Pathologists</span><span class="tab-short">All</span></button>
+                    <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;"><span
+                            class="tab-full">Just Me</span><span class="tab-short">Just Me</span></button>
                 </div>
             </div>
 
@@ -241,7 +243,8 @@
     <div class="modal-back" id="exportModalBack">
         <div class="modal">
             <h3>Export to Outlook</h3>
-            <div class="sub">Download an .ics file you can import into Outlook (or any calendar app). Pick a pathologist and a date range.</div>
+            <div class="sub">Download an .ics file you can import into Outlook (or any calendar app). Pick a pathologist
+                and a date range.</div>
 
             <label>Pathologist</label>
             <select id="exportPath"></select>
@@ -253,21 +256,25 @@
 
             <label style="margin-top:14px;">Include in export</label>
             <div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;">
-                <label style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:0; font-size:13px; margin:0;">
+                <label
+                    style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:0; font-size:13px; margin:0;">
                     <input type="checkbox" id="exportIncludeService" checked style="width:auto; margin:0;" />
                     Service assignments (Cyto, Bigs, Huntley, WFH)
                 </label>
-                <label style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:0; font-size:13px; margin:0;">
+                <label
+                    style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:0; font-size:13px; margin:0;">
                     <input type="checkbox" id="exportIncludePto" checked style="width:auto; margin:0;" />
                     PTO days
                 </label>
-                <label style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:0; font-size:13px; margin:0;">
+                <label
+                    style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:0; font-size:13px; margin:0;">
                     <input type="checkbox" id="exportIncludeOnCall" checked style="width:auto; margin:0;" />
                     On-call days
                 </label>
             </div>
 
-            <div class="sub" id="exportHint" style="margin-top:14px;">After downloading, open Outlook → File → Open &amp; Export → Import/Export → Import an iCalendar file.</div>
+            <div class="sub" id="exportHint" style="margin-top:14px;">After downloading, open Outlook → File → Open
+                &amp; Export → Import/Export → Import an iCalendar file.</div>
 
             <div class="modal-actions">
                 <button id="exportCancel">Cancel</button>
@@ -299,4 +306,5 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
     <script src="schedule.js"></script>
 </body>
+
 </html>

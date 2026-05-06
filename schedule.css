@@ -91,6 +91,9 @@ button {
 /* ─────────────────── HEADER ─────────────────── */
 header {
     grid-column: 1 / -1;
+    position: sticky;
+    top: 0;
+    z-index: 50;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -671,30 +674,42 @@ main {
     min-width: 0;
 }
 
-/* Hard-rule violation indicator: shown when the rotation couldn't satisfy
-     the bigs-before-PTO / WFH-adjacency rules and a manual review is needed. */
+/* Rule-violation flag pills shown in the day header.
+   Base styles shared by both red (hard) and yellow (soft) variants. */
 .rule-flag {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 16px;
     height: 16px;
-    border-radius: 4px;
-    background: rgba(185, 78, 42, 0.12);
-    color: #b94e2a;
+    border-radius: 50%;
     font-size: 11px;
     font-weight: 700;
     line-height: 1;
-    margin-left: 6px;
+    margin-left: 5px;
     cursor: help;
     flex-shrink: 0;
+}
+
+/* Red: hard coverage rule broken (required service not staffed) */
+.rule-flag-red {
+    background: rgba(185, 42, 42, 0.14);
+    color: #b92a2a;
+    border: 1px solid rgba(185, 42, 42, 0.32);
+}
+
+/* Yellow: soft rule broken (bigs the day before PTO or Breast Bx/WFH) */
+.rule-flag-yellow {
+    background: rgba(202, 138, 4, 0.14);
+    color: #92620a;
+    border: 1px solid rgba(202, 138, 4, 0.35);
 }
 
 .month-view .day .num .rule-flag {
     width: 13px;
     height: 13px;
     font-size: 9px;
-    margin-left: 4px;
+    margin-left: 3px;
 }
 
 .wd-rows {
@@ -996,10 +1011,12 @@ main {
 }
 
 .year-month .mini-grid .md {
-    aspect-ratio: 1 / 1;
     display: flex;
+    flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
+    padding: 2px 1px 1px;
+    gap: 2px;
     font-family: var(--mono);
     font-size: 9.5px;
     color: var(--ink-2);
@@ -1007,11 +1024,10 @@ main {
     cursor: pointer;
     position: relative;
     background: transparent;
-    overflow: hidden;
 }
 
 .year-month .mini-grid .md:hover {
-    filter: brightness(0.92);
+    background: var(--bg-2);
 }
 
 .year-month .mini-grid .md.outside {
@@ -1019,29 +1035,56 @@ main {
 }
 
 .year-month .mini-grid .md.outside:hover {
-    filter: none;
     background: var(--bg-2);
 }
 
-/* Today: thin ring overlay so it works on top of any background colour */
+/* The date number — always shown above the square */
+.year-month .mini-grid .md .md-num {
+    font-family: var(--mono);
+    font-size: 9px;
+    line-height: 1;
+    color: inherit;
+    letter-spacing: 0;
+}
+
+/* The coloured square below the number — always present, coloured only when has-data */
+.year-month .mini-grid .md .md-square {
+    width: 100%;
+    height: 30px;
+    border-radius: 2px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+/* Today: ring around the whole cell; bold number */
 .year-month .mini-grid .md.today {
     box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+
+.year-month .mini-grid .md.today .md-num {
+    color: var(--accent);
     font-weight: 700;
 }
 
+/* Holiday: tint the cell; colour the number */
 .year-month .mini-grid .md.holiday {
-    background: #e0e7ff !important;
-    color: #4338ca !important;
-    font-weight: 700;
+    background: #e0e7ff;
     box-shadow: inset 0 0 0 1.5px #818cf8;
+}
+
+.year-month .mini-grid .md.holiday .md-num {
+    color: #4338ca;
+    font-weight: 700;
 }
 
 .year-month .mini-grid .md.holiday.today {
     box-shadow: inset 0 0 0 1.5px var(--accent);
 }
 
-/* Cells with data — coloured by pathologist */
-.year-month .mini-grid .md.has-data {
+/* Cells with data — coloured square gets text */
+.year-month .mini-grid .md.has-data .md-square {
     color: white;
     font-weight: 600;
     text-shadow: 0 1px 1px rgba(0, 0, 0, 0.18);
@@ -1049,18 +1092,18 @@ main {
 
 .year-month .mini-grid .md .md-label {
     font-family: var(--mono);
-    font-size: 8px;
+    font-size: 6.5px;
     line-height: 1;
     letter-spacing: -0.02em;
 }
 
 .year-month .mini-grid .md.has-data.multi .md-label {
-    font-size: 6.5px;
+    font-size: 5.5px;
     letter-spacing: 0;
 }
 
 .year-month .mini-grid .md.has-data.count .md-label {
-    font-size: 9px;
+    font-size: 7px;
     letter-spacing: 0;
 }
 
@@ -1610,6 +1653,133 @@ main {
     color: var(--ink);
 }
 
+/* ── Per-pathologist quick-action panel (admin day-detail click) ── */
+.day-detail-row.admin-clickable {
+    cursor: pointer;
+    transition: background 0.12s ease, box-shadow 0.12s ease;
+}
+.day-detail-row.admin-clickable:hover {
+    box-shadow: 0 0 0 2px var(--accent);
+    z-index: 1;
+}
+.day-detail-row.admin-clickable .dname {
+    text-decoration: underline dotted var(--ink-3);
+    text-underline-offset: 3px;
+}
+.day-detail-row.admin-clickable.panel-open {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom-color: transparent;
+    box-shadow: 0 0 0 2px var(--accent);
+}
+.path-quick-panel {
+    background: var(--paper);
+    border: 2px solid var(--accent);
+    border-top: none;
+    border-radius: 0 0 7px 7px;
+    padding: 12px 14px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: -1px; /* tuck under the row border */
+    animation: panelSlide 0.14s ease;
+}
+@keyframes panelSlide {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.path-quick-panel .pqp-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+}
+.path-quick-panel .pqp-range {
+    font-size: 12px;
+    color: var(--ink-2);
+    font-style: italic;
+    margin-top: -4px;
+}
+.path-quick-panel .pqp-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+.path-quick-panel .pqp-date-input {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 12px;
+    background: var(--bg);
+    color: var(--ink);
+    cursor: pointer;
+}
+.path-quick-panel .pqp-date-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.path-quick-panel select {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 12.5px;
+    background: var(--bg);
+    color: var(--ink);
+    cursor: pointer;
+}
+.path-quick-panel .pqp-btn {
+    padding: 6px 14px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--rule);
+    background: var(--bg);
+    color: var(--ink-2);
+    white-space: nowrap;
+    transition: all 0.12s ease;
+}
+.path-quick-panel .pqp-btn:hover {
+    background: var(--paper);
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+.path-quick-panel .pqp-btn.primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+.path-quick-panel .pqp-btn.primary:hover {
+    opacity: 0.88;
+}
+.path-quick-panel .pqp-btn.danger {
+    border-color: #e55;
+    color: #c33;
+}
+.path-quick-panel .pqp-btn.danger:hover {
+    background: #fff0f0;
+    border-color: #c33;
+}
+.path-quick-panel .pqp-reset {
+    font-size: 11px;
+    color: var(--ink-3);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline dotted;
+    padding: 0;
+    align-self: flex-start;
+}
+.path-quick-panel .pqp-reset:hover { color: var(--ink-2); }
+
 /* PTO list inside modal */
 .pto-list {
     margin-top: 10px;
@@ -1765,6 +1935,8 @@ main {
         display: inline-flex;            /* show hamburger on mobile */
         grid-column: 1;
         grid-row: 1;
+        width: 40px;
+        height: 40px;
     }
 
     .header-center {
@@ -1782,9 +1954,9 @@ main {
     .today-btn { display: none; }
 
     .nav-btn {
-        width: 30px;
-        height: 30px;
-        font-size: 16px;
+        width: 40px;
+        height: 40px;
+        font-size: 18px;
     }
 
     .current-period {
@@ -1826,32 +1998,57 @@ main {
         min-width: 0;
     }
 
+    /* Switch to short labels on mobile */
+    .tab-full  { display: none; }
+    .tab-short { display: inline; }
+
+    /* Hide Export from the hamburger menu on mobile — not needed on phone */
+    #menuExportItem { display: none !important; }
+
+    /* Row 2: stretch both wrappers to the same height so tab bars align */
+    .header-pathtabs-wrap,
+    .header-viewtabs-wrap {
+        align-self: stretch;
+    }
+
     .path-tabs {
         flex: 1 1 auto;
         margin-right: 0;
         padding: 2px;
+        align-self: stretch;
     }
 
     .path-tab {
         flex: 1 1 0;
         text-align: center;
-        padding: 6px 8px;
-        font-size: 10.5px;
+        padding: 0 10px;
+        height: 30px;
+        min-height: 30px;
+        font-size: 11px;
         letter-spacing: 0.04em;
         white-space: nowrap;
+        display: flex;
+        align-items: center;
+        justify-content: center;
     }
 
     .view-tabs {
         padding: 2px;
         gap: 1px;
+        align-self: stretch;
     }
 
     .view-tab {
         flex: 0 1 auto;
         text-align: center;
-        padding: 6px 9px;
-        font-size: 10.5px;
+        padding: 0 9px;
+        height: 30px;
+        min-height: 30px;
+        font-size: 11px;
         letter-spacing: 0.04em;
+        display: flex;
+        align-items: center;
+        justify-content: center;
     }
 
     /* Menu dropdown: position fixed so it stays anchored to the hamburger
@@ -2017,14 +2214,14 @@ main {
     }
 
     .menu-btn {
-        width: 34px;
-        height: 34px;
+        width: 38px;
+        height: 38px;
     }
 
     .nav-btn {
-        width: 28px;
-        height: 28px;
-        font-size: 15px;
+        width: 36px;
+        height: 36px;
+        font-size: 17px;
     }
 
     .current-period {
@@ -2033,15 +2230,14 @@ main {
     }
 
     .view-tab {
-        padding: 5px 7px;
+        padding: 0 7px;
         font-size: 10px;
         letter-spacing: 0.03em;
     }
 
     .path-tab {
         font-size: 10px;
-        padding: 5px 6px;
-        max-width: 100%;
+        padding: 0 6px;
     }
 
     .menu-dropdown {
@@ -2069,6 +2265,10 @@ main {
         flex-wrap: wrap;
     }
 }
+
+/* Short label spans: hidden on desktop, shown on mobile */
+.tab-short { display: none; }
+.tab-full  { display: inline; }
 
 .path-tabs {
     display: flex;

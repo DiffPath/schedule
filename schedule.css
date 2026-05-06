@@ -257,6 +257,51 @@ header {
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
+/* ── Path (All / Just Me) toggle — same visual system as view-tabs ── */
+/* Short label spans: hidden on desktop (full text shown), revealed on mobile */
+.tab-short { display: none; }
+.tab-full  { display: inline; }
+
+.path-tabs {
+    display: flex;
+    background: var(--bg-2);
+    border-radius: 8px;
+    padding: 3px;
+    gap: 2px;
+    margin-right: 12px;
+}
+
+/* Wrapper divs sit in the header and align themselves */
+.header-pathtabs-wrap,
+.header-viewtabs-wrap {
+    display: flex;
+    align-items: center;
+}
+
+.path-tab {
+    background: transparent;
+    border: none;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    border-radius: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    transition: all 0.18s ease;
+}
+
+.path-tab:hover {
+    color: var(--ink);
+}
+
+.path-tab.active {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
 /* ─────────────────── HAMBURGER MENU (mobile) ─────────────────── */
 /* Hidden on desktop — sidebar holds Manage PTO / Requests / Export there */
 .menu-btn {
@@ -2266,51 +2311,6 @@ main {
     }
 }
 
-/* Short label spans: hidden on desktop, shown on mobile */
-.tab-short { display: none; }
-.tab-full  { display: inline; }
-
-.path-tabs {
-    display: flex;
-    background: var(--bg-2);
-    border-radius: 8px;
-    padding: 3px;
-    gap: 2px;
-    margin-right: 12px;
-}
-
-/* Wrapper divs around path-tabs and view-tabs in the header.
-   Provide sensible defaults so they sit properly on desktop; the
-   mobile media query overrides them to participate in the grid. */
-.header-pathtabs-wrap,
-.header-viewtabs-wrap {
-    display: flex;
-    align-items: center;
-}
-
-.path-tab {
-    background: transparent;
-    border: none;
-    padding: 6px 14px;
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--ink-2);
-    cursor: pointer;
-    border-radius: 6px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    transition: all 0.18s ease;
-}
-
-.path-tab:hover {
-    color: var(--ink);
-}
-
-.path-tab.active {
-    background: var(--paper);
-    color: var(--ink);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-}
 /* ─────────────────── REQUESTS UI (admin & user) ─────────────────── */
 
 /* Pending count badge on the sidebar Requests button */

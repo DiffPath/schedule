@@ -1957,7 +1957,10 @@ main {
         height: auto;
         min-height: 100vh;
         max-width: 100%;
-        overflow-x: hidden;
+        /* overflow-x: hidden would break position:sticky on the header child;
+           overflow-x: clip achieves the same visual clipping without creating a
+           scroll container, so sticky positioning continues to work. */
+        overflow-x: clip;
         position: relative;
     }
 
@@ -1966,6 +1969,9 @@ main {
        Row 2: [All|Me]   [Week|Month|Year|Compact]
     */
     header {
+        position: sticky;
+        top: 0;
+        z-index: 50;
         display: grid;
         grid-template-columns: auto 1fr auto;
         grid-template-rows: auto auto;
@@ -2066,7 +2072,7 @@ main {
     .path-tab {
         flex: 1 1 0;
         text-align: center;
-        padding: 0 10px;
+        padding: 0 9px;
         height: 30px;
         min-height: 30px;
         font-size: 11px;
@@ -2282,7 +2288,7 @@ main {
 
     .path-tab {
         font-size: 10px;
-        padding: 0 6px;
+        padding: 0 7px;
     }
 
     .menu-dropdown {

@@ -87,7 +87,10 @@ const PROCEDURE_TYPES = [
     'CT Bone Marrow',
     'Lumpectomy',
     'Mastectomy',
-    'Excisional bx'
+    'Excisional bx',
+    'FS Brain',
+    'FS Lung',
+    'FS Parathyroid',   
 ];
 
 const PROCEDURE_LOCATIONS = ['HH', 'MH'];

@@ -3181,6 +3181,30 @@ main {
     transform: translateX(16px);
 }
 
+.settings-drawer-divider {
+    height: 1px;
+    background: var(--rule-soft);
+    margin: 8px 0 4px;
+}
+
+.settings-signout-btn {
+    width: 100%;
+    padding: 9px 12px;
+    text-align: left;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #b94e2a;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.settings-signout-btn:hover {
+    background: rgba(185, 78, 42, 0.07);
+}
+
 /* ─────────────────── SIDEBAR-HIDDEN APP VARIANT ─────────────────── */
 .app.sidebar-hidden {
     grid-template-columns: 0px 1fr;

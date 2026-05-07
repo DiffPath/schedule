@@ -58,14 +58,46 @@ let onCallOverrides = {};            // { weekKey: pathologistId }
 let onCallDayOverrides = {};         // { dayKey: pathologistId }
 let serviceOverrides = {};           // { weekKey: { pathId: serviceId } }
 
+// Procedures: an hourly schedule independent of the pathologist rotation.
+// Shape: { 'YYYY-MM-DD': { pushKey: { time: 'HH:MM', type: 'procedure',
+//                                     createdAt: <ms>, createdBy: <pid> } } }
+// `type` is fixed to 'procedure' for now but is stored so future versions can
+// support other procedure types without a data migration.
+let procedures = {};
+
 let pathologistsReady = false;
 let vacationsReady = false;
 let currentPathFilter = 'all';
+
+// ────────────── HOURLY GRID CONFIG ──────────────
+// Half-hour slots from HOURS_START:00 through HOURS_END:30 inclusive.
+// Default: 7 AM start, last slot 4:30 PM (covers 7:00–17:00 in half-hour steps).
+const HOURS_START = 7;   // 7 AM
+const HOURS_END   = 16;  // last hour shown (so last slot is HOURS_END:30 = 4:30 PM)
+
+// Available procedure types shown in the "Add procedure" modal. Easy to
+// extend — just add another string. The pill on the schedule renders as
+// "<location> - <name>" (e.g. "HH - CT Random Kidney bx").
+const PROCEDURE_TYPES = [
+    'EUS',
+    'EBUS/ION',
+    'IR Thyroid bx',
+    'IR Thyroid w/ Afirma',
+    'CT Random Kidney bx',
+    'CT Bone Marrow',
+    'Lumpectomy',
+    'Mastectomy',
+    'Excisional bx'
+];
+
+const PROCEDURE_LOCATIONS = ['HH', 'MH'];
 
 // ────────────── ADMIN / REQUESTS ──────────────
 // The admin user is identified by name (more robust than relying on a
 // numeric id which could change if the seed is regenerated).
 const ADMIN_NAME_RE = /Michael\s+Moravek/i;
+// Special non-pathologist user that can only edit the procedure schedule
+const GROSS_ROOM_ID = 'gross_room';
 let requests = {};            // { reqKey: { ...request fields } } from Firebase
 let requestsReady = false;    // becomes true after first snapshot resolves
 let _seenRequestKeys = null;  // for "new request arrived" detection
@@ -81,6 +113,12 @@ function isAdmin(pathId) {
     return ADMIN_NAME_RE.test(p.name);
 }
 
+// Returns true when the gross-room account is signed in.
+// Gross room can edit the procedure schedule but not the pathologist schedule.
+function isGrossRoom() {
+    return loggedInPathId === GROSS_ROOM_ID;
+}
+
 // Update the path-tab toggle to reflect val ('all' or a stringified pathId)
 function setPathFilter(val) {
     currentPathFilter = val;
@@ -94,6 +132,41 @@ const today = new Date();
 today.setHours(0, 0, 0, 0);
 let cursor = new Date(today);
 
+// ────────────── DISPLAY SETTINGS ──────────────
+// Persisted in localStorage so preferences survive page refreshes.
+const SETTINGS_STORAGE_KEY = 'schedDisplaySettings';
+let settings = (() => {
+    try {
+        const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+        if (raw) return Object.assign({ weekdaysOnly: false, hideSidebar: false }, JSON.parse(raw));
+    } catch (_) {}
+    return { weekdaysOnly: false, hideSidebar: false };
+})();
+
+function saveSettings() {
+    try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings)); } catch (_) {}
+}
+
+// Apply current settings to the DOM (sidebar visibility, etc.)
+function applySettings() {
+    const app = document.querySelector('.app');
+    if (app) app.classList.toggle('sidebar-hidden', !!settings.hideSidebar);
+
+    // Sync toggle switches to reflect current state
+    const tw = document.getElementById('toggleWeekdays');
+    const ts = document.getElementById('toggleSidebar');
+    if (tw) tw.setAttribute('aria-checked', settings.weekdaysOnly ? 'true' : 'false');
+    if (ts) ts.setAttribute('aria-checked', settings.hideSidebar ? 'true' : 'false');
+
+    // Sync sidebar arrow button aria-label
+    const stb = document.getElementById('sidebarToggleBtn');
+    if (stb) {
+        const label = settings.hideSidebar ? 'Expand sidebar' : 'Collapse sidebar';
+        stb.setAttribute('aria-label', label);
+        stb.setAttribute('title', label);
+    }
+}
+
 // Year view mode: 'pto' shows PTO schedule, 'call' shows on-call schedule
 let yearMode = 'pto';
 
@@ -104,6 +177,7 @@ let yearMode = 'pto';
 const AUTH_STORAGE_KEY = 'schedCurrentPathId';
 let loggedInPathId = (() => {
     const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (raw === GROSS_ROOM_ID) return GROSS_ROOM_ID;
     const n = parseInt(raw, 10);
     return Number.isFinite(n) ? n : null;
 })();
@@ -125,16 +199,21 @@ const daysBetween = (a, b) => Math.round((b - a) / 86400000);
 const isWeekend = d => d.getDay() === 0 || d.getDay() === 6;
 const weekKey = d => fmt(startOfWeek(d));
 
-// Next/previous workday — skips weekends. Used by hard-rule logic so that
-// "the day before Monday" resolves to the previous Friday.
+// Next/previous workday — skips weekends AND federal holidays. Used by
+// hard-rule and soft-rule logic so "the day before" correctly resolves
+// across holiday weekends:
+//   - prevWorkday(Tuesday after Memorial Day) → Friday (skips Sat/Sun/Mon)
+//   - nextWorkday(Friday before July 4 weekend) → Monday after July 4
+// This means Bigs-on-Friday + WFH-on-Tuesday (with a holiday Monday) is
+// correctly detected as a soft-rule conflict, just like Friday + Monday.
 function nextWorkday(date) {
     let d = addDays(date, 1);
-    while (isWeekend(d)) d = addDays(d, 1);
+    while (isWeekend(d) || getFederalHoliday(d)) d = addDays(d, 1);
     return d;
 }
 function prevWorkday(date) {
     let d = addDays(date, -1);
-    while (isWeekend(d)) d = addDays(d, -1);
+    while (isWeekend(d) || getFederalHoliday(d)) d = addDays(d, -1);
     return d;
 }
 
@@ -616,6 +695,303 @@ function clearDayCache() {
     _violationFlags.clear();
 }
 
+// ────────────── ROTATION OPTIMIZER (recompute future schedule) ──────────────
+//
+// After a service or PTO change, walk forward from opts.fromDate (default
+// 180 calendar days) and, for each workday, write the {pid: serviceId}
+// arrangement that:
+//   1. covers the required services for that day's working count (red flag), then
+//   2. minimizes yellow-flag violations, then
+//   3. follows the cyto → bigs → huntley → wfh rotation as closely as possible.
+//
+// Required services (mirrors coverageViolationsForDay):
+//   2 working → Huntley + McH cyto/gross/bigs (combo)
+//   3 working → Huntley + McH cyto/gross + McH bigs
+//   4 working → Huntley + McH cyto/gross + McH bigs + Breast Bx/WFH
+//   5+ working → as for 4, with extras on Breast Bx/WFH
+//
+// Score (lower wins, lexicographic — earlier components dominate):
+//   v1   — bigs the workday before PTO              (soft 1)
+//   v2   — bigs adjacent to Breast Bx/WFH           (soft 2, both directions)
+//   v3   — same service as yesterday                (soft 2 cont.)
+//   skip — total deviation from the cyto/bigs/huntley/wfh cycle
+//
+// Worked example for the wfh slot when n=4: yesterday → today=wfh score is
+//   huntley→wfh: (0,0,0,0)   ← natural cycle step, best
+//   cyto→wfh:    (0,0,0,2)   ← off-cycle but no soft conflict
+//   wfh→wfh:     (0,0,1,3)   ← same-service violation
+//   bigs→wfh:    (0,1,0,1)   ← bigs-before-wfh violation, worst
+// matching the user-specified priority Huntley > cyto > wfh > bigs.
+//
+// pinnedByDay[dayKey] = {pid: serviceId} locks specific paths to specific
+// services (the admin's just-made change). Pins are honored even when they
+// break coverage — the red-flag layer surfaces those cases for review.
+//
+// opts:
+//   fromDate     — required Date; first day of the recompute window
+//   horizonDays  — calendar days to walk forward (default 180)
+//   dayBeforeFix — also re-optimize the workday before fromDate (default true)
+//
+// Returns { processed, dayBeforeProcessed }.
+
+const ROTATION_CYCLE = ['cyto', 'bigs', 'huntley', 'wfh'];
+
+// cytobigs covers both cyto + bigs; for cycle purposes treat it as bigs
+// (the next step from cytobigs is huntley = bigs's natural successor).
+function _cycleId(svcId) { return svcId === 'cytobigs' ? 'bigs' : svcId; }
+
+function _nextInCycle(svcId) {
+    const i = ROTATION_CYCLE.indexOf(_cycleId(svcId));
+    return i < 0 ? null : ROTATION_CYCLE[(i + 1) % 4];
+}
+
+// Forward distance in the cycle: 0 if same, 1 if one step further, etc.
+function _cycleSkip(actualId, expectedId) {
+    const a = ROTATION_CYCLE.indexOf(_cycleId(actualId));
+    const e = ROTATION_CYCLE.indexOf(_cycleId(expectedId));
+    if (a < 0 || e < 0) return 0;
+    return (a - e + 4) % 4;
+}
+
+// Score a {pid: serviceId} candidate as [v1, v2, v3, skip].
+function _scoreAssignment(candidate, prevAssign, nextAssign) {
+    let v1 = 0, v2 = 0, v3 = 0, skip = 0;
+    for (const pid in candidate) {
+        const sid = candidate[pid];
+        if (!sid) continue;
+        const isBigs = (sid === 'bigs' || sid === 'cytobigs');
+        const isWfh  = (sid === 'wfh');
+
+        const next = nextAssign && (nextAssign[pid] || nextAssign[String(pid)]);
+        const prev = prevAssign && (prevAssign[pid] || prevAssign[String(pid)]);
+        const prevId = (prev && prev.type === 'service' && prev.service)
+            ? prev.service.id : null;
+
+        // soft 1 (forward): bigs today + PTO tomorrow
+        if (isBigs && next && next.type === 'pto') v1++;
+
+        // soft 2 (forward): bigs today + wfh tomorrow
+        if (isBigs && next && next.type === 'service'
+            && next.service && next.service.id === 'wfh') v2++;
+        // soft 2 (backward): wfh today + bigs yesterday — captures the
+        // same transition from the other side, since prev is the most
+        // reliably-known neighbour during a forward-walking recompute.
+        if (isWfh && (prevId === 'bigs' || prevId === 'cytobigs')) v2++;
+
+        // soft 3: same service two days in a row (cycle-equivalent)
+        if (prevId && _cycleId(prevId) === _cycleId(sid)) v3++;
+
+        // rotation skip: from yesterday's service, expected next is +1 in cycle
+        if (prevId) {
+            const expected = _nextInCycle(prevId);
+            if (expected) skip += _cycleSkip(sid, expected);
+        }
+    }
+    return [v1, v2, v3, skip];
+}
+
+function _compareScores(a, b) {
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return 0;
+}
+
+function _allPermutations(arr) {
+    if (arr.length <= 1) return [arr.slice()];
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+        const rest = arr.slice(0, i).concat(arr.slice(i + 1));
+        _allPermutations(rest).forEach(p => out.push([arr[i]].concat(p)));
+    }
+    return out;
+}
+
+// Synthesize a getDayAssignments-shape map from a {pid: serviceId} override,
+// so an in-progress forward pass can read its own writes as neighbour state.
+function _synthesizeAssign(date, overrideMap) {
+    const result = {};
+    pathologists.forEach(p => {
+        if (isOnPto(p.id, date)) {
+            result[p.id] = { type: 'pto', service: null, onCall: false };
+            return;
+        }
+        const sid = overrideMap && (overrideMap[p.id] || overrideMap[String(p.id)]);
+        if (sid && SERVICE_BY_ID[sid]) {
+            result[p.id] = { type: 'service', service: SERVICE_BY_ID[sid], onCall: false };
+        } else {
+            result[p.id] = { type: 'off', service: null, onCall: false };
+        }
+    });
+    return result;
+}
+
+// Required service multiset for N working pathologists. For N > 4 we pad
+// with extra wfh slots so every working pathologist gets assigned (multiple
+// paths can each work from home; duplicating a McHenry station service
+// would put two paths at the same lab).
+function requiredServicesFor(n) {
+    if (n >= 4) {
+        const out = ['cyto', 'bigs', 'huntley', 'wfh'];
+        for (let i = 4; i < n; i++) out.push('wfh');
+        return out;
+    }
+    if (n === 3) return ['cyto', 'bigs', 'huntley'];
+    if (n === 2) return ['huntley', 'cytobigs'];
+    return null;
+}
+
+// Compute the optimal full {pid: serviceId} map for `date`. Returns null
+// when nothing changes (day already optimal under current pins).
+function fixDayWithRules(date, pins, prevAssign, nextAssign) {
+    const assign = getDayAssignments(date);
+    const working = pathologists.filter(p =>
+        assign[p.id] && assign[p.id].type === 'service'
+    );
+    const n = working.length;
+    if (n < 2) return null;
+    const required = requiredServicesFor(n);
+    if (!required) return null;
+
+    const currentSvc = {};
+    working.forEach(p => {
+        currentSvc[p.id] = assign[p.id].service && assign[p.id].service.id;
+    });
+
+    // Honor pins; subtract pinned services from the required pool.
+    const result = {};
+    const remaining = required.slice();
+    const unpinned = [];
+    working.forEach(p => {
+        const pinId = pins && (pins[p.id] || pins[String(p.id)]);
+        if (pinId) {
+            result[p.id] = pinId;
+            const idx = remaining.indexOf(pinId);
+            if (idx >= 0) remaining.splice(idx, 1);
+        } else {
+            unpinned.push(p.id);
+        }
+    });
+
+    if (remaining.length !== unpinned.length) {
+        // Pins point to services outside `required`. Fall back to a
+        // minimal-change coverage fill and let the red-flag layer surface
+        // the conflict — soft-rule scoring is undefined here.
+        const displaced = [];
+        unpinned.forEach(pid => {
+            const cur = currentSvc[pid];
+            const idx = cur ? remaining.indexOf(cur) : -1;
+            if (idx >= 0) {
+                result[pid] = cur;
+                remaining.splice(idx, 1);
+            } else {
+                displaced.push(pid);
+            }
+        });
+        displaced.forEach((pid, i) => {
+            if (remaining[i]) result[pid] = remaining[i];
+        });
+    } else {
+        // Permute the remaining services across the unpinned paths and
+        // pick the arrangement with the best (v1, v2, v3, skip) score.
+        let bestPerm = null;
+        let bestScore = null;
+        const perms = _allPermutations(remaining);
+        for (const perm of perms) {
+            const cand = Object.assign({}, result);
+            for (let i = 0; i < unpinned.length; i++) {
+                cand[unpinned[i]] = perm[i];
+            }
+            const score = _scoreAssignment(cand, prevAssign, nextAssign);
+            if (!bestScore || _compareScores(score, bestScore) < 0) {
+                bestScore = score;
+                bestPerm = cand;
+            }
+        }
+        if (bestPerm) {
+            for (const pid in bestPerm) result[pid] = bestPerm[pid];
+        }
+    }
+
+    // No-op if every working path's service is unchanged.
+    let changed = false;
+    for (const p of working) {
+        if (result[p.id] !== currentSvc[p.id]) { changed = true; break; }
+    }
+    if (!changed) return null;
+
+    // Drop unassigned paths (only when pins overconstrain).
+    const clean = {};
+    let count = 0;
+    for (const pid in result) {
+        if (result[pid]) { clean[pid] = result[pid]; count++; }
+    }
+    return count > 0 ? clean : null;
+}
+
+async function recomputeFutureSchedule(pinnedByDay, opts) {
+    pinnedByDay = pinnedByDay || {};
+    opts = opts || {};
+    const fromDate = opts.fromDate;
+    if (!fromDate) return { processed: 0, dayBeforeProcessed: false };
+    const horizonDays = Math.max(1, opts.horizonDays || 180);
+    const dayBeforeFix = opts.dayBeforeFix !== false;
+
+    const writes = {};
+    let processed = 0;
+    let dayBeforeProcessed = false;
+
+    // neighbourAssign reads pending writes from THIS pass first, so each
+    // iteration's prev/next lookups see already-optimized neighbours
+    // instead of stale pre-recompute state. Critical for soft-rule
+    // scoring across consecutive days.
+    function neighbourAssign(d) {
+        const k = 'scheduler/serviceOverrides/' + fmt(d);
+        if (writes[k]) return _synthesizeAssign(d, writes[k]);
+        return getDayAssignments(d);
+    }
+
+    // Forward pass: fromDate → fromDate + horizonDays - 1.
+    for (let i = 0; i < horizonDays; i++) {
+        const d = addDays(fromDate, i);
+        if (isBeforeEarliest(d)) continue;
+        if (isWeekend(d)) continue;
+        if (getFederalHoliday(d)) continue;
+
+        const dayKey = fmt(d);
+        const prevA = neighbourAssign(prevWorkday(d));
+        const nextA = neighbourAssign(nextWorkday(d));
+        const fixed = fixDayWithRules(d, pinnedByDay[dayKey] || null, prevA, nextA);
+        if (!fixed) continue;
+        writes['scheduler/serviceOverrides/' + dayKey] = fixed;
+        processed++;
+    }
+
+    // Day-before fix: re-optimize the workday before fromDate, using the
+    // now-optimized fromDate as its nextAssign so soft rule 1
+    // (bigs-before-PTO) and soft rule 2 (bigs-before-wfh) are checked
+    // against the admin's actual change.
+    if (dayBeforeFix) {
+        const prev = prevWorkday(fromDate);
+        if (!isBeforeEarliest(prev) && !isWeekend(prev) && !getFederalHoliday(prev)) {
+            const prevPrev = neighbourAssign(prevWorkday(prev));
+            const nextDay  = neighbourAssign(fromDate);
+            const fixed = fixDayWithRules(
+                prev, pinnedByDay[fmt(prev)] || null, prevPrev, nextDay);
+            if (fixed) {
+                writes['scheduler/serviceOverrides/' + fmt(prev)] = fixed;
+                processed++;
+                dayBeforeProcessed = true;
+            }
+        }
+    }
+
+    if (Object.keys(writes).length > 0) {
+        await db.ref().update(writes);
+    }
+    return { processed: processed, dayBeforeProcessed: dayBeforeProcessed };
+}
+
 function ptoDaysScheduled(pathId) {
     // Collect and clamp all ranges for this pathologist.
     const ranges = [];
@@ -670,7 +1046,7 @@ function checkReady() {
         // Once data is loaded, decide whether to show the login screen.
         // If a returning user is already signed in on this device, we just
         // verify their stored id still corresponds to a real pathologist.
-        if (loggedInPathId !== null && !pathologists.find(p => p.id === loggedInPathId)) {
+        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && !pathologists.find(p => p.id === loggedInPathId)) {
             // Stored id no longer matches anyone — clear it and force re-login
             localStorage.removeItem(AUTH_STORAGE_KEY);
             loggedInPathId = null;
@@ -678,8 +1054,12 @@ function checkReady() {
         if (loggedInPathId === null) {
             showLoginOverlay();
         } else {
-            // Default the filter to the signed-in user's own calendar
-            if (currentPathFilter === 'all') {
+            // Default the filter based on who is signed in.
+            // Gross room always sees all pathologists; individual pathologists
+            // default to their own view.
+            if (isGrossRoom()) {
+                setPathFilter('all');
+            } else if (currentPathFilter === 'all') {
                 setPathFilter(String(loggedInPathId));
             }
             renderAll();
@@ -694,6 +1074,13 @@ function checkReady() {
 function populatePathFilter() {
     const meTab = document.getElementById('pathTabMe');
     if (!meTab) return;
+
+    // Gross room: always show all pathologists with no option to switch
+    if (isGrossRoom()) {
+        meTab.style.display = 'none';
+        setPathFilter('all');
+        return;
+    }
 
     const me = loggedInPathId !== null
         ? pathologists.find(p => p.id === loggedInPathId)
@@ -717,7 +1104,9 @@ function showLoginOverlay() {
     const errEl = document.getElementById('loginError');
 
     sel.innerHTML = '<option value="">— Select your name —</option>' +
-        pathologists.map(p => `<option value="${p.id}">${p.name}</option>`).join('');
+        pathologists.map(p => `<option value="${p.id}">${p.name}</option>`).join('') +
+        '<option value="" disabled>──────────────</option>' +
+        `<option value="${GROSS_ROOM_ID}">Gross Room</option>`;
     pwInput.value = '';
     errEl.textContent = '';
     overlay.style.display = 'flex';
@@ -743,7 +1132,8 @@ async function attemptLogin() {
     if (!pidRaw) { errEl.textContent = 'Please select your name.'; return; }
     if (!pwAttempt) { errEl.textContent = 'Please enter your password.'; return; }
 
-    const pid = parseInt(pidRaw, 10);
+    const isGrossRoomLogin = pidRaw === GROSS_ROOM_ID;
+    const pid = isGrossRoomLogin ? GROSS_ROOM_ID : parseInt(pidRaw, 10);
     btn.disabled = true;
     btn.textContent = 'Signing in…';
     try {
@@ -762,9 +1152,12 @@ async function attemptLogin() {
         loggedInPathId = pid;
         localStorage.setItem(AUTH_STORAGE_KEY, String(pid));
         hideLoginOverlay();
-        // Refresh the filter tabs, then explicitly default to "Me".
+        // Refresh the filter tabs. Gross room always shows all; individual
+        // pathologists default to their own view.
         populatePathFilter();
-        setPathFilter(String(pid));
+        if (!isGrossRoomLogin) {
+            setPathFilter(String(pid));
+        }
         renderAll();
     } catch (err) {
         errEl.textContent = 'Login failed: ' + (err.message || 'unknown error');
@@ -849,6 +1242,17 @@ db.ref('scheduler/serviceOverrides').on('value', snap => {
     if (pathologistsReady && vacationsReady) renderAll();
 });
 
+// Procedures: hourly entries for the week-view grid. Independent of the
+// pathologist rotation, so we don't need to clear the day cache or wait
+// on it to render the rest of the calendar — just re-render the main view
+// when this changes (and only if we're currently on the week view).
+db.ref('scheduler/procedures').on('value', snap => {
+    procedures = snap.exists() ? snap.val() : {};
+    if (pathologistsReady && vacationsReady && view === 'week') renderMain();
+}, err => {
+    console.error('Firebase procedures error:', err);
+});
+
 // Request queue: every change a non-admin wants to make goes here first
 // and is then approved/denied by the admin.  Each request looks like:
 //   { requesterId, type, status, createdAt, payload, note,
@@ -884,10 +1288,15 @@ db.ref('scheduler/requests').on('value', snap => {
 function renderSidebar() {
     // Show/hide admin-only controls based on signed-in user's role
     const admin = isAdmin();
+    const grossRoom = isGrossRoom();
     const exportBtn = document.getElementById('exportBtn');
     if (exportBtn) exportBtn.style.display = admin ? '' : 'none';
 
-    // The "Manage PTO" label changes to "Request PTO" for non-admins
+    // Gross room cannot manage PTO or view requests at all — hide those buttons
+    const addPtoBtnEl = document.getElementById('addPtoBtn');
+    if (addPtoBtnEl) addPtoBtnEl.style.display = grossRoom ? 'none' : '';
+
+    // The "Manage PTO" label changes to "Request PTO" for non-admins (not gross room)
     const ptoBtnLabel = document.getElementById('addPtoBtnLabel');
     if (ptoBtnLabel) ptoBtnLabel.textContent = admin ? 'Manage PTO' : 'Request PTO';
 
@@ -925,7 +1334,10 @@ function renderSidebar() {
     const sInfo = document.getElementById('signinInfo');
     const sWho = document.getElementById('signinWho');
     if (sInfo && sWho) {
-        if (loggedInPathId !== null) {
+        if (isGrossRoom()) {
+            sWho.textContent = 'Signed in · Gross Room';
+            sInfo.style.display = 'flex';
+        } else if (loggedInPathId !== null) {
             const me = pathologists.find(p => p.id === loggedInPathId);
             if (me) {
                 sWho.textContent = 'Signed in · ' + me.name.replace(/^Dr\. /, '');
@@ -996,6 +1408,125 @@ function showToast(msg, opts) {
     }, opts.duration || 4500);
 }
 
+// ────────────── RECOMPUTE PROMPT ──────────────
+// After an admin makes a service or PTO change, this dialog asks whether
+// to (a) just keep the change, or (b) recompute the future service schedule
+// for everyone using the rotation rules.
+//
+// Resolves to { recompute: false } or { recompute: true, horizonDays: N }.
+function showRecomputeDialog(opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+        const back = document.createElement('div');
+        Object.assign(back.style, {
+            position: 'fixed', inset: '0',
+            background: 'rgba(0,0,0,0.42)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 100000,
+        });
+
+        const modal = document.createElement('div');
+        Object.assign(modal.style, {
+            background: 'var(--paper, #fff)',
+            color: 'var(--ink, #222)',
+            padding: '22px 24px',
+            borderRadius: '8px',
+            maxWidth: '480px',
+            width: '92%',
+            boxShadow: '0 14px 42px rgba(0,0,0,0.22)',
+            fontFamily: 'inherit',
+        });
+
+        const message = opts.message
+            || 'You can update the future service schedule for all pathologists by following the rotation rules, or just keep the change you made.';
+
+        modal.innerHTML =
+            '<h3 style="margin:0 0 8px;font-family:var(--serif, Georgia, serif);font-size:20px;color:var(--ink,#222);">'
+            + 'Recompute future schedule?'
+            + '</h3>'
+            + '<p style="margin:0 0 16px;color:var(--ink-2, #555);font-size:13.5px;line-height:1.5;">'
+            + escapeHtml(message)
+            + '</p>'
+            + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;font-size:13px;color:var(--ink-2,#555);">'
+            +   '<label for="rcHorizon">Horizon:</label>'
+            +   '<select id="rcHorizon" style="padding:5px 8px;font-size:13px;border-radius:4px;border:1px solid var(--rule-soft,#ccc);">'
+            +     '<option value="30">Next 30 days</option>'
+            +     '<option value="90">Next 90 days</option>'
+            +     '<option value="180" selected>Next 180 days</option>'
+            +     '<option value="365">Next 365 days</option>'
+            +   '</select>'
+            + '</div>'
+            + '<div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">'
+            +   '<button id="rcCancel" style="padding:8px 14px;font-size:13px;border:1px solid var(--rule-soft,#ccc);background:transparent;color:var(--ink,#222);border-radius:4px;cursor:pointer;">'
+            +     'Just apply this change'
+            +   '</button>'
+            +   '<button id="rcOk" style="padding:8px 16px;font-size:13px;background:var(--accent,#37e);color:#fff;border:0;border-radius:4px;cursor:pointer;font-weight:500;">'
+            +     'Recompute'
+            +   '</button>'
+            + '</div>';
+
+        back.appendChild(modal);
+        document.body.appendChild(back);
+
+        function done(result) {
+            back.remove();
+            resolve(result);
+        }
+
+        modal.querySelector('#rcCancel').addEventListener('click', () => done({ recompute: false }));
+        modal.querySelector('#rcOk').addEventListener('click', () => {
+            const sel = modal.querySelector('#rcHorizon');
+            const h = parseInt(sel.value, 10) || 180;
+            done({ recompute: true, horizonDays: h });
+        });
+        back.addEventListener('click', e => {
+            if (e.target === back) done({ recompute: false });
+        });
+
+        // Esc closes (treats as "just apply")
+        function onKey(e) {
+            if (e.key === 'Escape') {
+                document.removeEventListener('keydown', onKey);
+                done({ recompute: false });
+            }
+        }
+        document.addEventListener('keydown', onKey);
+    });
+}
+
+// Wrapper used from save handlers: only offers recompute to admins, only
+// when fromDate is today or later, then runs recomputeFutureSchedule().
+async function maybeOfferRecompute(pinnedByDay, opts) {
+    opts = opts || {};
+    if (!isAdmin()) return;
+    if (!opts.fromDate) return;
+    // Don't rewrite history
+    if (opts.fromDate.getTime() < today.getTime()) return;
+
+    let choice;
+    try {
+        choice = await showRecomputeDialog({ message: opts.message });
+    } catch (err) {
+        console.error('recompute dialog error', err);
+        return;
+    }
+    if (!choice || !choice.recompute) return;
+
+    try {
+        const res = await recomputeFutureSchedule(
+            pinnedByDay || {},
+            Object.assign({}, opts, { horizonDays: choice.horizonDays })
+        );
+        const dayPart = res.dayBeforeProcessed ? ' (incl. day before)' : '';
+        showToast('Future schedule recomputed: '
+            + res.processed + ' day' + (res.processed === 1 ? '' : 's')
+            + ' updated' + dayPart + '.');
+    } catch (err) {
+        console.error('recomputeFutureSchedule error', err);
+        showToast('Recompute failed: ' + (err && err.message ? err.message : err), { type: 'error' });
+    }
+}
+
 // ────────────── REQUEST QUEUE HELPERS ──────────────
 // Push a new pending request into Firebase.  payload is type-specific.
 async function submitRequest(type, payload, note) {
@@ -1045,12 +1576,15 @@ function updateRequestsBadge() {
     const menuPtoLabel   = document.getElementById('menuPtoLabel');
     const menuExportItem = document.getElementById('menuExportItem');
 
-    // Hide entirely if not signed in
-    if (loggedInPathId === null) {
+    // Hide entirely if not signed in OR if gross room (who cannot manage requests or PTO)
+    if (loggedInPathId === null || isGrossRoom()) {
         if (btn) btn.style.display = 'none';
         if (menuBtn) menuBtn.classList.remove('has-alert');
         if (menuReqItem) menuReqItem.style.display = 'none';
         if (menuExportItem) menuExportItem.style.display = 'none';
+        // Also hide the PTO menu item for gross room
+        const menuPtoItem = document.querySelector('.menu-item[data-action="pto"]');
+        if (menuPtoItem) menuPtoItem.style.display = isGrossRoom() ? 'none' : '';
         return;
     }
 
@@ -1168,6 +1702,12 @@ async function approveRequest(reqKey) {
     const req = requests[reqKey];
     if (!req || req.status !== 'pending') return;
 
+    // Track recompute parameters across the type-specific apply blocks
+    let rcFromDate = null;
+    let rcDayBeforeFix = false;
+    let rcPinnedByDay = {};
+    let rcMessage = null;
+
     try {
         // Apply the underlying change first; if that fails we don't mark approved
         if (req.type === 'pto_add') {
@@ -1176,9 +1716,18 @@ async function approveRequest(reqKey) {
                 start: req.payload.start,
                 end: req.payload.end,
             });
+            rcFromDate = parseDate(req.payload.start);
+            rcDayBeforeFix = true;
+            rcMessage = 'PTO request approved. Recompute the future schedule for everyone using the rotation rules?';
         } else if (req.type === 'pto_remove') {
             if (req.payload.vacationKey) {
+                // Capture the start date BEFORE the listener removes the entry
+                const vac = vacations.find(v => v.key === req.payload.vacationKey);
+                if (vac) rcFromDate = vac.start;
+                else if (req.payload.start) rcFromDate = parseDate(req.payload.start);
                 await db.ref('scheduler/vacations/' + req.payload.vacationKey).remove();
+                rcDayBeforeFix = false;
+                rcMessage = 'PTO removal approved. Recompute the future schedule for everyone using the rotation rules?';
             }
         } else if (req.type === 'oncall_change') {
             const dKey = req.payload.date;
@@ -1188,6 +1737,7 @@ async function approveRequest(reqKey) {
             } else {
                 await db.ref('scheduler/onCallDayOverrides/' + dKey).set(req.payload.newPathId);
             }
+            // On-call changes don't affect service rotation — no recompute offer.
         } else if (req.type === 'service_change') {
             const dKey = req.payload.date;
             const pid = req.requesterId;
@@ -1210,16 +1760,28 @@ async function approveRequest(reqKey) {
                     const existing = serviceOverrides[k] || {};
                     writes['scheduler/serviceOverrides/' + k] =
                         Object.assign({}, existing, { [pid]: req.payload.serviceId });
+                    // Pin ONLY the just-approved path; pre-existing overrides
+                    // shouldn't lock the recompute against fixing flags.
+                    rcPinnedByDay[k] = { [pid]: req.payload.serviceId };
                 } else {
                     // Clear just this user's slot for the day
                     const existing = Object.assign({}, serviceOverrides[k] || {});
                     delete existing[pid];
                     writes['scheduler/serviceOverrides/' + k] =
                         Object.keys(existing).length === 0 ? null : existing;
+                    // Override removed — nothing for the admin's edit locks.
+                    rcPinnedByDay[k] = {};
                 }
             });
             if (Object.keys(writes).length > 0) {
                 await db.ref().update(writes);
+            }
+            // Start the recompute at the earliest affected workday.
+            if (dayKeys.length > 0) {
+                const sortedKeys = dayKeys.slice().sort();
+                rcFromDate = parseDate(sortedKeys[0]);
+                rcDayBeforeFix = true;
+                rcMessage = 'Service request approved. Recompute the future schedule for everyone using the rotation rules?';
             }
         }
 
@@ -1230,6 +1792,15 @@ async function approveRequest(reqKey) {
             decisionBy: loggedInPathId,
         });
         showToast('Request approved.');
+
+        // After successful approval, offer to recompute if relevant
+        if (rcFromDate) {
+            await maybeOfferRecompute(rcPinnedByDay, {
+                fromDate: rcFromDate,
+                dayBeforeFix: rcDayBeforeFix,
+                message: rcMessage,
+            });
+        }
     } catch (err) {
         console.error('approveRequest error:', err);
         showToast('Approval failed: ' + (err.message || err), { type: 'error' });
@@ -1417,14 +1988,110 @@ document.getElementById('reqTabs').addEventListener('click', e => {
     renderRequestsList();
 });
 
-// Returns a small "!" flag pill if the day has hard-rule violations that
-// couldn't be resolved by swapping. Empty string otherwise.
+// ────────────── COVERAGE RULE CHECK (red flag) ──────────────
+// Hard rule: given the final day assignments, verifies that the required
+// services are covered based on how many pathologists are working.
+//   2 working → Huntley + any McHenry service (cyto, bigs, or cytobigs)
+//   3 working → Huntley + McHenry Cyto/Gross + McHenry Bigs
+//   4+ working → Huntley + McHenry Cyto/Gross + McHenry Bigs + Breast Bx/WFH
+// Returns an array of missing-service strings, or null if all required
+// services are covered.
+function coverageViolationsForDay(date) {
+    if (isWeekend(date) || getFederalHoliday(date) || isBeforeEarliest(date)) return null;
+
+    const assign = getDayAssignments(date);
+    const working = pathologists.filter(p => assign[p.id] && assign[p.id].type === 'service');
+    const n = working.length;
+    if (n < 2) return null;
+
+    const svcs = working
+        .map(p => assign[p.id].service && assign[p.id].service.id)
+        .filter(Boolean);
+
+    const hasHuntley = svcs.includes('huntley');
+    const hasCyto    = svcs.includes('cyto') || svcs.includes('cytobigs');
+    const hasBigs    = svcs.includes('bigs') || svcs.includes('cytobigs');
+    const hasWfh     = svcs.includes('wfh');
+    const hasMcHAny  = hasCyto || hasBigs;
+
+    const issues = [];
+    if (n === 2) {
+        if (!hasHuntley) issues.push('Huntley not staffed');
+        if (!hasMcHAny)  issues.push('No McHenry service staffed');
+    } else if (n === 3) {
+        if (!hasHuntley) issues.push('Huntley not staffed');
+        if (!hasCyto)    issues.push('McHenry Cyto/Gross not staffed');
+        if (!hasBigs)    issues.push('McHenry Bigs not staffed');
+    } else {
+        if (!hasHuntley) issues.push('Huntley not staffed');
+        if (!hasCyto)    issues.push('McHenry Cyto/Gross not staffed');
+        if (!hasBigs)    issues.push('McHenry Bigs not staffed');
+        if (!hasWfh)     issues.push('Breast Bx/WFH not staffed');
+    }
+    return issues.length > 0 ? issues : null;
+}
+
+// ────────────── SOFT RULE CHECK (yellow flag) ──────────────
+// Soft rules: any pathologist on McHenry Bigs (or cytobigs) the workday
+// before they start PTO, or the workday before they are on Breast Bx/WFH.
+// Returns an array of descriptive strings, or null if no violations.
+function softRuleViolationsForDay(date) {
+    if (isWeekend(date) || getFederalHoliday(date) || isBeforeEarliest(date)) return null;
+
+    const assign  = getDayAssignments(date);
+    const tomorrow = nextWorkday(date);
+    const tmrwAssign = getDayAssignments(tomorrow);
+
+    const issues = [];
+    pathologists.forEach(p => {
+        const a = assign[p.id];
+        if (!a || a.type !== 'service' || !a.service) return;
+        const isBigs = a.service.id === 'bigs' || a.service.id === 'cytobigs';
+        if (!isBigs) return;
+
+        const shortName = p.name.replace(/^Dr\. /, '');
+
+        // Soft rule 1: bigs the workday before PTO
+        if (isOnPto(p.id, tomorrow)) {
+            issues.push(shortName + ': on Bigs the day before PTO');
+        }
+
+        // Soft rule 2: bigs the workday before Breast Bx/WFH
+        const ta = tmrwAssign && tmrwAssign[p.id];
+        if (ta && ta.type === 'service' && ta.service && ta.service.id === 'wfh') {
+            issues.push(shortName + ': on Bigs the day before Breast Bx/WFH');
+        }
+    });
+
+    return issues.length > 0 ? issues : null;
+}
+
+// ────────────── FLAG HTML ──────────────
+// Returns zero, one, or two "!" pill spans for the day header:
+//   Red  pill → hard coverage rule not met (required service missing)
+//   Yellow pill → soft rule conflict (bigs the day before PTO or Breast Bx/WFH)
 function flagHtml(date) {
     if (isWeekend(date)) return '';
-    const issues = violationsForDay(date);
-    if (!issues) return '';
-    const tip = 'Hard-rule conflict — manual review needed:\n• ' + issues.join('\n• ');
-    return `<span class="rule-flag" title="${tip.replace(/"/g, '&quot;')}">!</span>`;
+
+    const coverageIssues = coverageViolationsForDay(date);
+    const softIssues     = softRuleViolationsForDay(date);
+    let html = '';
+
+    if (coverageIssues) {
+        const working = pathologists.filter(p => {
+            const a = getDayAssignments(date)[p.id];
+            return a && a.type === 'service';
+        }).length;
+        const tip = `Coverage rule not met (${working} pathologist${working === 1 ? '' : 's'} working):\n\u2022 ` + coverageIssues.join('\n\u2022 ');
+        html += `<span class="rule-flag rule-flag-red" title="${tip.replace(/"/g, '&quot;')}">!</span>`;
+    }
+
+    if (softIssues) {
+        const tip = 'Soft rule conflict:\n\u2022 ' + softIssues.join('\n\u2022 ');
+        html += `<span class="rule-flag rule-flag-yellow" title="${tip.replace(/"/g, '&quot;')}">!</span>`;
+    }
+
+    return html;
 }
 
 // ────────────── PERIOD LABEL ──────────────
@@ -1467,8 +2134,12 @@ function renderPeriodLabel() {
 function renderWeek() {
     const main = document.getElementById('main');
     const start = startOfWeek(cursor);
-    let html = `<div class="week-view">`;
-    for (let i = 0; i < 7; i++) {
+    // When weekdaysOnly: show Mon(1)–Fri(5) only; otherwise Sun(0)–Sat(6)
+    const dayIndices = settings.weekdaysOnly ? [1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5, 6];
+    const cols = dayIndices.length;
+    let html = `<div class="week-view" style="grid-template-columns: repeat(${cols}, 1fr);">`;
+    for (let idx = 0; idx < dayIndices.length; idx++) {
+        const i = dayIndices[idx];
         const d = addDays(start, i);
         const td = sameDay(d, today);
         const we = isWeekend(d);
@@ -1505,6 +2176,7 @@ function renderWeek() {
             }
         });
         const holidayBadge = holiday ? `<span class="holiday-badge" title="${holiday}">${holiday}</span>` : '';
+        const hoursHtml = renderHourGrid(d);
         html += `<div class="week-day ${td ? 'today' : ''} ${we ? 'weekend' : ''} ${holiday ? 'holiday' : ''}" data-date="${fmt(d)}">
         <div class="wd-head">
           <span class="dow">${DOW[d.getDay()]}</span>
@@ -1512,12 +2184,344 @@ function renderWeek() {
           <span class="num">${d.getDate()}${flagHtml(d)}</span>
         </div>
         <div class="wd-rows">${rows}</div>
+        ${hoursHtml}
       </div>`;
     }
     html += `</div>`;
     main.innerHTML = html;
     attachDayClickHandlers();
+    attachHourGridHandlers();
 }
+
+// ────────────── HOURLY GRID (week view) ──────────────
+// Build the half-hour rows for a single day card. Each row is dbl-click
+// enabled to add a procedure; existing procedures render as removable pills.
+function renderHourGrid(date) {
+    const dayKey = fmt(date);
+    const procs = getProceduresForDay(dayKey);
+
+    // Group procedures by their slot key "HH:MM" so we can drop them into
+    // the matching row. Two+ at the same time render side-by-side.
+    const bySlot = {};
+    procs.forEach(p => {
+        if (!bySlot[p.time]) bySlot[p.time] = [];
+        bySlot[p.time].push(p);
+    });
+
+    let rowsHtml = '';
+    for (let h = HOURS_START; h <= HOURS_END; h++) {
+        for (let m of [0, 30]) {
+            const timeKey = pad2(h) + ':' + pad2(m);   // "08:30"
+            const isHourMark = (m === 0);
+            const cls = isHourMark ? 'hour-mark' : 'half';
+            const label = isHourMark ? formatHour12(h) : '';
+            const items = (bySlot[timeKey] || []).map(p => {
+                const lbl = procLabel(p);
+                const cat = getProcedureCategory(p.location, p.procedureName);
+                return `<span class="proc-item proc-cat-${cat}" data-day="${dayKey}" data-key="${p.key}" title="${escapeHtml(lbl)} — click to remove">${escapeHtml(lbl)}<span class="proc-x">×</span></span>`;
+            }).join('');
+            rowsHtml += `<div class="hour-row ${cls}" data-day="${dayKey}" data-time="${timeKey}" title="Double-click to add a procedure">
+              <div class="hour-label">${label}</div>
+              <div class="hour-slot">${items}</div>
+            </div>`;
+        }
+    }
+    return `<div class="wd-hours">
+      <div class="wd-hours-head"></div>
+      ${rowsHtml}
+    </div>`;
+}
+
+// Returns a flat array of { key, time, type, ... } for the given day key.
+function getProceduresForDay(dayKey) {
+    const dayData = procedures[dayKey];
+    if (!dayData) return [];
+    return Object.entries(dayData).map(([key, p]) => ({
+        key,
+        time: p.time,
+        type: p.type || 'procedure',
+        location: p.location,
+        procedureName: p.procedureName,
+        createdAt: p.createdAt,
+        createdBy: p.createdBy,
+    })).sort((a, b) => a.time.localeCompare(b.time));
+}
+
+// Display label for a procedure pill, e.g. "HH - CT Random Kidney bx".
+// Falls back to "Procedure" for any older entries that pre-date the
+// location/procedureName fields.
+function procLabel(p) {
+    if (p && p.location && p.procedureName) {
+        return `${p.location} - ${p.procedureName}`;
+    }
+    return 'Procedure';
+}
+
+// Returns a CSS category class name for a procedure based on its type and location.
+// Priority order (checked top to bottom):
+//   1. EBUS (must be checked before EUS since EBUS contains "EUS")
+//   2. EUS
+//   3. Surgical: Lumpectomy, Mastectomy, Excisional bx
+//   4. Free-text starting with "FS"
+//   5. Location-based: HH → purple, MH → blue
+function getProcedureCategory(location, procedureName) {
+    if (!procedureName) return 'default';
+    const name = procedureName.trim();
+    if (/\bEBUS\b/i.test(name)) return 'ebus';
+    if (/\bEUS\b/i.test(name))  return 'eus';
+    if (/lumpectomy|mastectomy|excisional\s*bx/i.test(name)) return 'surgical';
+    if (/^FS\b/i.test(name))    return 'fs';
+    if (location === 'HH') return 'hh';
+    if (location === 'MH') return 'mh';
+    return 'default';
+}
+
+// Convert 24h hour to "7 AM" / "12 PM" / "1 PM" style.
+function formatHour12(h) {
+    const period = h < 12 ? 'AM' : 'PM';
+    const hh = ((h + 11) % 12) + 1; // 0->12, 13->1, etc.
+    return hh + ' ' + period;
+}
+
+// Convert "HH:MM" 24h to a friendly 12h string like "8:30 AM".
+function formatTime12(timeKey) {
+    const [hStr, mStr] = timeKey.split(':');
+    const h = parseInt(hStr, 10);
+    const m = parseInt(mStr, 10);
+    const period = h < 12 ? 'AM' : 'PM';
+    const hh = ((h + 11) % 12) + 1;
+    return hh + ':' + pad2(m) + ' ' + period;
+}
+
+const pad2 = n => String(n).padStart(2, '0');
+
+function escapeHtml(s) {
+    return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// Attach handlers for the week-view hourly grid.
+//   - Stop click/dblclick from bubbling to the .week-day (which would open
+//     the day-detail modal — not what the user wants when scheduling).
+//   - Double-click on an empty slot → procedure modal.
+//   - Click on an existing pill → confirm removal.
+function attachHourGridHandlers() {
+    document.querySelectorAll('.wd-hours').forEach(grid => {
+        // Block the parent .week-day's click → day modal
+        grid.addEventListener('click', e => e.stopPropagation());
+        grid.addEventListener('dblclick', e => e.stopPropagation());
+    });
+
+    document.querySelectorAll('.hour-row').forEach(row => {
+        row.addEventListener('dblclick', e => {
+            // If the dblclick landed on an existing pill, the pill's own
+            // handler takes care of removal — don't open the add modal.
+            if (e.target.closest('.proc-item')) return;
+            const dayKey = row.dataset.day;
+            const timeKey = row.dataset.time;
+            if (!dayKey || !timeKey) return;
+            openProcedureModal(dayKey, timeKey);
+        });
+    });
+
+    document.querySelectorAll('.proc-item').forEach(item => {
+        item.addEventListener('click', async e => {
+            e.stopPropagation();
+            const dayKey = item.dataset.day;
+            const procKey = item.dataset.key;
+            if (!dayKey || !procKey) return;
+            const proc = (procedures[dayKey] || {})[procKey];
+            const label = proc ? procLabel(proc) : 'this procedure';
+            if (!confirm(`Remove "${label}" from the schedule?`)) return;
+            try {
+                await db.ref('scheduler/procedures/' + dayKey + '/' + procKey).remove();
+            } catch (err) {
+                showToast('Could not remove procedure: ' + (err.message || err), { type: 'error' });
+            }
+        });
+    });
+}
+
+// Procedure modal — pick a location (HH/MH) and a procedure type, then
+// confirm. The "Add Procedure" button is disabled until both are chosen.
+let _pendingProc = null;  // { dayKey, timeKey, location, procedureName }
+
+function openProcedureModal(dayKey, timeKey) {
+    _pendingProc = { dayKey, timeKey, location: null, procedureName: null };
+    const date = parseDate(dayKey);
+    const sub = `${DOW[date.getDay()]}, ${MONTHS[date.getMonth()]} ${date.getDate()} at ${formatTime12(timeKey)}`;
+    document.getElementById('procModalSub').textContent = sub;
+
+    // Reset location radios
+    document.querySelectorAll('input[name="procLoc"]').forEach(r => { r.checked = false; });
+
+    // Build the procedure-type button grid fresh each open (cheap, and
+    // keeps the markup in sync if PROCEDURE_TYPES ever changes at runtime)
+    const grid = document.getElementById('procTypeGrid');
+    grid.innerHTML = PROCEDURE_TYPES.map(name => {
+        // Derive the fixed category (no location needed for EUS/EBUS/surgical)
+        const cat = getProcedureCategory(null, name);
+        return `<button type="button" class="proc-type-btn proc-cat-${cat}" data-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`;
+    }).join('') +
+    `<div class="proc-freetext-wrap" id="procFreetextWrap">` +
+      `<input type="text" id="procFreetextInput" class="proc-freetext-input" placeholder="Or type a custom procedure…" maxlength="80">` +
+    `</div>`;
+
+    // Re-bind freetext input each open (element is recreated by innerHTML above).
+    // Typing auto-selects the free-text entry and deselects any preset button.
+    document.getElementById('procFreetextInput').addEventListener('input', e => {
+        if (!_pendingProc) return;
+        const val = e.target.value.trim();
+        // Deselect all preset buttons
+        document.querySelectorAll('#procTypeGrid .proc-type-btn').forEach(b => b.classList.remove('selected'));
+        // Activate / deactivate the freetext radio indicator
+        const wrap = document.getElementById('procFreetextWrap');
+        if (wrap) wrap.classList.toggle('active', val.length > 0);
+        _pendingProc.procedureName = val || null;
+        updateModalProcColors();
+        updateProcConfirmEnabled();
+    });
+
+    updateProcConfirmEnabled();
+    document.getElementById('procModalBack').classList.add('open');
+}
+
+function closeProcedureModal() {
+    document.getElementById('procModalBack').classList.remove('open');
+    _pendingProc = null;
+}
+
+// Gate the primary button on having both selections made.
+function updateProcConfirmEnabled() {
+    const btn = document.getElementById('procConfirm');
+    const ready = !!(_pendingProc && _pendingProc.location && _pendingProc.procedureName);
+    btn.disabled = !ready;
+}
+
+// Refresh the colour category classes on all proc-type-btn elements and the
+// free-text wrap to reflect the currently selected location. Called whenever
+// the location or the procedure name changes so the buttons always preview
+// the colour the pill will have in the schedule.
+function updateModalProcColors() {
+    const loc = _pendingProc ? _pendingProc.location : null;
+    const freeName = _pendingProc ? _pendingProc.procedureName : null;
+
+    // Update preset buttons: fixed categories (EUS/EBUS/surgical) don't change,
+    // but location-dependent ones update when a location is chosen.
+    document.querySelectorAll('#procTypeGrid .proc-type-btn').forEach(btn => {
+        const name = btn.dataset.name;
+        const cat = getProcedureCategory(loc, name);
+        // Replace any existing proc-cat-* class
+        btn.className = btn.className.replace(/\bproc-cat-\S+/g, '').trim();
+        btn.classList.add('proc-cat-' + cat);
+    });
+
+    // Update the free-text wrap colour to preview what the pill will be
+    const wrap = document.getElementById('procFreetextWrap');
+    if (wrap && wrap.classList.contains('active') && freeName) {
+        const cat = getProcedureCategory(loc, freeName);
+        wrap.className = wrap.className.replace(/\bproc-cat-\S+/g, '').trim();
+        wrap.classList.add('proc-cat-' + cat);
+    } else if (wrap) {
+        wrap.className = wrap.className.replace(/\bproc-cat-\S+/g, '').trim();
+    }
+}
+
+async function saveProcedure() {
+    if (!_pendingProc || !_pendingProc.location || !_pendingProc.procedureName) return;
+    const { dayKey, timeKey, location, procedureName } = _pendingProc;
+    const payload = {
+        time: timeKey,
+        type: 'procedure',
+        location,
+        procedureName,
+        createdAt: Date.now(),
+    };
+    if (loggedInPathId !== null) payload.createdBy = loggedInPathId;
+    try {
+        await db.ref('scheduler/procedures/' + dayKey).push(payload);
+        closeProcedureModal();
+    } catch (err) {
+        showToast('Could not add procedure: ' + (err.message || err), { type: 'error' });
+    }
+}
+
+// Wire up the modal once. Inputs delegate from the modal back so the
+// dynamically-rendered procedure-type buttons work without re-binding.
+
+// ── Restructure procedure modal HTML for enhanced styling ──
+// Rebuilds the modal's inner content with the richer markup the new
+// CSS expects (modal-inner wrapper, proc-header, section labels, and
+// loc-abbr/loc-name spans inside each location option).
+(function initProcedureModalStructure() {
+    const back = document.getElementById('procModalBack');
+    if (!back) return;
+    const modal = back.querySelector('.modal');
+    if (!modal) return;
+    modal.innerHTML = `
+<div class="modal-inner">
+  <div class="proc-header">
+    <div class="proc-header-text">
+      <h3>Add Procedure</h3>
+      <p class="sub" id="procModalSub"></p>
+    </div>
+  </div>
+
+  <div class="proc-section-label">Location</div>
+  <div id="procLocToggle" class="proc-loc-toggle">
+    <label class="proc-loc-opt">
+      <input type="radio" name="procLoc" value="HH">
+      <span class="loc-abbr">HH</span>
+      <span class="loc-name">Huntley Hospital</span>
+    </label>
+    <label class="proc-loc-opt">
+      <input type="radio" name="procLoc" value="MH">
+      <span class="loc-abbr">MH</span>
+      <span class="loc-name">McHenry Hospital</span>
+    </label>
+  </div>
+
+  <div class="proc-section-label">Procedure Type</div>
+  <div id="procTypeGrid" class="proc-type-grid"></div>
+
+  <div class="modal-actions">
+    <button id="procCancel">Cancel</button>
+    <button id="procConfirm" class="primary" disabled>Add Procedure</button>
+  </div>
+</div>`;
+})();
+
+document.getElementById('procCancel').addEventListener('click', closeProcedureModal);
+document.getElementById('procConfirm').addEventListener('click', saveProcedure);
+document.getElementById('procModalBack').addEventListener('click', e => {
+    if (e.target.id === 'procModalBack') closeProcedureModal();
+});
+
+// Location radios: capture HH or MH selection
+document.getElementById('procLocToggle').addEventListener('change', e => {
+    if (e.target.name !== 'procLoc' || !_pendingProc) return;
+    _pendingProc.location = e.target.value;
+    updateModalProcColors();
+    updateProcConfirmEnabled();
+});
+
+// Procedure-type buttons: single-select (one selected at a time).
+// Clicking a preset button also clears the free-text input.
+document.getElementById('procTypeGrid').addEventListener('click', e => {
+    const btn = e.target.closest('.proc-type-btn');
+    if (!btn || !_pendingProc) return;
+    document.querySelectorAll('#procTypeGrid .proc-type-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    // Clear freetext state
+    const input = document.getElementById('procFreetextInput');
+    const wrap  = document.getElementById('procFreetextWrap');
+    if (input) input.value = '';
+    if (wrap)  wrap.classList.remove('active');
+    _pendingProc.procedureName = btn.dataset.name;
+    updateModalProcColors();
+    updateProcConfirmEnabled();
+});
 
 // ────────────── MONTH VIEW ──────────────
 function renderMonth() {
@@ -1527,13 +2531,29 @@ function renderMonth() {
     const first = new Date(y, m, 1);
     const last = new Date(y, m + 1, 0);
     const gridStart = startOfWeek(first);
-    const totalCells = Math.ceil((last.getDate() + first.getDay()) / 7) * 7;
 
-    let html = `<div class="month-view">`;
-    DOW.forEach(d => { html += `<div class="dow-h">${d}</div>`; });
+    // When weekdaysOnly: 5-column grid (Mon–Fri), else 7-column (Sun–Sat)
+    const wdOnly = settings.weekdaysOnly;
+    const colCount = wdOnly ? 5 : 7;
+    // Offset: 0=Sun,1=Mon…6=Sat. When weekdays-only, the grid starts on Mon(1).
+    const gridOffset = wdOnly ? 1 : 0;
+    // First cell's date offset: for weekdays-only the anchor shifts to Monday
+    const gridAnchor = wdOnly ? addDays(gridStart, 1) : gridStart;
+    // Number of cells needed
+    const firstDow = wdOnly
+        ? ((first.getDay() + 6) % 7)   // 0=Mon…4=Fri for weekdays-only
+        : first.getDay();               // 0=Sun…6=Sat
+    const totalCells = Math.ceil((last.getDate() + firstDow) / colCount) * colCount;
+
+    let html = `<div class="month-view" style="grid-template-columns: repeat(${colCount}, 1fr);">`;
+    // Day-of-week headers
+    const dowLabels = wdOnly ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] : DOW;
+    dowLabels.forEach(d => { html += `<div class="dow-h">${d}</div>`; });
 
     for (let i = 0; i < totalCells; i++) {
-        const date = addDays(gridStart, i);
+        const date = addDays(gridAnchor, i);
+        // Skip weekends when in weekdays-only mode (shouldn't happen given gridAnchor, but guard it)
+        if (wdOnly && isWeekend(date)) continue;
         const inMonth = date.getMonth() === m;
         const td = sameDay(date, today);
         const we = isWeekend(date);
@@ -1644,9 +2664,8 @@ function cellContent(date) {
         };
     }
 
-    // Call mode — exactly one pathologist on call for the whole block
-    const cs = getCallCycleStart(date);
-    const ocId = onCallIdForCycle(cs);
+    // Call mode — use the same lookup as week/month views (respects day-level overrides)
+    const ocId = onCallIdForDay(date);
     const oc = pathologists.find(p => p.id === ocId);
 
     // If nobody is on call, OR if we are filtering and the on-call doc isn't the selected one
@@ -1710,15 +2729,14 @@ function renderYear() {
                 if (content.count) classes.push('count');
             }
 
-            const styleAttr = content ? ` style="background:${content.background}"` : '';
             const titleAttr = (content || holiday)
                 ? ` title="${holiday ? holiday + (content ? ' · ' : '') : ''}${content ? content.title : ''}"`
                 : '';
-            const inner = content
-                ? `<span class="md-label">${content.label}</span>`
-                : `${date.getDate()}`;
+            const squareStyle = content ? ` style="background:${content.background}"` : '';
+            const labelHtml = content ? `<span class="md-label">${content.label}</span>` : '';
+            const inner = `<span class="md-num">${date.getDate()}</span><span class="md-square"${squareStyle}>${labelHtml}</span>`;
 
-            cells += `<div class="${classes.join(' ')}" data-date="${fmt(date)}"${styleAttr}${titleAttr}>${inner}</div>`;
+            cells += `<div class="${classes.join(' ')}" data-date="${fmt(date)}"${titleAttr}>${inner}</div>`;
         }
 
         html += `<div class="year-month">
@@ -1738,16 +2756,13 @@ function renderYear() {
         });
     });
 
-    // Click any day in the year view → jump to month view
+    // Click any day in the year view → open day detail modal (edit PTO / on-call)
     main.querySelectorAll('.md').forEach(el => {
         if (el.classList.contains('outside')) return;
         el.addEventListener('click', () => {
             const ds = el.dataset.date;
             if (!ds) return;
-            cursor = parseDate(ds);
-            view = 'month';
-            document.querySelectorAll('.view-tab').forEach(t => t.classList.toggle('active', t.dataset.view === 'month'));
-            renderMain();
+            openDayDetail(parseDate(ds));
         });
     });
 }
@@ -1788,12 +2803,15 @@ function openDayDetail(date) {
     sub.textContent = subText;
 
     const dayAssign = getDayAssignments(date);
+    const admin = isAdmin();
     rows.innerHTML = pathologists.map(p => {
         const a = dayAssign[p.id];
         if (a.type === 'blank') return ''; // pre-cutoff date — no row
         const ocPill = a.onCall ? `<span class="doc-pill">On Call</span>` : '';
+        const adminAttrs = admin ? ` data-pid="${p.id}" data-atype="${a.type}"` : '';
+        const adminCls = admin ? ' admin-clickable' : '';
         if (a.type === 'pto') {
-            return `<div class="day-detail-row pto-row" style="--c:${p.color}">
+            return `<div class="day-detail-row pto-row${adminCls}"${adminAttrs} style="--c:${p.color}">
           <div class="ddot"></div>
           <div class="dname">${p.name}</div>
           <div class="dservice">PTO</div>
@@ -1801,7 +2819,7 @@ function openDayDetail(date) {
         </div>`;
         }
         if (a.type === 'off') {
-            return `<div class="day-detail-row off-row" style="--c:${p.color}">
+            return `<div class="day-detail-row off-row${adminCls}"${adminAttrs} style="--c:${p.color}">
           <div class="ddot"></div>
           <div class="dname">${p.name}</div>
           <div class="dservice">${(isWk || holiday) ? 'Off' : 'Unstaffed'}</div>
@@ -1809,7 +2827,7 @@ function openDayDetail(date) {
         </div>`;
         }
         const cbg = pathBgColor(p.color);
-        return `<div class="day-detail-row" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+        return `<div class="day-detail-row${adminCls}"${adminAttrs} style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
         <div class="ddot"></div>
         <div class="dname">${p.name}</div>
         <div class="dservice"><span class="swatch"></span>${a.service.name}</div>
@@ -1817,21 +2835,287 @@ function openDayDetail(date) {
       </div>`;
     }).join('');
 
+    if (admin) attachPathRowHandlers(date);
+
     // Hide "change service rotation" button on weekends and federal holidays
     const svcBtn = document.getElementById('dayChangeService');
     if (svcBtn) svcBtn.style.display = (isWk || holiday) ? 'none' : '';
 
-    // Adjust day-modal action button labels based on viewer role
-    const admin = isAdmin();
+    // Adjust day-modal action button labels based on viewer role.
+    // Gross room cannot make any pathologist-schedule changes at all.
+    const grossRoom = isGrossRoom();
     const ptoBtn = document.getElementById('dayAddPto');
     const ocBtn = document.getElementById('dayChangeOnCall');
-    if (ptoBtn) ptoBtn.textContent = admin ? 'Add PTO for this day' : '+ Request PTO for this day';
-    if (ocBtn) ocBtn.textContent = admin ? "Change who's on call" : "Request on-call change";
+    if (ptoBtn) {
+        ptoBtn.style.display = grossRoom ? 'none' : '';
+        if (!grossRoom) ptoBtn.textContent = admin ? 'Add PTO for this day' : '+ Request PTO for this day';
+    }
+    if (ocBtn) {
+        ocBtn.style.display = grossRoom ? 'none' : '';
+        if (!grossRoom) ocBtn.textContent = admin ? "Change who's on call" : "Request on-call change";
+    }
     if (svcBtn && !(isWk || holiday)) {
-        svcBtn.textContent = admin ? 'Override services this day' : 'Request service change';
+        if (grossRoom) {
+            svcBtn.style.display = 'none';
+        } else {
+            svcBtn.style.display = '';
+            svcBtn.textContent = admin ? 'Override services this day' : 'Request service change';
+        }
     }
 
     document.getElementById('dayModalBack').classList.add('open');
+}
+
+// ────────────── PATH QUICK-ACTION PANEL ──────────────
+function attachPathRowHandlers(date) {
+    const rows = document.getElementById('dayDetailRows');
+    let openRow = null;
+    let openPanel = null;
+
+    function closePanel() {
+        if (openPanel) { openPanel.remove(); openPanel = null; }
+        if (openRow) { openRow.classList.remove('panel-open'); openRow = null; }
+    }
+
+    rows.querySelectorAll('.admin-clickable').forEach(row => {
+        row.addEventListener('click', e => {
+            // Don't trigger when clicking inside an already-open panel
+            if (e.target.closest('.path-quick-panel')) return;
+
+            const isSameRow = row === openRow;
+            closePanel();
+            if (isSameRow) return; // toggle off
+
+            const pid = parseInt(row.dataset.pid, 10);
+            const atype = row.dataset.atype;
+            const path = pathologists.find(p => p.id === pid);
+            if (!path) return;
+
+            const panel = document.createElement('div');
+            panel.className = 'path-quick-panel';
+
+            const isWk = isWeekend(date);
+            const holiday = getFederalHoliday(date);
+
+            if (atype === 'pto') {
+                // Find the vacation entry(s) covering this date for this pathologist
+                const t = date.getTime();
+                const matchingVacs = vacations.filter(v =>
+                    v.pathologistId === pid &&
+                    t >= v.start.getTime() && t <= v.end.getTime()
+                );
+
+                let ptoInfo = '';
+                matchingVacs.forEach((v, i) => {
+                    ptoInfo += `
+                        <div class="pqp-label" style="margin-top:${i > 0 ? '10px' : '0'};">Edit date range</div>
+                        <div class="pqp-row">
+                            <input type="date" class="pqp-date-input" id="pqpStart_${v.key}" value="${fmt(v.start)}" />
+                            <span style="font-size:12px;color:var(--ink-3);flex-shrink:0;">to</span>
+                            <input type="date" class="pqp-date-input" id="pqpEnd_${v.key}" value="${fmt(v.end)}" />
+                            <button class="pqp-btn primary" data-vackey="${v.key}" id="pqpSave_${v.key}">Save</button>
+                        </div>
+                        <div class="pqp-row">
+                            <button class="pqp-btn danger" data-vackey="${v.key}" id="pqpRemove_${v.key}">Remove entry</button>
+                        </div>`;
+                });
+
+                panel.innerHTML = `<div class="pqp-label">PTO — ${path.name}</div>${ptoInfo}`;
+
+                // Save (update date range)
+                panel.querySelectorAll('button[id^="pqpSave_"]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const key = btn.dataset.vackey;
+                        const newStart = panel.querySelector(`#pqpStart_${key}`).value;
+                        const newEnd = panel.querySelector(`#pqpEnd_${key}`).value;
+                        if (!newStart || !newEnd) { showToast('Please set both dates.', { type: 'error' }); return; }
+                        if (newEnd < newStart) { showToast('End date must be on or after start date.', { type: 'error' }); return; }
+                        // Track the earlier of old/new starts so the recompute
+                        // covers any newly-added vs. newly-removed PTO days.
+                        const oldVac = vacations.find(v => v.key === key);
+                        const oldStartTs = oldVac ? oldVac.start.getTime() : Infinity;
+                        const newStartDate = parseDate(newStart);
+                        const fromDate = newStartDate.getTime() < oldStartTs
+                            ? newStartDate
+                            : (oldVac ? oldVac.start : newStartDate);
+                        await db.ref('scheduler/vacations/' + key).update({ start: newStart, end: newEnd });
+                        showToast('PTO updated.');
+                        closePanel();
+                        openDayDetail(date);
+                        await maybeOfferRecompute({}, {
+                            fromDate: fromDate,
+                            dayBeforeFix: true,
+                            message: 'PTO date range updated. Recompute the future schedule for everyone using the rotation rules?',
+                        });
+                    });
+                });
+
+                // Remove
+                panel.querySelectorAll('button[id^="pqpRemove_"]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        if (!confirm('Remove this PTO entry?')) return;
+                        const vacKey = btn.dataset.vackey;
+                        const vac = vacations.find(v => v.key === vacKey);
+                        const fromDate = vac ? vac.start : null;
+                        await db.ref('scheduler/vacations/' + vacKey).remove();
+                        closePanel();
+                        openDayDetail(date);
+                        if (fromDate) {
+                            await maybeOfferRecompute({}, {
+                                fromDate: fromDate,
+                                dayBeforeFix: false,
+                                message: 'PTO removed. Recompute the future schedule for everyone using the rotation rules?',
+                            });
+                        }
+                    });
+                });
+
+            } else if (atype === 'service') {
+                const dayAssign = getDayAssignments(date);
+                const currentSvc = dayAssign[pid]?.service;
+                const allOptions = [...SERVICES, COMBO_SVC];
+                const opts = allOptions.map(s =>
+                    `<option value="${s.id}" ${currentSvc && s.id === currentSvc.id ? 'selected' : ''}>${s.name}</option>`
+                ).join('');
+                const noneOpt = `<option value="">— No service —</option>`;
+
+                // Check if there's an existing day-level override for this path on this date
+                const dayKey = fmt(date);
+                const hasOverride = serviceOverrides[dayKey] && serviceOverrides[dayKey][pid];
+
+                panel.innerHTML = `
+                    <div class="pqp-label">Service — ${path.name}</div>
+                    <div class="pqp-row">
+                        <select id="pqpSvcSel_${pid}">${noneOpt}${opts}</select>
+                        <button class="pqp-btn primary" id="pqpSvcSave_${pid}">Save</button>
+                    </div>
+                    ${hasOverride ? `<button class="pqp-reset" id="pqpSvcReset_${pid}">Reset to default rotation</button>` : ''}
+                `;
+
+                panel.querySelector(`#pqpSvcSave_${pid}`).addEventListener('click', async () => {
+                    const sel = panel.querySelector(`#pqpSvcSel_${pid}`);
+                    const newVal = sel.value;
+                    const dayKey = fmt(date);
+                    const existing = serviceOverrides[dayKey] ? { ...serviceOverrides[dayKey] } : {};
+                    const recomputePins = {};
+                    if (newVal) {
+                        existing[pid] = newVal;
+                        await db.ref('scheduler/serviceOverrides/' + dayKey).set(existing);
+                        // Pin ONLY the just-changed path; everyone else
+                        // stays free for the recompute to rearrange.
+                        recomputePins[dayKey] = { [pid]: newVal };
+                    } else {
+                        delete existing[pid];
+                        if (Object.keys(existing).length === 0) {
+                            await db.ref('scheduler/serviceOverrides/' + dayKey).remove();
+                        } else {
+                            await db.ref('scheduler/serviceOverrides/' + dayKey).set(existing);
+                        }
+                        // Override removed — nothing for the admin's edit
+                        // locks; recompute is free to reflow the day.
+                        recomputePins[dayKey] = {};
+                    }
+                    closePanel();
+                    openDayDetail(date);
+                    await maybeOfferRecompute(recomputePins, {
+                        fromDate: date,
+                        dayBeforeFix: true,
+                        message: 'Service updated. Recompute the future schedule for everyone using the rotation rules?',
+                    });
+                });
+
+                const resetBtn = panel.querySelector(`#pqpSvcReset_${pid}`);
+                if (resetBtn) {
+                    resetBtn.addEventListener('click', async () => {
+                        const dayKey = fmt(date);
+                        const existing = serviceOverrides[dayKey] ? { ...serviceOverrides[dayKey] } : {};
+                        delete existing[pid];
+                        if (Object.keys(existing).length === 0) {
+                            await db.ref('scheduler/serviceOverrides/' + dayKey).remove();
+                        } else {
+                            await db.ref('scheduler/serviceOverrides/' + dayKey).set(existing);
+                        }
+                        const recomputePins = {};
+                        // Reset removed pid's override — recompute is free
+                        // to reflow the day; nothing to lock.
+                        recomputePins[dayKey] = {};
+                        closePanel();
+                        openDayDetail(date);
+                        await maybeOfferRecompute(recomputePins, {
+                            fromDate: date,
+                            dayBeforeFix: true,
+                            message: 'Service reset to default. Recompute the future schedule for everyone using the rotation rules?',
+                        });
+                    });
+                }
+
+            } else { // 'off' — weekend, holiday, or unstaffed
+                const canAddPto = true;
+                const canAssignService = !(isWk || holiday);
+                const parts = [];
+
+                if (canAddPto) {
+                    parts.push(`<div class="pqp-label">Actions — ${path.name}</div>
+                        <div class="pqp-row">
+                            <button class="pqp-btn" id="pqpAddPto_${pid}">Add PTO for this day</button>
+                        </div>`);
+                }
+
+                if (canAssignService) {
+                    const allOptions = [...SERVICES, COMBO_SVC];
+                    const opts = allOptions.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+                    parts.push(`<div class="pqp-row">
+                        <select id="pqpOffSvcSel_${pid}"><option value="">— Assign service —</option>${opts}</select>
+                        <button class="pqp-btn primary" id="pqpOffSvcSave_${pid}">Save</button>
+                    </div>`);
+                }
+
+                panel.innerHTML = parts.join('');
+
+                const addPtoBtn = panel.querySelector(`#pqpAddPto_${pid}`);
+                if (addPtoBtn) {
+                    addPtoBtn.addEventListener('click', () => {
+                        closePanel();
+                        document.getElementById('dayModalBack').classList.remove('open');
+                        // Open PTO modal pre-filled to this pathologist and date
+                        const sel = document.getElementById('ptoPath');
+                        openPtoModal(date);
+                        // Pre-select this pathologist after the modal opens
+                        setTimeout(() => { sel.value = pid; }, 0);
+                    });
+                }
+
+                const offSvcSave = panel.querySelector(`#pqpOffSvcSave_${pid}`);
+                if (offSvcSave) {
+                    offSvcSave.addEventListener('click', async () => {
+                        const sel = panel.querySelector(`#pqpOffSvcSel_${pid}`);
+                        const newVal = sel.value;
+                        if (!newVal) return;
+                        const dayKey = fmt(date);
+                        const existing = serviceOverrides[dayKey] ? { ...serviceOverrides[dayKey] } : {};
+                        existing[pid] = newVal;
+                        await db.ref('scheduler/serviceOverrides/' + dayKey).set(existing);
+                        const recomputePins = {};
+                        // Pin ONLY the just-assigned path; everyone else
+                        // stays free for the recompute to rearrange.
+                        recomputePins[dayKey] = { [pid]: newVal };
+                        closePanel();
+                        openDayDetail(date);
+                        await maybeOfferRecompute(recomputePins, {
+                            fromDate: date,
+                            dayBeforeFix: true,
+                            message: 'Service assigned. Recompute the future schedule for everyone using the rotation rules?',
+                        });
+                    });
+                }
+            }
+
+            row.classList.add('panel-open');
+            row.after(panel);
+            openRow = row;
+            openPanel = panel;
+        });
+    });
 }
 
 document.getElementById('dayClose').addEventListener('click', () => {
@@ -1946,7 +3230,16 @@ function renderPtoList() {
             const key = btn.dataset.key;
             if (admin) {
                 if (!confirm('Remove this PTO entry?')) return;
+                const vac = vacations.find(x => x.key === key);
+                const fromDate = vac ? vac.start : null;
                 await db.ref('scheduler/vacations/' + key).remove();
+                if (fromDate) {
+                    await maybeOfferRecompute({}, {
+                        fromDate: fromDate,
+                        dayBeforeFix: false,
+                        message: 'PTO removed. Recompute the future schedule for everyone using the rotation rules?',
+                    });
+                }
             } else {
                 // Find the relevant vacation for the prompt detail
                 const v = vacations.find(x => x.key === key);
@@ -1990,6 +3283,12 @@ document.getElementById('ptoSave').addEventListener('click', async () => {
             end: fmt(e),
         });
         renderPtoList();
+        document.getElementById('ptoModalBack').classList.remove('open');
+        await maybeOfferRecompute({}, {
+            fromDate: s,
+            dayBeforeFix: true,
+            message: 'PTO added. Recompute the future schedule for everyone using the rotation rules?',
+        });
     } else {
         const note = (document.getElementById('ptoNote').value || '').trim();
         const ok = await submitRequest('pto_add', {
@@ -2060,6 +3359,24 @@ document.getElementById('ocCancel').addEventListener('click', () => {
 document.getElementById('ocModalBack').addEventListener('click', e => {
     if (e.target.id === 'ocModalBack') e.target.classList.remove('open');
 });
+// Helper: remove all day-level on-call overrides within the call cycle
+// that contains activeOcDate.  Called whenever a week-scope change is
+// saved or reset so day overrides can no longer shadow the week setting.
+async function _clearDayOverridesForCycle() {
+    const cs = getCallCycleStart(activeOcDate);
+    const ce = getCallCycleEnd(cs);
+    const writes = {};
+    for (let d = new Date(cs); d.getTime() <= ce.getTime(); d = addDays(d, 1)) {
+        const dk = fmt(d);
+        if (onCallDayOverrides[dk] !== undefined) {
+            writes['scheduler/onCallDayOverrides/' + dk] = null;
+        }
+    }
+    if (Object.keys(writes).length > 0) {
+        await db.ref().update(writes);
+    }
+}
+
 document.getElementById('ocSave').addEventListener('click', async () => {
     const pid = parseInt(document.getElementById('ocPath').value, 10);
     const scope = document.querySelector('input[name="ocScope"]:checked').value;
@@ -2067,7 +3384,10 @@ document.getElementById('ocSave').addEventListener('click', async () => {
         if (scope === 'day') {
             await db.ref('scheduler/onCallDayOverrides/' + activeOcDayKey).set(pid);
         } else {
+            // Save the week-level override, then clear any day-level overrides
+            // within this cycle so they can't silently shadow the week setting.
             await db.ref('scheduler/onCallOverrides/' + activeOcWeekKey).set(pid);
+            await _clearDayOverridesForCycle();
         }
         document.getElementById('ocModalBack').classList.remove('open');
     } else {
@@ -2085,7 +3405,10 @@ document.getElementById('ocReset').addEventListener('click', async () => {
     if (scope === 'day') {
         await db.ref('scheduler/onCallDayOverrides/' + activeOcDayKey).remove();
     } else {
+        // Remove the week override and also clear any lingering day overrides
+        // so the cycle fully reverts to the default rotation.
         await db.ref('scheduler/onCallOverrides/' + activeOcWeekKey).remove();
+        await _clearDayOverridesForCycle();
     }
     document.getElementById('ocModalBack').classList.remove('open');
 });
@@ -2197,12 +3520,21 @@ document.getElementById('svcSave').addEventListener('click', async () => {
             if (s.value) update[s.dataset.pid] = s.value;
         });
 
+        // Track what we just saved so the recompute prompt can use the new
+        // values as locks regardless of whether the Firebase listener has
+        // fired yet.
+        let recomputeFromDate = null;
+        const recomputePins = {};
+
         if (scope === 'day') {
             if (Object.keys(update).length === 0) {
                 await db.ref('scheduler/serviceOverrides/' + activeSvcDayKey).remove();
+                recomputePins[activeSvcDayKey] = {};
             } else {
                 await db.ref('scheduler/serviceOverrides/' + activeSvcDayKey).set(update);
+                recomputePins[activeSvcDayKey] = Object.assign({}, update);
             }
+            recomputeFromDate = activeSvcDate;
         } else {
             // Full call week: merge the same {pid: serviceId} into every
             // workday in the cycle (PTO days will simply be ignored at
@@ -2218,12 +3550,24 @@ document.getElementById('svcSave').addEventListener('click', async () => {
                 }
                 writes['scheduler/serviceOverrides/' + dKey] =
                     Object.assign({}, existing, update);
+                // Pin ONLY the admin-just-set paths from `update` —
+                // pre-existing overrides shouldn't lock the recompute.
+                recomputePins[dKey] = Object.assign({}, update);
             });
             if (Object.keys(writes).length > 0) {
                 await db.ref().update(writes);
             }
+            if (days.length > 0) recomputeFromDate = days[0];
         }
         document.getElementById('svcModalBack').classList.remove('open');
+
+        if (recomputeFromDate) {
+            await maybeOfferRecompute(recomputePins, {
+                fromDate: recomputeFromDate,
+                dayBeforeFix: true,
+                message: 'Service change saved. Recompute the future schedule for everyone using the rotation rules?',
+            });
+        }
     } else {
         // Non-admin: there's only one select (their own).  Submit a request.
         const ownSelect = document.querySelector(`#svcAssignments select[data-pid="${loggedInPathId}"]`);
@@ -2242,18 +3586,34 @@ document.getElementById('svcSave').addEventListener('click', async () => {
 });
 document.getElementById('svcReset').addEventListener('click', async () => {
     const scope = document.querySelector('input[name="svcScope"]:checked').value;
+    let recomputeFromDate = null;
+    const recomputePins = {};
+
     if (scope === 'day') {
         await db.ref('scheduler/serviceOverrides/' + activeSvcDayKey).remove();
+        recomputePins[activeSvcDayKey] = {};
+        recomputeFromDate = activeSvcDate;
     } else {
         // Wipe overrides for every workday in the call cycle
         const days = workdaysInCallCycle(activeSvcDate);
         const writes = {};
         days.forEach(d => {
-            writes['scheduler/serviceOverrides/' + fmt(d)] = null;
+            const dKey = fmt(d);
+            writes['scheduler/serviceOverrides/' + dKey] = null;
+            recomputePins[dKey] = {};
         });
         if (Object.keys(writes).length > 0) await db.ref().update(writes);
+        if (days.length > 0) recomputeFromDate = days[0];
     }
     document.getElementById('svcModalBack').classList.remove('open');
+
+    if (recomputeFromDate) {
+        await maybeOfferRecompute(recomputePins, {
+            fromDate: recomputeFromDate,
+            dayBeforeFix: true,
+            message: 'Service overrides cleared. Recompute the future schedule for everyone using the rotation rules?',
+        });
+    }
 });
 
 // ────────────── DISPATCH ──────────────
@@ -2388,6 +3748,7 @@ function renderMain() {
 
 function renderAll() {
     if (!pathologistsReady || !vacationsReady || pathologists.length === 0) return;
+    applySettings();   // ensure sidebar/weekdays setting is reflected
     renderSidebar();
     renderMain();
 }
@@ -2800,3 +4161,77 @@ document.getElementById('exportDownload').addEventListener('click', () => {
 
     document.getElementById('exportModalBack').classList.remove('open');
 });
+// ────────────── SETTINGS UI ──────────────
+(function initSettings() {
+    const btn    = document.getElementById('settingsBtn');
+    const drawer = document.getElementById('settingsDrawer');
+    const twBtn  = document.getElementById('toggleWeekdays');
+    const tsBtn  = document.getElementById('toggleSidebar');
+
+    if (!btn || !drawer) return;
+
+    // Apply settings on first load (syncs toggles + sidebar visibility)
+    applySettings();
+
+    // Open / close the drawer
+    function openDrawer() {
+        drawer.classList.add('open');
+        btn.setAttribute('aria-expanded', 'true');
+        drawer.setAttribute('aria-hidden', 'false');
+    }
+    function closeDrawer() {
+        drawer.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+        drawer.setAttribute('aria-hidden', 'true');
+    }
+
+    btn.addEventListener('click', e => {
+        e.stopPropagation();
+        drawer.classList.contains('open') ? closeDrawer() : openDrawer();
+    });
+
+    // Close drawer when clicking anywhere outside it
+    document.addEventListener('click', e => {
+        if (!drawer.contains(e.target) && e.target !== btn) closeDrawer();
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') closeDrawer();
+    });
+
+    // Weekdays-only toggle
+    if (twBtn) {
+        twBtn.addEventListener('click', e => {
+            e.preventDefault();
+            settings.weekdaysOnly = !settings.weekdaysOnly;
+            saveSettings();
+            applySettings();
+            renderMain();
+        });
+    }
+
+    // Hide sidebar toggle
+    if (tsBtn) {
+        tsBtn.addEventListener('click', e => {
+            e.preventDefault();
+            settings.hideSidebar = !settings.hideSidebar;
+            saveSettings();
+            applySettings();
+        });
+    }
+
+    // Sidebar arrow toggle button (on the aside itself)
+    const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
+    if (sidebarToggleBtn) {
+        sidebarToggleBtn.addEventListener('click', e => {
+            e.preventDefault();
+            settings.hideSidebar = !settings.hideSidebar;
+            saveSettings();
+            applySettings();
+            // Update aria-label to reflect new state
+            sidebarToggleBtn.setAttribute('aria-label',
+                settings.hideSidebar ? 'Expand sidebar' : 'Collapse sidebar');
+            sidebarToggleBtn.setAttribute('title',
+                settings.hideSidebar ? 'Expand sidebar' : 'Collapse sidebar');
+        });
+    }
+})();

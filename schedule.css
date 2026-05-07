@@ -42,6 +42,14 @@
     --pto-ink: #6b5d3a;
     --pto-stripe: #e2d8b8;
 
+    /* ── Procedure colour categories ── */
+    --proc-eus:      #c87d45;   /* 1. EUS  → orange-brown  */
+    --proc-ebus:     #3d7a50;   /* 2. EBUS → green         */
+    --proc-surgical: #b83c3c;   /* 3. Lumpectomy / Mastectomy / Excisional bx → red */
+    --proc-fs:       #b8900a;   /* 4. Free-text starting with FS → golden-yellow */
+    --proc-hh:       #7050b0;   /* 5. Other HH procedures → purple */
+    --proc-mh:       #3a8ab5;   /* 6. Other MH procedures → blue   */
+
     --serif: 'Instrument Serif', Georgia, serif;
     --sans: 'Geist', system-ui, sans-serif;
     --mono: 'JetBrains Mono', monospace;
@@ -431,10 +439,51 @@ header {
 
 /* ─────────────────── SIDEBAR ─────────────────── */
 aside {
+    position: relative;
     border-right: 1px solid var(--rule);
     padding: 22px 20px;
     background: var(--bg);
     overflow-y: auto;
+}
+
+/* ── Sidebar collapse/expand arrow button ── */
+.sidebar-toggle-btn {
+    position: absolute;
+    top: 50%;
+    right: -14px;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 20;
+    color: var(--ink-3);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.10);
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.sidebar-toggle-btn:hover {
+    background: var(--bg-2);
+    border-color: var(--ink-3);
+    color: var(--ink);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+}
+
+.sidebar-toggle-btn svg {
+    transition: transform 0.25s ease;
+    flex-shrink: 0;
+}
+
+/* When sidebar is collapsed, flip the arrow to point right */
+.app.sidebar-hidden .sidebar-toggle-btn svg {
+    transform: rotate(180deg);
 }
 
 .side-section {
@@ -624,7 +673,8 @@ main {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
     gap: 6px;
-    height: 100%;
+    /* Auto-size to content so the hourly grid below each day's
+       pathologist assignments can grow naturally. */
     min-height: 540px;
 }
 
@@ -762,7 +812,8 @@ main {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    flex: 1;
+    /* No flex:1 — keep this section sized to its content so the
+       hourly grid below it sits flush right after the assignments. */
 }
 
 .wd-row {
@@ -856,6 +907,653 @@ main {
     height: 5px;
     border-radius: 50%;
     background: var(--accent);
+}
+
+/* ─────────────────── HOURLY GRID (week view) ─────────────────── */
+/* Independent hourly schedule shown beneath each day's pathologist
+   assignments in the week view. Half-hour slots; double-click to add
+   a "procedure". */
+.wd-hours {
+    border-top: 1px solid var(--rule-soft);
+    background: var(--paper);
+    /* Don't bubble clicks up to .week-day (which would open the day modal) */
+}
+
+.wd-hours-head {
+    padding: 6px 8px 4px;
+    font-family: var(--mono);
+    font-size: 8.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-3);
+    border-bottom: 1px solid var(--rule-soft);
+    background: var(--paper-2);
+}
+
+.hour-row {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    min-height: 22px;
+    user-select: none;
+    cursor: pointer;
+}
+
+/* The bottom border of each row separates it from the row below.
+   - Hour rows (e.g. 7:00) → dotted line below (separates from the 7:30 half row).
+   - Half rows (e.g. 7:30) → solid line below (separates from the next hour, 8:00). */
+.hour-row.hour-mark {
+    border-bottom: 1px dashed var(--rule-soft-2);
+}
+
+.hour-row.half {
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+.hour-row:last-child {
+    border-bottom: none;
+}
+
+/* Hover the whole row, including the time-label cell, so users discover
+   that the label area is also a valid double-click target. */
+.hour-row:hover .hour-slot {
+    background: var(--accent-soft);
+}
+
+.hour-row:hover .hour-label {
+    color: var(--ink-2);
+}
+
+.hour-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--ink-3);
+    padding: 3px 6px 0 8px;
+    text-align: right;
+    border-right: 1px solid var(--rule-soft);
+    line-height: 1.1;
+    background: var(--paper-2);
+}
+
+/* Half-hour rows show no label (only the on-the-hour ones are labeled) */
+.hour-row.half .hour-label {
+    color: var(--ink-4);
+    font-size: 8.5px;
+}
+
+.hour-slot {
+    padding: 2px 5px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 3px;
+    transition: background 0.1s ease;
+    touch-action: manipulation; /* avoid double-tap zoom on mobile */
+    min-height: 22px;
+    box-sizing: border-box;
+}
+
+.hour-slot:empty::before {
+    content: '';
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+/* A scheduled procedure pill */
+.proc-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    background: var(--accent);
+    color: var(--paper);
+    font-size: 10px;
+    font-weight: 500;
+    line-height: 1.3;
+    cursor: pointer;
+    transition: background 0.12s ease, transform 0.12s ease;
+    /* Allow long labels (e.g. "HH - IR Thyroid w/ Afirma") to wrap inside
+       the pill instead of being clipped by the narrow day column. */
+    white-space: normal;
+    word-break: break-word;
+    max-width: 100%;
+}
+
+/* ── Procedure pill colour categories ── */
+.proc-item.proc-cat-eus      { background: var(--proc-eus); }
+.proc-item.proc-cat-ebus     { background: var(--proc-ebus); }
+.proc-item.proc-cat-surgical { background: var(--proc-surgical); }
+.proc-item.proc-cat-fs       { background: var(--proc-fs); }
+.proc-item.proc-cat-hh       { background: var(--proc-hh); }
+.proc-item.proc-cat-mh       { background: var(--proc-mh); }
+
+.proc-item.proc-cat-eus:hover      { background: #a05e2e; transform: translateY(-0.5px); }
+.proc-item.proc-cat-ebus:hover     { background: #2a5e3a; transform: translateY(-0.5px); }
+.proc-item.proc-cat-surgical:hover { background: #8c2020; transform: translateY(-0.5px); }
+.proc-item.proc-cat-fs:hover       { background: #8c6a00; transform: translateY(-0.5px); }
+.proc-item.proc-cat-hh:hover       { background: #503890; transform: translateY(-0.5px); }
+.proc-item.proc-cat-mh:hover       { background: #1a6890; transform: translateY(-0.5px); }
+
+.proc-item:hover {
+    background: var(--ink);
+    transform: translateY(-0.5px);
+}
+
+.proc-item .proc-x {
+    opacity: 0.6;
+    font-size: 11px;
+    line-height: 1;
+    margin-left: 1px;
+}
+
+.proc-item:hover .proc-x {
+    opacity: 1;
+}
+
+/* ─────────────────── ADD PROCEDURE PANEL ─────────────────── */
+/* All rules scoped to #procModalBack so they never bleed into other modals. */
+
+/* Modal shell — slightly wider, overflow hidden to clip accent strip */
+#procModalBack .modal {
+    max-width: 500px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 12px;
+    border: 1px solid var(--rule);
+    box-shadow:
+        0 24px 60px rgba(17, 24, 39, 0.22),
+        0 4px 12px rgba(17, 24, 39, 0.08);
+}
+
+/* Vivid top-accent strip */
+#procModalBack .modal::before {
+    content: '';
+    display: block;
+    height: 4px;
+    background: linear-gradient(90deg, var(--accent) 0%, #2e86c1 60%, #5dade2 100%);
+}
+
+/* Inner wrapper restores padding the .modal override removed */
+#procModalBack .modal-inner {
+    padding: 20px 24px 22px;
+}
+
+/* Header block: icon + title + subtitle */
+#procModalBack .proc-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+#procModalBack .proc-header-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 9px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(26, 82, 118, 0.15);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 17px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+
+#procModalBack .proc-header-text h3 {
+    font-family: var(--serif);
+    font-size: 21px;
+    font-weight: 400;
+    color: var(--ink);
+    line-height: 1.1;
+    margin-bottom: 4px;
+}
+
+#procModalBack .proc-header-text .sub {
+    font-size: 11px;
+    color: var(--ink-3);
+    margin: 0;
+    font-family: var(--mono);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+/* Section label with a left accent bar */
+#procModalBack .proc-section-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-3);
+    margin: 18px 0 10px;
+}
+
+#procModalBack .proc-section-label::before {
+    content: '';
+    width: 3px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--accent);
+    opacity: 0.5;
+    flex-shrink: 0;
+}
+
+/* ── Location toggle (HH / MH) ── */
+/* Two cards side by side; selected one fills with the accent colour. */
+.proc-loc-toggle {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    background: none;
+    border-radius: 0;
+}
+
+.proc-loc-opt {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 14px 10px 12px;
+    border-radius: 9px;
+    background: var(--bg);
+    border: 1.5px solid var(--rule-soft);
+    color: var(--ink-3);
+    cursor: pointer;
+    transition: all 0.18s ease;
+    user-select: none;
+    margin: 0;
+    text-transform: none;
+    text-align: center;
+}
+
+.proc-loc-opt:hover {
+    border-color: var(--ink-3);
+    color: var(--ink-2);
+    background: var(--paper);
+}
+
+/* Large abbreviation */
+.proc-loc-opt .loc-abbr {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 1;
+    color: inherit;
+    transition: color 0.18s ease;
+}
+
+/* Full hospital name */
+.proc-loc-opt .loc-name {
+    font-family: var(--sans);
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--ink-4);
+    line-height: 1.2;
+    transition: color 0.18s ease;
+}
+
+.proc-loc-opt input[type="radio"] {
+    display: none;
+}
+
+/* Selected: vivid accent fill */
+.proc-loc-opt:has(input:checked) {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--paper);
+    box-shadow:
+        0 4px 12px rgba(26, 82, 118, 0.25),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.proc-loc-opt:has(input:checked) .loc-abbr {
+    color: #fff;
+}
+
+.proc-loc-opt:has(input:checked) .loc-name {
+    color: rgba(255, 255, 255, 0.72);
+}
+
+/* ── Procedure type grid ── */
+/* 2-column grid keeps rows aligned and maximises panel space. */
+.proc-type-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 7px;
+    margin: 0;
+}
+
+.proc-type-btn {
+    padding: 10px 12px 10px 36px; /* left indent for the indicator circle */
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1.5px solid var(--rule-soft);
+    color: var(--ink-2);
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    line-height: 1.3;
+    text-align: left;
+    white-space: normal;
+    word-break: break-word;
+    position: relative;
+}
+
+/* Indicator circle */
+.proc-type-btn::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 11px;
+    transform: translateY(-50%);
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--rule);
+    background: transparent;
+    transition: all 0.15s ease;
+}
+
+.proc-type-btn:hover {
+    border-color: var(--ink-3);
+    color: var(--ink);
+    background: var(--paper);
+}
+
+/* Don't let the generic hover override category-coloured buttons */
+.proc-type-btn[class*="proc-cat-"]:hover { background: unset; border-color: unset; color: unset; }
+
+.proc-type-btn:hover::before {
+    border-color: var(--ink-3);
+}
+/* Don't override the category-coloured circle borders on hover */
+.proc-type-btn[class*="proc-cat-"]:hover::before { border-color: unset; }
+
+/* Selected state: tinted background + accent circle with checkmark */
+.proc-type-btn.selected {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.proc-type-btn.selected::before {
+    background: var(--accent);
+    border-color: var(--accent);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+.proc-type-btn.selected:hover {
+    background: rgba(26, 82, 118, 0.14);
+    border-color: var(--accent);
+}
+
+/* ── Category-coloured indicator circles (unselected) ── */
+/* Only the border ring is coloured; fill stays transparent until selected. */
+.proc-type-btn.proc-cat-eus::before      { background: transparent; border-color: var(--proc-eus);      border-width: 2px; }
+.proc-type-btn.proc-cat-ebus::before     { background: transparent; border-color: var(--proc-ebus);     border-width: 2px; }
+.proc-type-btn.proc-cat-surgical::before { background: transparent; border-color: var(--proc-surgical); border-width: 2px; }
+.proc-type-btn.proc-cat-fs::before       { background: transparent; border-color: var(--proc-fs);       border-width: 2px; }
+.proc-type-btn.proc-cat-hh::before       { background: transparent; border-color: var(--proc-hh);       border-width: 2px; }
+.proc-type-btn.proc-cat-mh::before       { background: transparent; border-color: var(--proc-mh);       border-width: 2px; }
+
+/* ── Category-coloured button backgrounds (unselected) ── */
+/* Light tint so each button previews its procedure colour at rest. */
+.proc-type-btn.proc-cat-eus      { background: rgba(200,125,69,0.08);  border-color: rgba(200,125,69,0.30);  color: #6b3a10; }
+.proc-type-btn.proc-cat-ebus     { background: rgba(61,122,80,0.08);   border-color: rgba(61,122,80,0.30);   color: #1a4a2a; }
+.proc-type-btn.proc-cat-surgical { background: rgba(184,60,60,0.08);   border-color: rgba(184,60,60,0.30);   color: #6a1010; }
+.proc-type-btn.proc-cat-fs       { background: rgba(184,144,10,0.08);  border-color: rgba(184,144,10,0.30);  color: #5a4000; }
+.proc-type-btn.proc-cat-hh       { background: rgba(112,80,176,0.08);  border-color: rgba(112,80,176,0.30);  color: #3a1878; }
+.proc-type-btn.proc-cat-mh       { background: rgba(58,138,181,0.08);  border-color: rgba(58,138,181,0.30);  color: #0a4868; }
+
+/* Hover on unselected: deepen the tint slightly */
+.proc-type-btn.proc-cat-eus:not(.selected):hover      { background: rgba(200,125,69,0.15); border-color: var(--proc-eus); }
+.proc-type-btn.proc-cat-ebus:not(.selected):hover     { background: rgba(61,122,80,0.15);  border-color: var(--proc-ebus); }
+.proc-type-btn.proc-cat-surgical:not(.selected):hover { background: rgba(184,60,60,0.15);  border-color: var(--proc-surgical); }
+.proc-type-btn.proc-cat-fs:not(.selected):hover       { background: rgba(184,144,10,0.15); border-color: var(--proc-fs); }
+.proc-type-btn.proc-cat-hh:not(.selected):hover       { background: rgba(112,80,176,0.15); border-color: var(--proc-hh); }
+.proc-type-btn.proc-cat-mh:not(.selected):hover       { background: rgba(58,138,181,0.15); border-color: var(--proc-mh); }
+
+/* ── Category-coloured selected states ── */
+/* Darker tint background + coloured filled circle with checkmark */
+.proc-type-btn.selected.proc-cat-eus      { background: rgba(200,125,69,0.22);  border-color: var(--proc-eus);      color: #6b3a10; font-weight: 600; }
+.proc-type-btn.selected.proc-cat-ebus     { background: rgba(61,122,80,0.22);   border-color: var(--proc-ebus);     color: #1a4a2a; font-weight: 600; }
+.proc-type-btn.selected.proc-cat-surgical { background: rgba(184,60,60,0.22);   border-color: var(--proc-surgical); color: #6a1010; font-weight: 600; }
+.proc-type-btn.selected.proc-cat-fs       { background: rgba(184,144,10,0.22);  border-color: var(--proc-fs);       color: #5a4000; font-weight: 600; }
+.proc-type-btn.selected.proc-cat-hh       { background: rgba(112,80,176,0.22);  border-color: var(--proc-hh);       color: #3a1878; font-weight: 600; }
+.proc-type-btn.selected.proc-cat-mh       { background: rgba(58,138,181,0.22);  border-color: var(--proc-mh);       color: #0a4868; font-weight: 600; }
+
+/* Selected + hover: keep the darker tint */
+.proc-type-btn.selected.proc-cat-eus:hover      { background: rgba(200,125,69,0.28); border-color: var(--proc-eus); }
+.proc-type-btn.selected.proc-cat-ebus:hover     { background: rgba(61,122,80,0.28);  border-color: var(--proc-ebus); }
+.proc-type-btn.selected.proc-cat-surgical:hover { background: rgba(184,60,60,0.28);  border-color: var(--proc-surgical); }
+.proc-type-btn.selected.proc-cat-fs:hover       { background: rgba(184,144,10,0.28); border-color: var(--proc-fs); }
+.proc-type-btn.selected.proc-cat-hh:hover       { background: rgba(112,80,176,0.28); border-color: var(--proc-hh); }
+.proc-type-btn.selected.proc-cat-mh:hover       { background: rgba(58,138,181,0.28); border-color: var(--proc-mh); }
+
+/* Selected + category: filled circle with checkmark in the category colour */
+.proc-type-btn.selected.proc-cat-eus::before {
+    background-color: var(--proc-eus); border-color: var(--proc-eus); border-width: 2px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat;
+}
+.proc-type-btn.selected.proc-cat-ebus::before {
+    background-color: var(--proc-ebus); border-color: var(--proc-ebus); border-width: 2px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat;
+}
+.proc-type-btn.selected.proc-cat-surgical::before {
+    background-color: var(--proc-surgical); border-color: var(--proc-surgical); border-width: 2px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat;
+}
+.proc-type-btn.selected.proc-cat-fs::before {
+    background-color: var(--proc-fs); border-color: var(--proc-fs); border-width: 2px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat;
+}
+.proc-type-btn.selected.proc-cat-hh::before {
+    background-color: var(--proc-hh); border-color: var(--proc-hh); border-width: 2px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat;
+}
+.proc-type-btn.selected.proc-cat-mh::before {
+    background-color: var(--proc-mh); border-color: var(--proc-mh); border-width: 2px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat;
+}
+
+/* ── Category-coloured free-text wrap (active state) ── */
+/* Same light tint as the unselected proc-type-btn category style */
+.proc-freetext-wrap.active.proc-cat-eus      { background: rgba(200,125,69,0.22);  border-color: var(--proc-eus); }
+.proc-freetext-wrap.active.proc-cat-ebus     { background: rgba(61,122,80,0.22);   border-color: var(--proc-ebus); }
+.proc-freetext-wrap.active.proc-cat-surgical { background: rgba(184,60,60,0.22);   border-color: var(--proc-surgical); }
+.proc-freetext-wrap.active.proc-cat-fs       { background: rgba(184,144,10,0.22);  border-color: var(--proc-fs); }
+.proc-freetext-wrap.active.proc-cat-hh       { background: rgba(112,80,176,0.22);  border-color: var(--proc-hh); }
+.proc-freetext-wrap.active.proc-cat-mh       { background: rgba(58,138,181,0.22);  border-color: var(--proc-mh); }
+
+.proc-freetext-wrap.active.proc-cat-eus::before      { background: var(--proc-eus);      border-color: var(--proc-eus);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat; }
+.proc-freetext-wrap.active.proc-cat-ebus::before     { background: var(--proc-ebus);     border-color: var(--proc-ebus);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat; }
+.proc-freetext-wrap.active.proc-cat-surgical::before { background: var(--proc-surgical);  border-color: var(--proc-surgical);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat; }
+.proc-freetext-wrap.active.proc-cat-fs::before       { background: var(--proc-fs);       border-color: var(--proc-fs);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat; }
+.proc-freetext-wrap.active.proc-cat-hh::before       { background: var(--proc-hh);       border-color: var(--proc-hh);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat; }
+.proc-freetext-wrap.active.proc-cat-mh::before       { background: var(--proc-mh);       border-color: var(--proc-mh);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat; }
+
+/* Free-text input — always visible, spans both columns.
+   Styled to match the preset buttons; radio indicator activates on typing. */
+.proc-freetext-wrap {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    padding: 0 12px 0 11px;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1.5px solid var(--rule-soft);
+    transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+/* Radio indicator as a static flex item — mirrors .proc-type-btn::before */
+.proc-freetext-wrap::before {
+    content: '';
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1.5px solid var(--rule);
+    background: transparent;
+    margin-right: 10px;
+    transition: all 0.15s ease;
+}
+
+/* Active: wrap looks like a selected proc-type-btn */
+.proc-freetext-wrap.active {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+}
+
+.proc-freetext-wrap.active::before {
+    background: var(--accent);
+    border-color: var(--accent);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+#procModalBack .proc-freetext-input {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    outline: none;
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.3;
+    box-shadow: none;
+}
+
+#procModalBack .proc-freetext-input:focus {
+    outline: none;
+    border: none;
+    box-shadow: none;
+}
+
+.proc-freetext-input::placeholder {
+    color: var(--ink-4);
+    font-weight: 400;
+    font-style: italic;
+}
+
+.proc-freetext-wrap:focus-within {
+    border-color: var(--ink-3);
+    box-shadow: 0 0 0 3px rgba(26, 82, 118, 0.08);
+}
+
+.proc-freetext-wrap.active:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(26, 82, 118, 0.14);
+}
+
+
+
+/* ── Actions bar ── */
+#procModalBack .modal-actions {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px;
+    margin-top: 22px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule-soft);
+}
+
+#procModalBack .modal-actions button:not(.primary) {
+    padding: 9px 16px;
+    border-radius: 7px;
+    font-size: 12.5px;
+    font-weight: 500;
+    background: transparent;
+    border: 1.5px solid var(--rule);
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+#procModalBack .modal-actions button:not(.primary):hover {
+    background: var(--bg);
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+
+#procModalBack .modal-actions button.primary {
+    padding: 10px 18px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--accent);
+    border: 1.5px solid var(--accent);
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.18s ease;
+    letter-spacing: 0.01em;
+    box-shadow: 0 3px 10px rgba(26, 82, 118, 0.22);
+}
+
+#procModalBack .modal-actions button.primary:hover {
+    background: #154360;
+    border-color: #154360;
+    box-shadow: 0 4px 14px rgba(26, 82, 118, 0.32);
+    transform: translateY(-0.5px);
+}
+
+/* Disabled — both this modal and any other modal sharing the primary class */
+.modal-actions button.primary:disabled,
+#procModalBack .modal-actions button.primary:disabled {
+    background: var(--rule);
+    border-color: var(--rule);
+    color: var(--ink-3);
+    cursor: not-allowed;
+    opacity: 1;
+    box-shadow: none;
+    transform: none;
+}
+
+#procModalBack .modal-actions button.primary:disabled:hover {
+    background: var(--rule);
+    border-color: var(--rule);
+    transform: none;
 }
 
 /* ─────────────────── MONTH VIEW ─────────────────── */
@@ -1943,6 +2641,10 @@ main {
 /* ─────────────────── MOBILE: ≤ 800px ─────────────────── */
 @media (max-width: 800px) {
 
+    /* Settings gear and drawer are desktop-only features */
+    .settings-btn,
+    .settings-drawer { display: none !important; }
+
     html,
     body {
         height: auto;
@@ -2140,6 +2842,27 @@ main {
         min-height: 0;
     }
 
+    /* Hourly grid: a bit taller per row on touch so taps register
+       cleanly, and make sure double-tap works (no zoom). */
+    .wd-hours .hour-row {
+        min-height: 26px;
+    }
+
+    .wd-hours .hour-slot {
+        min-height: 26px;
+        padding: 3px 6px;
+    }
+
+    .wd-hours .hour-label {
+        font-size: 9.5px;
+        padding-top: 4px;
+    }
+
+    .proc-item {
+        font-size: 11px;
+        padding: 3px 8px;
+    }
+
     /* Month view: tighter cells, hide service text labels to fit */
     .month-view {
         gap: 2px;
@@ -2315,6 +3038,165 @@ main {
     .oc-scope-toggle {
         flex-wrap: wrap;
     }
+}
+
+/* ─────────────────── SETTINGS GEAR BUTTON ─────────────────── */
+.settings-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.settings-btn:hover,
+.settings-btn[aria-expanded="true"] {
+    background: var(--paper);
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+
+/* ─────────────────── SETTINGS DRAWER ─────────────────── */
+.settings-drawer {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 20px;
+    z-index: 300;
+    min-width: 270px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    box-shadow:
+        0 8px 28px rgba(17, 24, 39, 0.13),
+        0 2px 6px rgba(17, 24, 39, 0.06);
+    padding: 14px 16px 16px;
+    flex-direction: column;
+    gap: 0;
+}
+
+.settings-drawer.open {
+    display: flex;
+    animation: menu-fade-in 0.14s ease-out;
+}
+
+.settings-drawer-title {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-3);
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+/* Individual setting row — label on left, toggle on right */
+.settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 2px;
+    cursor: pointer;
+    border-radius: 6px;
+    /* Override default <label> styles */
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 13px;
+    margin: 0;
+}
+
+.settings-row + .settings-row {
+    border-top: 1px solid var(--rule-soft);
+}
+
+.settings-row:hover {
+    background: var(--bg-2);
+    margin-left: -4px;
+    margin-right: -4px;
+    padding-left: 6px;
+    padding-right: 6px;
+}
+
+.settings-row-label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+}
+
+.settings-row-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+}
+
+.settings-row-desc {
+    font-size: 11px;
+    color: var(--ink-3);
+}
+
+/* iOS-style toggle switch */
+.toggle-switch {
+    position: relative;
+    width: 38px;
+    height: 22px;
+    flex-shrink: 0;
+    background: var(--rule);
+    border: none;
+    border-radius: 11px;
+    cursor: pointer;
+    transition: background 0.22s ease;
+    padding: 0;
+    outline-offset: 3px;
+}
+
+.toggle-switch::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 16px;
+    height: 16px;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+    transition: transform 0.22s ease;
+}
+
+.toggle-switch[aria-checked="true"] {
+    background: var(--accent);
+}
+
+.toggle-switch[aria-checked="true"]::after {
+    transform: translateX(16px);
+}
+
+/* ─────────────────── SIDEBAR-HIDDEN APP VARIANT ─────────────────── */
+.app.sidebar-hidden {
+    grid-template-columns: 0px 1fr;
+}
+
+.app.sidebar-hidden aside {
+    width: 0;
+    padding: 0;
+    border-right: none;
+    overflow: visible; /* keep the toggle button peeking out */
+    min-width: 0;
+}
+
+/* Hide all aside content except the toggle button when collapsed */
+.app.sidebar-hidden aside > *:not(.sidebar-toggle-btn) {
+    display: none;
 }
 
 /* ─────────────────── REQUESTS UI (admin & user) ─────────────────── */

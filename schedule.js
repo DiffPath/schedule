@@ -4219,6 +4219,19 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         });
     }
 
+    // Sign out button
+    const signOutBtn = document.getElementById('settingsSignOutBtn');
+    if (signOutBtn) {
+        signOutBtn.addEventListener('click', () => {
+            closeDrawer();
+            localStorage.removeItem(AUTH_STORAGE_KEY);
+            loggedInPathId = null;
+            // Show login overlay
+            const overlay = document.getElementById('loginOverlay');
+            if (overlay) overlay.style.display = 'flex';
+        });
+    }
+
     // Sidebar arrow toggle button (on the aside itself)
     const sidebarToggleBtn = document.getElementById('sidebarToggleBtn');
     if (sidebarToggleBtn) {

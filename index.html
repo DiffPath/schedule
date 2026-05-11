@@ -37,123 +37,266 @@
 
     <div class="loading-overlay" id="loadingOverlay">
         <div class="loading-spinner"></div>
-        <div class="loading-status" id="loadingStatus">Connecting to cloud…</div>
+        <div class="loading-status" id="loadingStatus">Connecting to database…</div>
     </div>
 
-    <div class="app">
+    <div class="app" id="app">
 
-        <header>
-            <!-- Hamburger menu (mobile only) — holds Manage PTO, Requests, Export -->
-            <button class="menu-btn" id="menuBtn" aria-label="Menu" aria-expanded="false">
-                <span class="menu-icon"></span>
-                <span class="menu-dot" id="menuDot" aria-hidden="true"></span>
-            </button>
-            <div class="menu-dropdown" id="menuDropdown" role="menu" aria-hidden="true">
-                <button class="menu-item" data-action="pto" role="menuitem">
-                    <span class="menu-item-label" id="menuPtoLabel">Manage PTO</span>
+        <!-- Mobile sidebar backdrop -->
+        <div class="sidebar-backdrop" id="sidebarBackdrop" aria-hidden="true"></div>
+
+        <!-- ────────────── LEFT SIDEBAR (full height) ────────────── -->
+        <aside id="aside">
+            <div class="aside-brand">
+                <img class="aside-brand-icon" src="icon.png" alt="Pathology Schedule" />
+                <h1><em>Pathology</em></h1>
+                <div class="tag">Schedule</div>
+            </div>
+
+            <nav class="page-nav" id="pageNav">
+                <div class="nav-section-label">Pages</div>
+                <button class="nav-item active" data-page="schedule">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="12" height="11" rx="1.5"/>
+                        <line x1="2" y1="6.5" x2="14" y2="6.5"/>
+                        <line x1="5.5" y1="2" x2="5.5" y2="4.5"/>
+                        <line x1="10.5" y1="2" x2="10.5" y2="4.5"/>
+                    </svg>
+                    <span>Schedule</span>
                 </button>
-                <button class="menu-item" data-action="requests" id="menuRequestsItem" role="menuitem">
-                    <span class="menu-item-label" id="menuRequestsLabel">Requests</span>
-                    <span class="req-badge menu-req-badge" id="menuRequestsBadge" style="display:none;">0</span>
+                <button class="nav-item" data-page="requests">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 2.5h6a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1z"/>
+                        <line x1="6" y1="6" x2="10" y2="6"/>
+                        <line x1="6" y1="9" x2="10" y2="9"/>
+                        <line x1="6" y1="12" x2="9" y2="12"/>
+                    </svg>
+                    <span>Requests</span>
+                    <span class="nav-badge" id="navRequestsBadge" style="display:none;">0</span>
                 </button>
-                <button class="menu-item" data-action="export" id="menuExportItem" role="menuitem" style="display:none;">
-                    <span class="menu-item-label">Export to Outlook</span>
+                <button class="nav-item" data-page="changes">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M2.5 8a5.5 5.5 0 0 1 9.9-3.3"/>
+                        <polyline points="12.5,2 12.5,4.7 9.8,4.7"/>
+                        <path d="M13.5 8a5.5 5.5 0 0 1-9.9 3.3"/>
+                        <polyline points="3.5,14 3.5,11.3 6.2,11.3"/>
+                    </svg>
+                    <span>Changes</span>
+                </button>
+                <button class="nav-item" data-page="tracking">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="2,12 6,8 9,10 14,4"/>
+                        <polyline points="10,4 14,4 14,8"/>
+                    </svg>
+                    <span>Tracking</span>
+                </button>
+            </nav>
+
+            <div class="aside-spacer"></div>
+
+            <!-- Hidden action proxies — clicked by the toolbar's overflow menu and other JS hooks. -->
+            <div class="hidden-actions" aria-hidden="true">
+                <button id="addPtoBtn"><span id="addPtoBtnLabel">Manage PTO</span></button>
+                <button id="requestsBtn"><span id="requestsBtnLabel">Requests</span><span class="req-badge" id="requestsBadge" style="display:none;">0</span></button>
+                <button id="exportBtn">Export to Outlook</button>
+                <button id="recomputeBtn">Recompute Schedule</button>
+                <button id="todayBtn">Today</button>
+            </div>
+
+            <div class="aside-bottom">
+                <button class="nav-item" data-page="settings">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M6.5 1.5L6 3.2C5.5 3.4 5 3.7 4.6 4L2.9 3.3L1.3 6L2.6 7.1C2.6 7.4 2.5 7.7 2.5 8C2.5 8.3 2.6 8.6 2.6 8.9L1.3 10L2.9 12.7L4.6 12C5 12.3 5.5 12.6 6 12.8L6.5 14.5H9.5L10 12.8C10.5 12.6 11 12.3 11.4 12L13.1 12.7L14.7 10L13.4 8.9C13.4 8.6 13.5 8.3 13.5 8C13.5 7.7 13.4 7.4 13.4 7.1L14.7 6L13.1 3.3L11.4 4C11 3.7 10.5 3.4 10 3.2L9.5 1.5H6.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                        <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.4"/>
+                    </svg>
+                    <span>Settings</span>
+                </button>
+                <button class="nav-item nav-signout" id="sidebarSignOutBtn">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 14H3.5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1H6"/>
+                        <path d="M11 11l3-3-3-3"/>
+                        <line x1="14" y1="8" x2="6" y2="8"/>
+                    </svg>
+                    <span>Sign out</span>
                 </button>
             </div>
-
-            <div class="header-pathtabs-wrap">
-                <div class="path-tabs" id="pathTabs">
-                    <button class="path-tab active" data-filter="all"><span class="tab-full">All Pathologists</span><span class="tab-short">All</span></button>
-                    <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;"><span class="tab-full">Just Me</span><span class="tab-short">Just Me</span></button>
-                </div>
-            </div>
-
-            <div class="header-center">
-                <button class="today-btn" id="todayBtn">Today</button>
-                <div class="nav-group">
-                    <button class="nav-btn" id="prevBtn" title="Previous">‹</button>
-                    <button class="nav-btn" id="nextBtn" title="Next">›</button>
-                </div>
-                <button class="current-period" id="currentPeriod" type="button" title="Tap to jump to today">—</button>
-            </div>
-
-            <div class="header-viewtabs-wrap">
-                <div class="view-tabs" id="viewTabs">
-                    <button class="view-tab active" data-view="week">Week</button>
-                    <button class="view-tab" data-view="month">Month</button>
-                    <button class="view-tab" data-view="year">Year</button>
-                    <button class="view-tab" data-view="agenda">Compact</button>
-                </div>
-            </div>
-
-            <!-- Settings gear button (desktop only) -->
-            <button class="settings-btn" id="settingsBtn" aria-label="Display settings" aria-expanded="false" title="Display settings">
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                    <path d="M6.5 1.5L6 3.2C5.5 3.4 5 3.7 4.6 4L2.9 3.3L1.3 6L2.6 7.1C2.6 7.4 2.5 7.7 2.5 8C2.5 8.3 2.6 8.6 2.6 8.9L1.3 10L2.9 12.7L4.6 12C5 12.3 5.5 12.6 6 12.8L6.5 14.5H9.5L10 12.8C10.5 12.6 11 12.3 11.4 12L13.1 12.7L14.7 10L13.4 8.9C13.4 8.6 13.5 8.3 13.5 8C13.5 7.7 13.4 7.4 13.4 7.1L14.7 6L13.1 3.3L11.4 4C11 3.7 10.5 3.4 10 3.2L9.5 1.5H6.5Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>
-                    <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.25"/>
-                </svg>
-            </button>
-
-            <!-- Settings dropdown drawer -->
-            <div class="settings-drawer" id="settingsDrawer" role="dialog" aria-label="Display settings" aria-hidden="true">
-                <div class="settings-drawer-title">Display</div>
-                <label class="settings-row">
-                    <span class="settings-row-label">
-                        <span class="settings-row-name">Weekdays only</span>
-                        <span class="settings-row-desc">Hide Saturday &amp; Sunday</span>
-                    </span>
-                    <button class="toggle-switch" id="toggleWeekdays" role="switch" aria-checked="false" aria-label="Show weekdays only"></button>
-                </label>
-                <label class="settings-row">
-                    <span class="settings-row-label">
-                        <span class="settings-row-name">Hide sidebar</span>
-                        <span class="settings-row-desc">More room for the calendar</span>
-                    </span>
-                    <button class="toggle-switch" id="toggleSidebar" role="switch" aria-checked="false" aria-label="Hide sidebar"></button>
-                </label>
-                <div class="settings-drawer-divider"></div>
-                <button class="settings-signout-btn" id="settingsSignOutBtn">Sign out</button>
-            </div>
-        </header>
-
-        <aside>
-            <div class="oc-callout" id="ocCallout"></div>
-
-            <div class="side-section">
-                <span class="side-label">Pathologists</span>
-                <div id="pathList"></div>
-            </div>
-
-            <div class="side-section">
-                <span class="side-label">Services</span>
-                <div class="legend-list">
-                    <div class="legend-item"><span class="legend-swatch" style="--c:var(--svc-cyto)"></span>McHenry Cyto
-                        / Gross</div>
-                    <div class="legend-item"><span class="legend-swatch" style="--c:var(--svc-bigs)"></span>McHenry Bigs
-                    </div>
-                    <div class="legend-item"><span class="legend-swatch" style="--c:var(--svc-huntley)"></span>Huntley
-                    </div>
-                    <div class="legend-item"><span class="legend-swatch" style="--c:var(--svc-wfh)"></span>Breast Bx /
-                        WFH</div>
-                </div>
-            </div>
-
-            <button class="add-pto-btn" id="addPtoBtn"><span id="addPtoBtnLabel">Manage PTO</span></button>
-            <button class="add-pto-btn" id="requestsBtn" style="margin-top:8px; display:none;">
-                <span id="requestsBtnLabel">Requests</span>
-                <span class="req-badge" id="requestsBadge" style="display:none;">0</span>
-            </button>
-            <button class="add-pto-btn" id="exportBtn" style="margin-top:8px; display:none;">Export to Outlook</button>
-
-            <!-- Sidebar collapse/expand arrow -->
-            <button class="sidebar-toggle-btn" id="sidebarToggleBtn" aria-label="Collapse sidebar" title="Collapse sidebar">
-                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                    <path d="M9 2L4 7L9 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-            </button>
         </aside>
 
-        <main id="main"></main>
+        <!-- Skinny rounded toggle that collapses the sidebar to icons-only.
+             Sits at the right edge of the sidebar: inside it when expanded,
+             just outside it when collapsed. Hidden on mobile (where the
+             sidebar is an off-canvas drawer instead). -->
+        <button class="sidebar-toggle-btn" id="sidebarToggleBtn" type="button"
+                aria-label="Collapse sidebar" title="Collapse sidebar">
+            <svg class="sidebar-toggle-chevron" viewBox="0 0 16 16" width="10" height="10"
+                 fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="10,4 6,8 10,12"/>
+            </svg>
+        </button>
+
+        <!-- ────────────── CONTENT AREA (right side, full height) ────────────── -->
+        <div class="content-area" id="contentArea">
+
+            <!-- Schedule toolbar — only shown on the Schedule page -->
+            <div class="schedule-toolbar" id="scheduleToolbar">
+                <!-- Hamburger that opens the sidebar (mobile only) -->
+                <button class="aside-toggle-btn" id="asideToggleBtn" aria-label="Open menu">
+                    <span class="hamburger-icon"></span>
+                    <span class="menu-dot" id="asideAlertDot" aria-hidden="true"></span>
+                </button>
+
+                <div class="toolbar-left">
+                    <div class="path-tabs" id="pathTabs">
+                        <button class="path-tab active" data-filter="all"><span class="tab-full">Group</span><span class="tab-short">Group</span></button>
+                        <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;"><span class="tab-full">Individual</span><span class="tab-short">Individual</span></button>
+                    </div>
+                </div>
+
+                <div class="toolbar-center">
+                    <button class="nav-btn" id="prevBtn" title="Previous">‹</button>
+                    <button class="current-period" id="currentPeriod" type="button" title="Tap to jump to today">—</button>
+                    <button class="nav-btn" id="nextBtn" title="Next">›</button>
+                </div>
+
+                <div class="toolbar-right">
+                    <div class="view-tabs" id="viewTabs">
+                        <button class="view-tab active" data-view="week">Week</button>
+                        <button class="view-tab" data-view="month">Month</button>
+                        <button class="view-tab" data-view="year">Year</button>
+                        <button class="view-tab" data-view="agenda">Compact</button>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- Hidden pathologist list — kept for legacy renderSidebar() compatibility -->
+            <div id="pathList" hidden></div>
+            <!-- Hidden ocCallout — kept so legacy renderSidebar() can still write to it without errors -->
+            <div id="ocCallout" hidden></div>
+
+            <!-- Default page: schedule renders here -->
+            <main id="main"></main>
+
+            <!-- Requests page — admin reviews team requests; non-admin tracks own. -->
+            <div class="page-shell" id="requestsPage" hidden>
+                <div class="requests-page-content">
+                    <header class="requests-page-header">
+                        <div class="requests-page-heading">
+                            <div class="requests-page-eyebrow">Workflow</div>
+                            <h2 class="requests-page-title" id="requestsPageTitle">Requests</h2>
+                            <p class="requests-page-subtitle" id="requestsPageSubtitle">Review and decide on schedule change requests from the team.</p>
+                        </div>
+                        <div class="requests-page-summary" id="requestsPageSummary">
+                            <div class="requests-summary-stat" data-tone="pending">
+                                <span class="requests-summary-num" id="requestsSummaryPending">0</span>
+                                <span class="requests-summary-label">Pending</span>
+                            </div>
+                            <div class="requests-summary-divider" aria-hidden="true"></div>
+                            <div class="requests-summary-stat">
+                                <span class="requests-summary-num" id="requestsSummaryHistory">0</span>
+                                <span class="requests-summary-label">Resolved</span>
+                            </div>
+                        </div>
+                    </header>
+
+                    <div class="req-tabs requests-page-tabs" id="requestsPageTabs">
+                        <button class="req-tab active" data-rtab="pending">
+                            <span>Pending</span>
+                            <span class="req-tab-count" id="requestsPageTabCountPending">0</span>
+                        </button>
+                        <button class="req-tab" data-rtab="history">
+                            <span>History</span>
+                            <span class="req-tab-count" id="requestsPageTabCountHistory">0</span>
+                        </button>
+                    </div>
+
+                    <div class="req-list requests-page-list" id="requestsPageList"></div>
+                </div>
+            </div>
+
+            <!-- Changes page — log of every applied schedule change. -->
+            <div class="page-shell" id="changesPage" hidden>
+                <div class="changes-page-content">
+                    <header class="changes-page-header">
+                        <div class="changes-page-heading">
+                            <div class="changes-page-eyebrow">Activity</div>
+                            <h2 class="changes-page-title">Changes</h2>
+                            <p class="changes-page-subtitle">Every recent update to the schedule, newest first.</p>
+                        </div>
+                        <div class="changes-page-summary" id="changesPageSummary">
+                            <div class="changes-summary-stat">
+                                <span class="changes-summary-num" id="changesSummaryTotal">0</span>
+                                <span class="changes-summary-label">Logged</span>
+                            </div>
+                        </div>
+                    </header>
+
+                    <div class="chg-list" id="changesList"></div>
+                </div>
+            </div>
+
+            <!-- Tracking page (placeholder for future content) -->
+            <div class="page-shell" id="trackingPage" hidden>
+                <div class="page-placeholder">
+                    <h2>Tracking</h2>
+                    <p>This page is reserved for future content.</p>
+                </div>
+            </div>
+
+            <!-- Settings page (full main-area version of what used to be a small drawer) -->
+            <div class="page-shell" id="settingsPage" hidden>
+                <div class="settings-page-content">
+                    <h2 class="settings-page-title">Settings</h2>
+
+                    <section class="settings-section">
+                        <h3 class="settings-section-title">Display</h3>
+                        <label class="settings-row">
+                            <span class="settings-row-label">
+                                <span class="settings-row-name">Weekdays only</span>
+                                <span class="settings-row-desc">Hide Saturday &amp; Sunday from the calendar.</span>
+                            </span>
+                            <button class="toggle-switch" id="toggleWeekdays" role="switch" aria-checked="false" aria-label="Show weekdays only"></button>
+                        </label>
+                    </section>
+
+                    <section class="settings-section">
+                        <h3 class="settings-section-title">Defaults when you open the app</h3>
+                        <div class="settings-row settings-row-stack">
+                            <span class="settings-row-label">
+                                <span class="settings-row-name">Default view</span>
+                                <span class="settings-row-desc">Time range shown on launch.</span>
+                            </span>
+                            <div class="settings-segmented" id="defaultViewSeg" role="radiogroup" aria-label="Default view">
+                                <button class="seg-btn" type="button" role="radio" data-value="week">Week</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="month">Month</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="year">Year</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="agenda">Compact</button>
+                            </div>
+                        </div>
+                        <div class="settings-row settings-row-stack" id="defaultFilterRow">
+                            <span class="settings-row-label">
+                                <span class="settings-row-name">Default pathologists</span>
+                                <span class="settings-row-desc">Whose schedule to show on launch.</span>
+                            </span>
+                            <div class="settings-segmented" id="defaultFilterSeg" role="radiogroup" aria-label="Default pathologists">
+                                <button class="seg-btn" type="button" role="radio" data-value="all">Group</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="me">Individual</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- Hidden legacy elements that initSettings() expects to find. -->
+                    <div hidden>
+                        <button class="toggle-switch" id="toggleSidebar" role="switch" aria-checked="false"></button>
+                        <button id="settingsBtn"></button>
+                        <div id="settingsDrawer"></div>
+                        <button id="settingsSignOutBtn"></button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
 
     </div>
 
@@ -198,6 +341,7 @@
                 <button id="dayAddPto">+ Add PTO for this day</button>
                 <button id="dayChangeOnCall">Change who's on call</button>
                 <button id="dayChangeService">Override services this day</button>
+                <button id="dayAddLfSendout">Add Lake Forest</button>
             </div>
 
             <div class="modal-actions">
@@ -246,17 +390,6 @@
             <h3>Override services for this day</h3>
             <div class="sub" id="svcModalSub">—</div>
 
-            <div class="oc-scope-toggle" id="svcScopeToggle">
-                <label class="oc-scope-opt">
-                    <input type="radio" name="svcScope" value="day" id="svcScopeDay" checked>
-                    This day only
-                </label>
-                <label class="oc-scope-opt">
-                    <input type="radio" name="svcScope" value="week" id="svcScopeWeek">
-                    Full call week
-                </label>
-            </div>
-
             <div id="svcAssignments"></div>
 
             <div id="svcNoteWrap" style="display:none;">
@@ -272,6 +405,33 @@
             </div>
         </div>
     </div>
+    <!-- Lake Forest sendout modal -->
+    <div class="modal-back" id="lfModalBack">
+        <div class="modal">
+            <h3 id="lfModalTitle">Add Lake Forest sendout</h3>
+            <div class="sub" id="lfModalSub">—</div>
+
+            <div class="oc-scope-toggle">
+                <label class="oc-scope-opt">
+                    <input type="radio" name="lfScope" value="day" id="lfScopeDay" checked>
+                    This day only
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="lfScope" value="week" id="lfScopeWeek">
+                    Full week
+                </label>
+            </div>
+
+            <div class="lf-status" id="lfStatus" style="margin-top:14px; padding:10px 12px; border-radius:6px; font-size:12.5px;"></div>
+
+            <div class="modal-actions">
+                <button id="lfRemove" class="danger" style="display:none;">Remove sendout</button>
+                <button id="lfCancel">Cancel</button>
+                <button class="primary" id="lfSave">Add sendout</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Export to Outlook modal -->
     <div class="modal-back" id="exportModalBack">
         <div class="modal">
@@ -307,6 +467,49 @@
             <div class="modal-actions">
                 <button id="exportCancel">Cancel</button>
                 <button class="primary" id="exportDownload">Download .ics</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recompute schedule modal -->
+    <div class="modal-back" id="recomputeModalBack">
+        <div class="modal">
+            <h3>Recompute future schedule</h3>
+            <div class="sub">Recompute the future service schedule for all pathologists using the rotation rules. Pinned service overrides will be respected.</div>
+
+            <div class="oc-scope-toggle" style="margin-top:10px;">
+                <label class="oc-scope-opt">
+                    <input type="radio" name="rcMode" value="horizon" id="rcModeHorizon" checked>
+                    Starting from today
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="rcMode" value="range" id="rcModeRange">
+                    Custom date range
+                </label>
+            </div>
+
+            <div id="rcHorizonWrap" style="margin-top:14px;">
+                <label>Horizon</label>
+                <select id="rcHorizonSelect">
+                    <option value="30">Next 30 days</option>
+                    <option value="90">Next 90 days</option>
+                    <option value="180" selected>Next 180 days</option>
+                    <option value="365">Next 365 days</option>
+                </select>
+            </div>
+
+            <div id="rcRangeWrap" style="display:none;">
+                <label>Start date</label>
+                <input type="date" id="rcStart" />
+                <label>End date (inclusive)</label>
+                <input type="date" id="rcEnd" />
+            </div>
+
+            <div class="sub" id="rcRangeError" style="display:none; color:#b94e2a; margin-top:10px; margin-bottom:0;"></div>
+
+            <div class="modal-actions">
+                <button id="rcCancelBtn">Cancel</button>
+                <button class="primary" id="rcConfirmBtn">Recompute</button>
             </div>
         </div>
     </div>

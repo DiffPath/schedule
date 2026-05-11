@@ -1,4 +1,9 @@
 :root {
+    /* Height shared by the schedule toolbar and the sidebar brand section,
+       so their border-bottoms land on exactly the same pixel.
+       Both use box-sizing: border-box, so the 1px border is inside this value. */
+    --toolbar-h: 57px;
+
     --bg: #eaf3fb;
     --bg-2: #d8eaf6;
     --paper: #f3f9fe;
@@ -36,6 +41,9 @@
     --svc-bigs: #155e75;
     --svc-huntley: #65a30d;
     --svc-wfh: #7e22ce;
+    --svc-off-service: #64748b;
+    --svc-off-service-director: #64748b;
+    --svc-off-service-lab: #64748b;
 
     /* PTO styling */
     --pto-bg: #f1ebd8;
@@ -446,46 +454,6 @@ aside {
     overflow-y: auto;
 }
 
-/* ── Sidebar collapse/expand arrow button ── */
-.sidebar-toggle-btn {
-    position: absolute;
-    top: 50%;
-    right: -14px;
-    transform: translateY(-50%);
-    width: 28px;
-    height: 28px;
-    background: var(--paper);
-    border: 1px solid var(--rule);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    z-index: 20;
-    color: var(--ink-3);
-    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.10);
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
-    padding: 0;
-    flex-shrink: 0;
-}
-
-.sidebar-toggle-btn:hover {
-    background: var(--bg-2);
-    border-color: var(--ink-3);
-    color: var(--ink);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
-}
-
-.sidebar-toggle-btn svg {
-    transition: transform 0.25s ease;
-    flex-shrink: 0;
-}
-
-/* When sidebar is collapsed, flip the arrow to point right */
-.app.sidebar-hidden .sidebar-toggle-btn svg {
-    transform: rotate(180deg);
-}
-
 .side-section {
     margin-bottom: 24px;
 }
@@ -636,10 +604,11 @@ aside {
 
 .add-pto-btn {
     width: 100%;
-    background: var(--ink);
-    color: var(--paper);
-    border: none;
-    padding: 10px;
+    background: var(--paper);
+    color: var(--accent);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    padding: 10px 14px;
     border-radius: 6px;
     font-size: 12px;
     font-weight: 500;
@@ -648,12 +617,15 @@ aside {
     transition: all 0.15s ease;
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     gap: 7px;
+    text-align: left;
 }
 
 .add-pto-btn:hover {
     background: var(--accent);
+    color: var(--paper);
+    border-color: var(--accent);
 }
 
 .add-pto-btn .plus {
@@ -822,6 +794,7 @@ main {
     gap: 6px;
     padding: 5px 7px;
     border-radius: 5px;
+    border: 1px solid transparent;
     background: var(--c-bg, var(--bg));
     font-size: 11.5px;
     line-height: 1.2;
@@ -907,6 +880,34 @@ main {
     height: 5px;
     border-radius: 50%;
     background: var(--accent);
+}
+
+/* ── Lake Forest sendout banner ──────────────────────────────────── */
+/* Renders above the first pathologist row on flagged days, in both the
+   week and month views.  Compact, distinct from a pathologist row so it
+   reads as a department-wide marker rather than a per-doctor assignment. */
+.wd-row.lf-sendout {
+    background: linear-gradient(90deg, #e8d6c8 0%, #f0e0d4 100%);
+    border: 1px solid #c69477;
+    color: #6b3a1e;
+    padding: 4px 8px;
+    justify-content: center;
+}
+.wd-row.lf-sendout .lf-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #6b3a1e;
+    line-height: 1.2;
+}
+.month-view .day .wd-row.lf-sendout {
+    padding: 2px 6px;
+}
+.month-view .day .wd-row.lf-sendout .lf-label {
+    font-size: 8.5px;
+    letter-spacing: 0.08em;
 }
 
 /* ─────────────────── HOURLY GRID (week view) ─────────────────── */
@@ -1040,6 +1041,28 @@ main {
     transform: translateY(-0.5px);
 }
 
+/* Selected state — the user has clicked a procedure pill. Hitting Delete
+   while a pill is selected removes it; double-click opens the edit modal.
+   Uses box-shadow rings rather than outline/border so the pill doesn't
+   shift in the layout when toggled. */
+.proc-item.selected,
+.proc-item.proc-cat-eus.selected,
+.proc-item.proc-cat-ebus.selected,
+.proc-item.proc-cat-surgical.selected,
+.proc-item.proc-cat-fs.selected,
+.proc-item.proc-cat-hh.selected,
+.proc-item.proc-cat-mh.selected {
+    box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px var(--ink);
+    transform: translateY(-0.5px);
+}
+
+.proc-item:focus {
+    outline: none;
+}
+.proc-item:focus-visible {
+    box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px var(--ink);
+}
+
 .proc-item .proc-x {
     opacity: 0.6;
     font-size: 11px;
@@ -1142,6 +1165,61 @@ main {
     background: var(--accent);
     opacity: 0.5;
     flex-shrink: 0;
+}
+
+/* ── Time input row ──
+   Native <input type="time"> styled to match the freetext input below.
+   Sits in its own row above the location toggle. Pre-fills with the
+   half-hour slot the user double-clicked but is fully editable. */
+#procModalBack .proc-time-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+#procModalBack .proc-time-input {
+    flex: 0 0 auto;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1.5px solid var(--rule-soft);
+    border-radius: 8px;
+    outline: none;
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+    box-shadow: none;
+    min-width: 0;
+    margin: 0;
+    text-transform: none;
+}
+
+#procModalBack .proc-time-input:hover {
+    border-color: var(--ink-3);
+}
+
+#procModalBack .proc-time-input:focus,
+#procModalBack .proc-time-input:focus-visible {
+    border-color: var(--accent);
+    background: var(--paper);
+    box-shadow: 0 0 0 3px rgba(26, 82, 118, 0.14);
+}
+
+#procModalBack .proc-time-input:invalid {
+    border-color: #b94e2a;
+    box-shadow: 0 0 0 3px rgba(185, 78, 42, 0.12);
+}
+
+#procModalBack .proc-time-hint {
+    font-family: var(--sans);
+    font-size: 11px;
+    color: var(--ink-4);
+    line-height: 1.3;
+    font-style: italic;
 }
 
 /* ── Location toggle (HH / MH) ── */
@@ -1476,15 +1554,7 @@ main {
     font-style: italic;
 }
 
-.proc-freetext-wrap:focus-within {
-    border-color: var(--ink-3);
-    box-shadow: 0 0 0 3px rgba(26, 82, 118, 0.08);
-}
 
-.proc-freetext-wrap.active:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(26, 82, 118, 0.14);
-}
 
 
 
@@ -2369,6 +2439,28 @@ main {
     font-style: italic;
 }
 
+/* Lake Forest sendout — banner row inside the day-detail modal */
+.day-detail-row.lf-row {
+    background: linear-gradient(90deg, #e8d6c8 0%, #f0e0d4 100%);
+    border: 1px solid #c69477;
+    color: #6b3a1e;
+}
+.day-detail-row.lf-row .ddot {
+    background: #6b3a1e;
+}
+.day-detail-row.lf-row .dname {
+    color: #6b3a1e;
+    font-weight: 600;
+}
+.day-detail-row.lf-row .dservice {
+    color: #6b3a1e;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
 .day-detail-actions {
     display: flex;
     gap: 6px;
@@ -3181,6 +3273,75 @@ main {
     transform: translateX(16px);
 }
 
+/* Sub-heading inside the drawer (e.g. "Defaults when you open the app") */
+.settings-drawer-subhead {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-3);
+    margin-top: 14px;
+    margin-bottom: 4px;
+    padding-top: 10px;
+    border-top: 1px solid var(--rule-soft);
+}
+
+/* The subhead acts as a section divider; the row right after it shouldn't
+   draw its own top border on top of that. */
+.settings-drawer-subhead + .settings-row {
+    border-top: none !important;
+}
+
+/* Stacked variant of settings-row — label on top, control below. Used for
+   multi-option settings (segmented controls) that need horizontal room. */
+.settings-row-stack {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+}
+
+.settings-row-stack .settings-row-label {
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* Segmented control used inside the settings drawer for multi-choice prefs */
+.settings-segmented {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    background: var(--bg-2);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+}
+
+.settings-segmented .seg-btn {
+    flex: 1;
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    padding: 5px 6px;
+    font-family: inherit;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+    white-space: nowrap;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.settings-segmented .seg-btn:hover {
+    color: var(--ink);
+}
+
+.settings-segmented .seg-btn.active {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.08);
+}
+
 .settings-drawer-divider {
     height: 1px;
     background: var(--rule-soft);
@@ -3203,24 +3364,6 @@ main {
 
 .settings-signout-btn:hover {
     background: rgba(185, 78, 42, 0.07);
-}
-
-/* ─────────────────── SIDEBAR-HIDDEN APP VARIANT ─────────────────── */
-.app.sidebar-hidden {
-    grid-template-columns: 0px 1fr;
-}
-
-.app.sidebar-hidden aside {
-    width: 0;
-    padding: 0;
-    border-right: none;
-    overflow: visible; /* keep the toggle button peeking out */
-    min-width: 0;
-}
-
-/* Hide all aside content except the toggle button when collapsed */
-.app.sidebar-hidden aside > *:not(.sidebar-toggle-btn) {
-    display: none;
 }
 
 /* ─────────────────── REQUESTS UI (admin & user) ─────────────────── */
@@ -3435,6 +3578,18 @@ main {
     border-color: #b94e2a;
 }
 
+.req-card-actions button.revoke {
+    color: #7c4f2a;
+    border-color: rgba(185, 120, 42, 0.35);
+    background: rgba(216, 163, 42, 0.06);
+}
+
+.req-card-actions button.revoke:hover {
+    background: rgba(185, 78, 42, 0.09);
+    border-color: #b94e2a;
+    color: #b94e2a;
+}
+
 /* Read-only banner shown inside the standard modals when a non-admin
    is using them in "request" mode, to make the workflow obvious. */
 .req-mode-banner {
@@ -3449,3 +3604,1494 @@ main {
 }
 
 .req-mode-banner strong { font-weight: 600; }
+
+/* ── Requests PAGE (full-area version, distinct from the modal) ────────
+   Lives inside .page-shell#requestsPage. Uses .req-card / .req-tabs from
+   the modal styles above for the cards and tabs themselves; this block
+   handles the page chrome (header, summary stats, list container). */
+
+.requests-page-content {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 12px 4px 60px;
+}
+
+.requests-page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 22px;
+    margin-bottom: 22px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+.requests-page-heading {
+    min-width: 0;
+}
+
+.requests-page-eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 8px;
+}
+
+.requests-page-title {
+    font-family: var(--serif);
+    font-size: 36px;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+    margin: 0 0 8px;
+}
+
+.requests-page-subtitle {
+    font-size: 13.5px;
+    color: var(--ink-2);
+    line-height: 1.55;
+    margin: 0;
+    max-width: 56ch;
+}
+
+.requests-page-summary {
+    display: flex;
+    align-items: stretch;
+    gap: 18px;
+    padding: 12px 18px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+.requests-summary-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 56px;
+    line-height: 1;
+}
+
+.requests-summary-num {
+    font-family: var(--serif);
+    font-size: 30px;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+    margin-bottom: 6px;
+}
+
+.requests-summary-stat[data-tone="pending"] .requests-summary-num {
+    color: #8a6614;
+}
+
+.requests-summary-stat[data-tone="pending"][data-empty="true"] .requests-summary-num {
+    color: var(--ink-3);
+}
+
+.requests-summary-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+
+.requests-summary-divider {
+    width: 1px;
+    background: var(--rule-soft);
+}
+
+/* Tabs on the page: same DNA as modal tabs, slightly larger, with a count chip */
+.requests-page-tabs {
+    margin: 0 0 18px;
+}
+
+.requests-page-tabs .req-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px 7px 14px;
+    font-size: 12.5px;
+}
+
+.req-tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    background: var(--bg-2);
+    color: var(--ink-3);
+    border-radius: 9px;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0;
+    transition: all 0.15s ease;
+}
+
+.requests-page-tabs .req-tab.active .req-tab-count {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+/* List container on the page: no max-height (the page itself scrolls) */
+.requests-page-list {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+    gap: 12px;
+}
+
+/* Empty state on the page: more generous than the modal */
+.requests-page-list.req-list .empty {
+    background: var(--paper);
+    border: 1px dashed var(--rule);
+    border-radius: 10px;
+    padding: 56px 24px;
+    font-size: 13.5px;
+    font-style: normal;
+    color: var(--ink-3);
+    line-height: 1.6;
+}
+
+.requests-page-list.req-list .empty .empty-headline {
+    display: block;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 22px;
+    color: var(--ink-2);
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+}
+
+/* Slightly more breathable cards on the full page */
+.requests-page-list .req-card {
+    padding: 14px 16px;
+}
+
+/* ── Mobile: stack the header, downsize type, full-width summary ─────── */
+@media (max-width: 720px) {
+    .requests-page-content {
+        padding: 4px 0 48px;
+    }
+
+    .requests-page-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 18px;
+        padding-bottom: 18px;
+        margin-bottom: 18px;
+    }
+
+    .requests-page-title {
+        font-size: 30px;
+    }
+
+    .requests-page-summary {
+        align-self: stretch;
+        justify-content: space-around;
+        padding: 14px 12px;
+    }
+
+    .requests-summary-num {
+        font-size: 26px;
+    }
+
+    .requests-page-tabs .req-tab {
+        flex: 1;
+        justify-content: center;
+    }
+
+    .requests-page-tabs {
+        width: 100%;
+    }
+
+    .requests-page-list.req-list .empty {
+        padding: 40px 18px;
+    }
+
+    .requests-page-list.req-list .empty .empty-headline {
+        font-size: 19px;
+    }
+}
+
+/* ── Changes PAGE (full-area log of every applied schedule change) ─────
+   Lives inside .page-shell#changesPage. Shares the page chrome DNA
+   (header, eyebrow, summary stat) with the requests page, but uses its
+   own card class .chg-card so changes can have a distinct visual identity
+   from request cards (no status pill, no action buttons, just a log). */
+
+.changes-page-content {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 12px 4px 60px;
+}
+
+.changes-page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 22px;
+    margin-bottom: 22px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+.changes-page-heading {
+    min-width: 0;
+}
+
+.changes-page-eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 8px;
+}
+
+.changes-page-title {
+    font-family: var(--serif);
+    font-size: 36px;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+    margin: 0 0 8px;
+}
+
+.changes-page-subtitle {
+    font-size: 13.5px;
+    color: var(--ink-2);
+    line-height: 1.55;
+    margin: 0;
+    max-width: 56ch;
+}
+
+.changes-page-summary {
+    display: flex;
+    align-items: stretch;
+    gap: 18px;
+    padding: 12px 18px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+.changes-summary-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 56px;
+    line-height: 1;
+}
+
+.changes-summary-num {
+    font-family: var(--serif);
+    font-size: 30px;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+    margin-bottom: 6px;
+}
+
+.changes-summary-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+
+/* List container: stacked cards, separated by a subtle gap */
+.chg-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Individual change card. Distinct from request cards: no status pill,
+   no action buttons, narrower vertical padding. Uses a left-edge accent
+   tinted by the change type so categories are scannable at a glance. */
+.chg-card {
+    border: 1px solid var(--rule-soft);
+    border-radius: 7px;
+    padding: 12px 14px;
+    background: var(--paper);
+    position: relative;
+    border-left: 3px solid var(--rule);
+}
+
+.chg-card.kind-pto      { border-left-color: #8a6614; }
+.chg-card.kind-oncall   { border-left-color: #2a8c46; }
+.chg-card.kind-service  { border-left-color: #3d6fa8; }
+.chg-card.kind-recompute { border-left-color: var(--ink-3); }
+
+.chg-card-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 4px;
+}
+
+.chg-card .chg-summary {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--ink);
+    line-height: 1.45;
+    flex: 1;
+    min-width: 0;
+}
+
+.chg-card .chg-kind {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+    background: var(--bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.chg-card .chg-details {
+    font-size: 12.5px;
+    color: var(--ink-2);
+    line-height: 1.5;
+    margin: 4px 0 0;
+    white-space: pre-wrap;
+}
+
+.chg-card .chg-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--ink-3);
+    margin-top: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.chg-card .chg-meta .chg-source {
+    margin-left: 8px;
+    padding-left: 8px;
+    border-left: 1px solid var(--rule-soft);
+}
+
+/* Empty state — same friendly tone as the requests page */
+.chg-list .empty {
+    background: var(--paper);
+    border: 1px dashed var(--rule);
+    border-radius: 10px;
+    padding: 56px 24px;
+    font-size: 13.5px;
+    color: var(--ink-3);
+    line-height: 1.6;
+    text-align: center;
+}
+
+.chg-list .empty .empty-headline {
+    display: block;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 22px;
+    color: var(--ink-2);
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+}
+
+/* Mobile: stack the header, downsize type */
+@media (max-width: 720px) {
+    .changes-page-content {
+        padding: 4px 0 48px;
+    }
+
+    .changes-page-header {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 18px;
+        padding-bottom: 18px;
+        margin-bottom: 18px;
+    }
+
+    .changes-page-title {
+        font-size: 30px;
+    }
+
+    .changes-page-summary {
+        align-self: stretch;
+        justify-content: space-around;
+        padding: 14px 12px;
+    }
+
+    .changes-summary-num {
+        font-size: 26px;
+    }
+
+    .chg-list .empty {
+        padding: 40px 18px;
+    }
+
+    .chg-list .empty .empty-headline {
+        font-size: 19px;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   ╔══════════════════════════════════════════════════════════════════════╗
+   ║                                                                      ║
+   ║         REWORKED LAYOUT — full-height sidebar + content area         ║
+   ║                                                                      ║
+   ╚══════════════════════════════════════════════════════════════════════╝
+
+   Overrides the previous header-on-top + sidebar-below-header layout.
+   New structure:
+
+     .app  (CSS grid: 220px aside | 1fr content-area, single full-height row)
+     ├── aside           — full-height left panel: brand, page-nav, sign-out
+     └── content-area    — full-height flex column on the right
+         ├── schedule-toolbar  (only shown on schedule page)
+         ├── oc-callout        (above the calendar)
+         ├── main              (the calendar / schedule itself)
+         └── page-shell ×3     (requests / tracking / settings — one shown at a time)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── App grid: aside + content-area, both full height ──────────────── */
+.app {
+    grid-template-columns: 220px 1fr;
+    grid-template-rows: 1fr;
+}
+
+/* ── Sidebar collapse: .sidebar-hidden = icon-only rail ─────────────
+   When the user clicks the chevron toggle, the sidebar shrinks down to a
+   narrow column showing only icons. Text labels, the brand subtitle, and
+   section headers all hide; the icons stay centered. This replaces the
+   legacy "fully hide sidebar" behavior — the older 0px-wide rules above
+   are still in the file but are overridden by these. */
+.app.sidebar-hidden {
+    grid-template-columns: 56px 1fr;
+}
+
+.app.sidebar-hidden aside {
+    width: auto;
+    padding: 0 6px 14px;
+    border-right: 1px solid var(--rule);
+    overflow: visible; /* let the toggle button peek across the border */
+    min-width: 0;
+}
+
+/* Show all top-level aside children (override the legacy display:none) */
+.app.sidebar-hidden aside > * {
+    display: revert;
+}
+.app.sidebar-hidden .page-nav,
+.app.sidebar-hidden .aside-bottom {
+    display: flex;
+}
+
+/* Brand: hide text, show icon.png centered */
+.app.sidebar-hidden .aside-brand {
+    display: flex;          /* must re-declare: display:revert above resets this to block */
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    gap: 0;
+}
+.app.sidebar-hidden .aside-brand h1 {
+    display: none;
+}
+.app.sidebar-hidden .aside-brand .tag {
+    display: none;
+}
+.app.sidebar-hidden .aside-brand-icon {
+    display: block;
+}
+
+/* "Pages" section label: collapse to nothing but keep a little vertical rhythm */
+.app.sidebar-hidden .nav-section-label {
+    height: 0;
+    padding: 0;
+    margin: 0;
+    overflow: hidden;
+    visibility: hidden;
+}
+
+/* Nav items: icon-only, centered, no gap, no text */
+.app.sidebar-hidden .nav-item {
+    justify-content: center;
+    padding: 9px 6px;
+    gap: 0;
+}
+.app.sidebar-hidden .nav-item > span:not(.nav-icon) {
+    display: none;
+}
+/* Active nav indicator on the left edge — pull it in tight against the rail */
+.app.sidebar-hidden .nav-item.active::before {
+    left: -6px;
+}
+/* Pending-requests badge: collapse to a small dot in the corner.
+   The #navRequestsBadge is already dot-sized, so this override only
+   needs to reposition it absolutely in the icon-rail. */
+.app.sidebar-hidden .nav-item .nav-badge {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    min-width: 7px;
+    width: 7px;
+    height: 7px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0;
+    line-height: 0;
+    overflow: hidden;
+}
+
+.hidden-actions { display: none !important; }
+
+/* ── Sidebar (aside) — full height, internal flex column ───────────── */
+aside {
+    grid-column: 1;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 0 14px 14px;
+    border-right: 1px solid var(--rule);
+    background: var(--bg);
+    overflow-y: auto;
+    overflow-x: hidden;
+    height: 100vh;
+    position: sticky;
+    top: 0;
+}
+
+.aside-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    /* Same explicit height as .schedule-toolbar via the shared variable,
+       so border-bottoms land on exactly the same pixel (both box-sizing: border-box). */
+    height: var(--toolbar-h);
+    box-sizing: border-box;
+    flex-shrink: 0;
+    padding: 0 8px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+.aside-brand-icon {
+    display: none;
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+}
+
+.aside-brand h1 {
+    font-family: var(--serif);
+    font-size: 22px;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    line-height: 1;
+    margin: 0;
+}
+
+.aside-brand h1 em {
+    font-style: italic;
+    color: var(--accent);
+}
+
+.aside-brand .tag {
+    font-family: var(--mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-3);
+    align-self: flex-end;
+    padding-bottom: 2px;
+}
+
+/* Pages section */
+.page-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: 10px;
+}
+
+.nav-section-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-3);
+    padding: 6px 8px 8px;
+}
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 10px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink-2);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+    position: relative;
+}
+
+.nav-item:hover {
+    background: var(--paper);
+    color: var(--ink);
+}
+
+.nav-item.active {
+    background: var(--paper);
+    color: var(--ink);
+    border-color: var(--rule-soft);
+    box-shadow: 0 1px 2px rgba(17, 24, 39, 0.04);
+}
+
+.nav-item.active::before {
+    content: '';
+    position: absolute;
+    left: -14px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 18px;
+    background: var(--accent);
+    border-radius: 0 2px 2px 0;
+}
+
+.nav-item .nav-icon {
+    flex-shrink: 0;
+    color: var(--ink-3);
+    transition: color 0.12s ease;
+}
+
+.nav-item.active .nav-icon,
+.nav-item:hover .nav-icon {
+    color: var(--accent);
+}
+
+.nav-item > span:not(.nav-icon):not(.nav-badge) {
+    flex: 1 1 auto;
+}
+
+.nav-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: #d8492a;
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: var(--mono);
+    flex-shrink: 0;
+}
+
+/* Sidebar Requests nav dot — always a compact circle, never a numbered pill.
+   Color encodes state: amber = pending, green = approved, red = denied.
+   When an unseen decision arrives the dot pulses once to catch the eye. */
+#navRequestsBadge {
+    min-width: 8px;
+    width: 8px;
+    height: 8px;
+    padding: 0;
+    border-radius: 50%;
+    font-size: 0;
+    line-height: 0;
+    overflow: hidden;
+    background: #d8a32a;
+    transition: background 0.25s ease;
+}
+
+#navRequestsBadge.tone-pending  { background: #c49620; }
+#navRequestsBadge.tone-approved { background: #2a8c46; }
+#navRequestsBadge.tone-denied   { background: #b94e2a; }
+
+/* One-shot pulse animation when a new decision lands */
+@keyframes nav-dot-pop {
+    0%   { transform: scale(1);   opacity: 1; }
+    40%  { transform: scale(1.7); opacity: 0.9; }
+    70%  { transform: scale(0.9); opacity: 1; }
+    100% { transform: scale(1);   opacity: 1; }
+}
+#navRequestsBadge.pop {
+    animation: nav-dot-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* Spacer pushes the bottom block to the bottom of the sidebar. */
+.aside-spacer {
+    flex: 1 1 auto;
+    min-height: 16px;
+}
+
+.aside-bottom {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: 12px;
+    border-top: 1px solid var(--rule-soft);
+}
+
+.nav-item.nav-signout {
+    color: #b94e2a;
+}
+
+.nav-item.nav-signout .nav-icon {
+    color: #b94e2a;
+    opacity: 0.75;
+}
+
+.nav-item.nav-signout:hover {
+    background: rgba(185, 78, 42, 0.07);
+    color: #b94e2a;
+}
+
+.nav-item.nav-signout:hover .nav-icon {
+    color: #b94e2a;
+    opacity: 1;
+}
+
+/* ── Sidebar collapse/expand toggle ────────────────────────────────
+   A skinny rounded-rectangle button with a chevron, pinned to the right
+   edge of the sidebar. When the sidebar is expanded it sits flush inside
+   the right border; when collapsed it slides just outside the border, so
+   the user always has a visible affordance to bring it back.
+
+   It's a child of .app (not aside) so it isn't clipped by the sidebar's
+   overflow-x: hidden. The chevron rotates 180° when collapsed. */
+.sidebar-toggle-btn {
+    position: absolute;
+    top: 50%;
+    /* Right edge of the button sits exactly on the sidebar's right border */
+    left: calc(220px - 14px);
+    transform: translateY(-50%);
+    width: 14px;
+    height: 48px;
+    padding: 0;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    /* Expanded: right side (touching the border) is flat; left side is rounded */
+    border-radius: 6px 0 0 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink-3);
+    z-index: 60; /* above sidebar content, below modals (which are 1000+) */
+    transition:
+        background 0.12s ease,
+        color 0.12s ease,
+        border-color 0.12s ease,
+        box-shadow 0.12s ease;
+}
+
+.sidebar-toggle-btn:hover {
+    background: var(--bg);
+    color: var(--ink);
+    border-color: var(--ink-4);
+    box-shadow: 0 1px 3px rgba(17, 24, 39, 0.06);
+}
+
+.sidebar-toggle-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.sidebar-toggle-chevron {
+    transition: none;
+}
+
+/* Collapsed state: button sits just OUTSIDE the (now narrower) sidebar,
+   left edge touching the right border. Chevron flips to point right.
+   Now the LEFT side is flush against the border → flat there, rounded on right. */
+.app.sidebar-hidden .sidebar-toggle-btn {
+    left: 55px;
+    border-radius: 0 6px 6px 0;
+}
+.app.sidebar-hidden .sidebar-toggle-chevron {
+    transform: rotate(180deg);
+}
+
+/* Match the narrower 200px sidebar at the 1100px breakpoint */
+@media (max-width: 1100px) {
+    .sidebar-toggle-btn {
+        left: calc(200px - 14px);
+    }
+    /* Collapsed position is unchanged (still 56px) */
+}
+
+/* ── Content area on the right ─────────────────────────────────────── */
+.content-area {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg);
+    position: relative;
+}
+
+/* When the schedule page is active, the toolbar is shown and main is shown.
+   When other pages are active, the toolbar and oc-callout-wrap are hidden,
+   and the appropriate page-shell is shown. */
+.content-area > main,
+.content-area > .page-shell {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: auto;
+}
+
+/* ── Schedule toolbar ─────────────────────────────────────────────── */
+.schedule-toolbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 24px;
+    height: var(--toolbar-h);       /* explicit: keeps border-bottom in sync with .aside-brand */
+    box-sizing: border-box;
+    border-bottom: 1px solid var(--rule);
+    background: var(--bg);
+    position: relative;
+    z-index: 30;
+}
+
+.toolbar-left,
+.toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.toolbar-left { flex: 0 0 auto; min-width: 0; }
+.toolbar-right { flex: 0 0 auto; margin-left: auto; }
+
+/* Absolutely-positioned center so the period indicator sits at the true
+   horizontal center of the toolbar (and therefore the schedule below),
+   independent of how wide the left/right groups happen to be. */
+.toolbar-center {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    pointer-events: auto;
+    z-index: 1;
+}
+
+/* Override the old .current-period min-width to fit nicer in the new toolbar */
+.schedule-toolbar .current-period {
+    min-width: 200px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.schedule-toolbar .current-period:hover {
+    background: var(--paper);
+}
+
+/* ── Hamburger button for opening sidebar (mobile only) ──────────── */
+.aside-toggle-btn {
+    display: none;
+    position: relative;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+}
+
+.aside-toggle-btn:hover {
+    background: var(--paper);
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+
+.hamburger-icon,
+.hamburger-icon::before,
+.hamburger-icon::after {
+    content: '';
+    display: block;
+    width: 16px;
+    height: 1.5px;
+    background: currentColor;
+    border-radius: 1px;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+}
+.hamburger-icon { top: 50%; transform: translate(-50%, -50%); }
+.hamburger-icon::before { top: -5px; }
+.hamburger-icon::after  { top: 5px; }
+
+.aside-toggle-btn .menu-dot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #d8492a;
+    box-shadow: 0 0 0 2px var(--bg);
+    display: none;
+}
+.aside-toggle-btn.has-alert .menu-dot { display: block; }
+
+/* ── Kebab menu button (in the toolbar-right) ─────────────────────── */
+.menu-btn {
+    display: inline-flex;
+    position: relative;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    color: var(--ink-2);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    margin-left: 4px;
+}
+
+.menu-btn:hover,
+.menu-btn[aria-expanded="true"] {
+    background: var(--paper);
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+
+.kebab-icon,
+.kebab-icon::before,
+.kebab-icon::after {
+    content: '';
+    display: block;
+    width: 3px;
+    height: 3px;
+    background: currentColor;
+    border-radius: 50%;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+}
+.kebab-icon { top: 50%; transform: translate(-50%, -50%); }
+.kebab-icon::before { top: -6px; }
+.kebab-icon::after  { top: 6px; }
+
+/* The dropdown anchored to the kebab — re-position to the right side. */
+.menu-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    left: auto;
+}
+
+/* Make sure the kebab/menu wrapper holds its dropdown correctly. The button
+   and dropdown sit in toolbar-right; we use the toolbar-right as the
+   positioning context. */
+.toolbar-right { position: relative; }
+
+/* ── On-call callout (re-styled as a horizontal strip above the calendar) ── */
+.oc-callout-wrap {
+    flex-shrink: 0;
+    padding: 10px 24px 0;
+}
+
+.content-area > .oc-callout-wrap > .oc-callout {
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 6px;
+    padding: 8px 14px;
+    margin: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.content-area > .oc-callout-wrap > .oc-callout .label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.content-area > .oc-callout-wrap > .oc-callout .name {
+    font-family: var(--serif);
+    font-size: 16px;
+    line-height: 1;
+    color: var(--ink);
+    margin: 0;
+}
+
+.content-area > .oc-callout-wrap > .oc-callout .week {
+    font-size: 11px;
+    color: var(--ink-3);
+    margin: 0 0 0 auto;
+}
+
+.content-area > .oc-callout-wrap > .oc-callout:empty {
+    display: none;
+}
+
+/* Hide on-call wrap when wrap is empty */
+.oc-callout-wrap:has(> .oc-callout:empty) {
+    display: none;
+}
+
+/* ── Main pane — adjust padding for the new toolbar context ────────── */
+.content-area > main {
+    padding: 18px 24px 28px;
+    background: var(--bg);
+}
+
+/* ── Page shell (used for Requests / Tracking / Settings) ──────────── */
+.page-shell {
+    padding: 30px 28px;
+    background: var(--bg);
+}
+
+.page-placeholder {
+    max-width: 720px;
+    margin: 8vh auto 0;
+    text-align: center;
+    padding: 48px 28px;
+    background: var(--paper);
+    border: 1px dashed var(--rule);
+    border-radius: 12px;
+}
+
+.page-placeholder h2 {
+    font-family: var(--serif);
+    font-size: 30px;
+    font-weight: 400;
+    color: var(--ink);
+    margin: 0 0 10px;
+    letter-spacing: -0.01em;
+}
+
+.page-placeholder p {
+    font-size: 14px;
+    color: var(--ink-3);
+    line-height: 1.6;
+    margin: 0;
+}
+
+/* ── Settings page — full main-area version ────────────────────────── */
+.settings-page-content {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 12px 4px 40px;
+}
+
+.settings-page-title {
+    font-family: var(--serif);
+    font-size: 32px;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+    margin: 0 0 24px;
+}
+
+.settings-section {
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin-bottom: 18px;
+}
+
+.settings-section-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    color: var(--ink-3);
+    margin: 0 0 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--rule-soft);
+    font-weight: 500;
+}
+
+/* Override the existing settings-row hover behavior (which used negative
+   margins for a drawer) with cleaner hover for the page version. */
+.settings-page-content .settings-row {
+    padding: 12px 4px;
+    margin: 0;
+    border-radius: 6px;
+}
+
+.settings-page-content .settings-row:hover {
+    background: transparent;
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 4px;
+    padding-right: 4px;
+}
+
+.settings-page-content .settings-row + .settings-row {
+    border-top: 1px solid var(--rule-soft);
+}
+
+.settings-page-content .settings-row-name {
+    font-size: 14px;
+}
+
+.settings-page-content .settings-row-desc {
+    font-size: 12px;
+    margin-top: 3px;
+}
+
+.settings-page-content .settings-segmented {
+    max-width: 460px;
+}
+
+/* ── Sidebar backdrop (mobile only — appears behind open sidebar) ─── */
+.sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 30, 45, 0.32);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    z-index: 90;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+    pointer-events: none;
+}
+
+.sidebar-backdrop.open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   RESPONSIVE — narrower viewport adjustments
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Slightly narrower aside under 1100px, and tighter toolbar gaps */
+@media (max-width: 1100px) {
+    .app {
+        grid-template-columns: 200px 1fr;
+    }
+    .schedule-toolbar {
+        gap: 10px;
+        padding: 12px 18px;
+    }
+    .schedule-toolbar .current-period {
+        min-width: 180px;
+    }
+}
+
+/* Mobile: aside becomes off-canvas, hamburger reveals it */
+@media (max-width: 800px) {
+    html, body {
+        height: auto;
+        overflow: visible;
+    }
+
+    .app {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr;
+        height: auto;
+        min-height: 100vh;
+        max-width: 100%;
+        overflow-x: clip;
+    }
+
+    /* Sidebar slides in from the left */
+    aside {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 270px;
+        max-width: 84vw;
+        height: 100vh;
+        z-index: 100;
+        transform: translateX(-100%);
+        transition: transform 0.22s ease;
+        box-shadow: 8px 0 28px rgba(15, 30, 45, 0.18);
+        display: flex !important;
+    }
+
+    /* The desktop collapse toggle doesn't make sense on mobile — the
+       sidebar is an off-canvas drawer opened by the hamburger button. */
+    .sidebar-toggle-btn {
+        display: none;
+    }
+
+    .app.sidebar-open aside {
+        transform: translateX(0);
+    }
+
+    .app.sidebar-open .sidebar-backdrop {
+        display: block;
+    }
+
+    .sidebar-backdrop {
+        display: none;
+    }
+
+    .content-area {
+        grid-column: 1;
+        grid-row: 1;
+        height: auto;
+        min-height: 100vh;
+        overflow: visible;
+    }
+
+    .content-area > main,
+    .content-area > .page-shell {
+        overflow: visible;
+        min-height: 0;
+    }
+
+    /* Mobile toolbar: compact 2-row layout */
+    .schedule-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        grid-template-rows: auto auto;
+        column-gap: 8px;
+        row-gap: 8px;
+        padding: 10px 14px;
+        align-items: center;
+    }
+
+    /* Show hamburger on mobile */
+    .aside-toggle-btn {
+        display: inline-flex;
+        grid-column: 1;
+        grid-row: 1;
+        width: 40px;
+        height: 40px;
+    }
+
+    .toolbar-center {
+        position: static;
+        left: auto;
+        top: auto;
+        transform: none;
+        grid-column: 2 / span 2;
+        grid-row: 1;
+        gap: 6px;
+    }
+
+    .schedule-toolbar .current-period {
+        font-size: 17px;
+        min-width: 0;
+        flex: 0 1 auto;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding: 4px 6px;
+    }
+
+    .toolbar-center .nav-btn {
+        width: 40px;
+        height: 40px;
+        font-size: 18px;
+    }
+
+    .toolbar-left {
+        grid-column: 1 / span 2;
+        grid-row: 2;
+        flex: 1 1 auto;
+        min-width: 0;
+    }
+
+    .toolbar-right {
+        grid-column: 3;
+        grid-row: 2;
+        gap: 6px;
+    }
+
+    .toolbar-left .path-tabs {
+        flex: 1 1 auto;
+        margin-right: 0;
+    }
+
+    .toolbar-left .path-tab {
+        flex: 1 1 0;
+    }
+
+    .menu-btn {
+        margin-left: 4px;
+        width: 36px;
+        height: 36px;
+    }
+
+    /* Adjust the kebab dropdown placement on mobile so it doesn't run off-screen */
+    .menu-dropdown {
+        right: 0;
+        max-width: calc(100vw - 28px);
+        min-width: 220px;
+    }
+
+    /* Switch to short labels on mobile */
+    .tab-full  { display: none; }
+    .tab-short { display: inline; }
+
+    /* Mobile padding tweaks */
+    .content-area > main {
+        padding: 14px 12px 24px;
+    }
+
+    .oc-callout-wrap {
+        padding: 10px 12px 0;
+    }
+
+    .page-shell {
+        padding: 20px 16px;
+    }
+
+    .settings-page-content {
+        padding: 8px 4px 32px;
+    }
+
+    .settings-page-title {
+        font-size: 26px;
+    }
+
+    .settings-section {
+        padding: 14px 16px;
+    }
+}
+
+@media (max-width: 480px) {
+    .schedule-toolbar {
+        padding: 8px 10px;
+        column-gap: 6px;
+    }
+    .toolbar-center .nav-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 17px;
+    }
+    .schedule-toolbar .current-period {
+        font-size: 15px;
+        padding: 3px 4px;
+    }
+    .menu-btn {
+        width: 34px;
+        height: 34px;
+    }
+    .aside-toggle-btn {
+        width: 38px;
+        height: 38px;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   PAGE VISIBILITY — toolbar/oc-callout/main only show on schedule page;
+   page-shells hide via [hidden] attribute.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* On non-schedule pages, hide the toolbar, oc-callout, and main calendar. */
+.app[data-page="requests"] .schedule-toolbar,
+.app[data-page="changes"] .schedule-toolbar,
+.app[data-page="tracking"] .schedule-toolbar,
+.app[data-page="settings"] .schedule-toolbar { display: none; }
+
+.app[data-page="requests"] .oc-callout-wrap,
+.app[data-page="changes"] .oc-callout-wrap,
+.app[data-page="tracking"] .oc-callout-wrap,
+.app[data-page="settings"] .oc-callout-wrap { display: none; }
+
+.app[data-page="requests"] > .content-area > main,
+.app[data-page="changes"] > .content-area > main,
+.app[data-page="tracking"] > .content-area > main,
+.app[data-page="settings"] > .content-area > main { display: none; }
+
+/* For any non-schedule page, the page-shell needs a tiny breathing room
+   at the top since there's no toolbar above it. */
+.app[data-page="requests"] .page-shell,
+.app[data-page="changes"] .page-shell,
+.app[data-page="tracking"] .page-shell,
+.app[data-page="settings"] .page-shell {
+    padding-top: 30px;
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   MOBILE: keep the hamburger reachable on non-schedule pages.
+   On desktop, the sidebar is always visible so this isn't needed; on mobile
+   the sidebar is off-canvas, so we need a persistent way to reopen it.
+   ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 800px) {
+    /* Override the desktop "hide toolbar on non-schedule pages" rule on
+       mobile — instead we keep a minimal toolbar that contains just the
+       hamburger button. */
+    .app[data-page="requests"] .schedule-toolbar,
+    .app[data-page="changes"] .schedule-toolbar,
+    .app[data-page="tracking"] .schedule-toolbar,
+    .app[data-page="settings"] .schedule-toolbar {
+        display: flex;
+        grid-template-columns: none;
+        grid-template-rows: none;
+        align-items: center;
+        justify-content: flex-start;
+        padding: 10px 14px;
+        column-gap: 0;
+        row-gap: 0;
+    }
+
+    /* Hide all toolbar children except the hamburger on those pages */
+    .app[data-page="requests"] .schedule-toolbar > :not(.aside-toggle-btn),
+    .app[data-page="changes"] .schedule-toolbar > :not(.aside-toggle-btn),
+    .app[data-page="tracking"] .schedule-toolbar > :not(.aside-toggle-btn),
+    .app[data-page="settings"] .schedule-toolbar > :not(.aside-toggle-btn) {
+        display: none !important;
+    }
+}

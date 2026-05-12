@@ -3084,6 +3084,77 @@ main {
         min-height: 0;
     }
 
+    /* ── Mobile week-view readability ──
+       On phones, each day becomes a full-width stacked card, so we have
+       horizontal room to make each pathologist row genuinely scannable
+       (the whole point of the mobile week view is "what service am I on
+       each day"). We bump up the .wd-head, .wd-row, .pid, and .svc sizes,
+       give .svc room to wrap to two lines if the service name is long
+       rather than ellipsizing down to just initials. */
+
+    .week-view .wd-head {
+        padding: 12px 14px 10px;
+    }
+
+    .week-view .wd-head .dow {
+        font-size: 11px;
+        letter-spacing: 0.18em;
+    }
+
+    .week-view .wd-head .num {
+        font-size: 24px;
+    }
+
+    .week-view .wd-rows {
+        padding: 8px;
+        gap: 5px;
+    }
+
+    .week-view .wd-row {
+        padding: 8px 10px;
+        gap: 10px;
+        font-size: 13px;
+        line-height: 1.25;
+        /* Let tall rows (wrapped service text) breathe vertically
+           instead of being squished by the parent flex column. */
+        align-items: flex-start;
+    }
+
+    .week-view .wd-row .pid {
+        font-size: 12px;
+        width: 32px;
+        /* Nudge the initials down so they vertically align with the first
+           line of the service text now that the row can wrap to 2 lines. */
+        padding-top: 1px;
+    }
+
+    .week-view .wd-row .svc {
+        font-size: 13px;
+        /* Allow the service name to wrap to a second line rather than
+           ellipsizing — this is the key change for "show me what service
+           I'm on each day". */
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+    }
+
+    .week-view .wd-row .svc .swatch {
+        width: 10px;
+        height: 10px;
+        margin-right: 7px;
+        vertical-align: -1px;
+    }
+
+    .week-view .wd-row.pto .svc,
+    .week-view .wd-row.off .svc {
+        font-size: 12px;
+    }
+
+    .week-view .wd-row .oc-mark {
+        font-size: 9.5px;
+        padding: 3px 6px;
+    }
+
     /* ── Day view: mobile-optimized single-day card ──
        Wider header, full-width card, slightly chunkier hour-grid rows
        for finger-friendly taps. The .wd-hours block-level layout from

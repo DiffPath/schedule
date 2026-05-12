@@ -236,11 +236,90 @@
                 </div>
             </div>
 
-            <!-- Tracking page (placeholder for future content) -->
+            <!-- Tracking page — Conference Tracker -->
             <div class="page-shell" id="trackingPage" hidden>
-                <div class="page-placeholder">
-                    <h2>Tracking</h2>
-                    <p>This page is reserved for future content.</p>
+                <div class="tracking-page-content">
+                    <header class="tracking-page-header">
+                        <div class="tracking-page-heading">
+                            <div class="tracking-page-eyebrow">Performance</div>
+                            <h2 class="tracking-page-title">Conference Tracker</h2>
+                            <p class="tracking-page-subtitle">Track how many of each conference each pathologist has presented at.</p>
+                        </div>
+                        <div class="tracking-page-controls">
+                            <div class="tracking-year-wrap">
+                                <label for="trackingYearSelect">Period</label>
+                                <select id="trackingYearSelect"></select>
+                            </div>
+                            <button id="trackingAddBtn" class="tracking-add-btn" style="display:none;" type="button">
+                                <span class="tracking-add-plus" aria-hidden="true">+</span>
+                                <span>Add entry</span>
+                            </button>
+                        </div>
+                    </header>
+
+                    <!-- One-time historical import banner (admin only,
+                         hidden until conferenceLogImported is set) -->
+                    <div class="tracking-import-banner" id="trackingImportBanner" style="display:none;">
+                        <div class="tracking-import-icon" aria-hidden="true">
+                            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M8 2v8"/>
+                                <polyline points="5,7 8,10 11,7"/>
+                                <path d="M3 13h10"/>
+                            </svg>
+                        </div>
+                        <div class="tracking-import-text">
+                            <div class="tracking-import-title">Historical data available</div>
+                            <div class="tracking-import-sub" id="trackingImportSub">Import past entries from your 2025–2026 spreadsheet.</div>
+                        </div>
+                        <button id="trackingImportBtn" class="tracking-import-btn" type="button">Import</button>
+                    </div>
+
+                    <!-- Summary count grid -->
+                    <div class="tracking-summary-wrap">
+                        <div class="tracking-summary-scroll">
+                            <table class="tracking-summary">
+                                <thead>
+                                    <tr>
+                                        <th class="t-sum-name-col">Pathologist</th>
+                                        <th>Breast</th>
+                                        <th>Lung</th>
+                                        <th>Thoracic</th>
+                                        <th>Morning/CDH</th>
+                                        <th>Other</th>
+                                        <th class="t-sum-total-col">Total</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="trackingSummaryBody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Conference type tabs -->
+                    <div class="tracking-tabs" id="trackingTabs" role="tablist">
+                        <button class="tracking-tab active" data-conf="breast" role="tab">
+                            <span>Breast</span>
+                            <span class="tracking-tab-count" id="trackingTabCountBreast">0</span>
+                        </button>
+                        <button class="tracking-tab" data-conf="lung" role="tab">
+                            <span>Lung</span>
+                            <span class="tracking-tab-count" id="trackingTabCountLung">0</span>
+                        </button>
+                        <button class="tracking-tab" data-conf="thoracic" role="tab">
+                            <span>Thoracic</span>
+                            <span class="tracking-tab-count" id="trackingTabCountThoracic">0</span>
+                        </button>
+                        <button class="tracking-tab" data-conf="cdh" role="tab">
+                            <span>Morning/CDH</span>
+                            <span class="tracking-tab-count" id="trackingTabCountCdh">0</span>
+                        </button>
+                        <button class="tracking-tab" data-conf="other" role="tab">
+                            <span>Other</span>
+                            <span class="tracking-tab-count" id="trackingTabCountOther">0</span>
+                        </button>
+                    </div>
+
+                    <!-- Entries list for active tab -->
+                    <div class="tracking-entries" id="trackingEntries"></div>
                 </div>
             </div>
 
@@ -557,6 +636,55 @@
 
             <div class="modal-actions">
                 <button id="requestsClose">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Conference entry add/edit modal -->
+    <div class="modal-back" id="confModalBack">
+        <div class="modal">
+            <h3 id="confModalTitle">Add conference entry</h3>
+            <div class="sub" id="confModalSub">Log when a pathologist presented at a conference.</div>
+
+            <label>Conference</label>
+            <select id="confType">
+                <option value="breast">Breast Conference</option>
+                <option value="lung">Lung Conference</option>
+                <option value="thoracic">Thoracic Conference</option>
+                <option value="cdh">Morning / CDH</option>
+                <option value="other">Other Tumor Board</option>
+            </select>
+
+            <div id="confSubtypeWrap" style="display:none;">
+                <label>CDH subtype</label>
+                <select id="confSubtype">
+                    <option value="GI">GI</option>
+                    <option value="Heme">Heme</option>
+                    <option value="Thoracic">Thoracic</option>
+                    <option value="Neuro">Neuro</option>
+                </select>
+            </div>
+
+            <div id="confOtherTitleWrap" style="display:none;">
+                <label>Title</label>
+                <input type="text" id="confOtherTitle" placeholder="e.g. NMH Gyn Onc" maxlength="80" />
+            </div>
+
+            <label>Date</label>
+            <input type="date" id="confDate" />
+
+            <label>Presenter</label>
+            <select id="confPathologist"></select>
+
+            <label>Note (optional)</label>
+            <input type="text" id="confNote" placeholder="Any additional context…" maxlength="160" />
+
+            <div class="conf-form-error" id="confFormError" style="display:none;"></div>
+
+            <div class="modal-actions">
+                <button id="confDelete" class="danger" style="display:none;" type="button">Delete</button>
+                <button id="confCancel" type="button">Cancel</button>
+                <button id="confSave" class="primary" type="button">Add entry</button>
             </div>
         </div>
     </div>

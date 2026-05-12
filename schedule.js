@@ -173,14 +173,23 @@ function setPathFilter(val) {
         btn.classList.toggle('active', wantsAll ? val === 'all' : val !== 'all');
     });
 }
-let view;                             // 'week' | 'month' | 'year' | 'agenda' — assigned after settings load below
+let view;                             // 'day' | 'week' | 'month' | 'year' | 'agenda' — assigned after settings load below
 let today;
 let cursor;
+
+// Viewport helper — true when we're on a phone-sized screen. Kept in sync
+// with the @media (max-width: 800px) breakpoint used throughout the CSS.
+// Used by the initial-view selection (mobile gets Day by default) and by
+// the resize handler so the active view stays sensible across rotations.
+const MOBILE_BREAKPOINT_PX = 800;
+function isMobileViewport() {
+    return typeof window !== 'undefined' && window.innerWidth <= MOBILE_BREAKPOINT_PX;
+}
 
 // ────────────── DISPLAY SETTINGS ──────────────
 // Persisted in localStorage so preferences survive page refreshes.
 const SETTINGS_STORAGE_KEY = 'schedDisplaySettings';
-const VALID_DEFAULT_VIEWS = ['week', 'month', 'year', 'agenda'];
+const VALID_DEFAULT_VIEWS = ['day', 'week', 'month', 'year', 'agenda'];
 const VALID_DEFAULT_FILTERS = ['all', 'me'];
 const DEFAULT_SETTINGS = {
     weekdaysOnly: false,
@@ -205,7 +214,17 @@ if (!VALID_DEFAULT_FILTERS.includes(settings.defaultPathFilter)) settings.defaul
 
 // Now that settings is loaded, seed the active view from the user's
 // default-view preference (falls back to 'week' if invalid).
+//
+// Mobile override: on phone-sized viewports we always start in Day view
+// since that's the only mobile view that shows the procedure schedule
+// (week/month/year on mobile are summary-only). Desktop users get their
+// saved preference unchanged. We don't persist this override — switching
+// to a phone for one session shouldn't overwrite a deliberate desktop
+// default. The user can still tap Week / Month / Year on mobile within
+// the session if they want.
 view = settings.defaultView;
+if (isMobileViewport()) view = 'day';
+else if (view === 'day') view = 'week'; // 'day' saved but desktop loaded → fall back
 today = new Date();
 today.setHours(0, 0, 0, 0);
 cursor = new Date(today);
@@ -4236,7 +4255,9 @@ function flagHtml(date) {
 // Returns true when the cursor's current period (week/month/year)
 // already contains today — used to toggle the "off-today" affordance.
 function periodContainsToday() {
-    if (view === 'week') {
+    if (view === 'day') {
+        return sameDay(cursor, today);
+    } else if (view === 'week') {
         const s = startOfWeek(cursor);
         const e = addDays(s, 6);
         return today >= s && today <= addDays(e, 1);
@@ -4250,7 +4271,12 @@ function periodContainsToday() {
 
 function renderPeriodLabel() {
     const el = document.getElementById('currentPeriod');
-    if (view === 'week') {
+    if (view === 'day') {
+        // Single-day label: weekday + month + day, with year separated so it
+        // can be styled (and dropped to a second line on narrow screens).
+        // e.g. "Tue, May 12 2026"
+        el.innerHTML = `${DOW[cursor.getDay()]}, ${MONTHS_SHORT[cursor.getMonth()]} ${cursor.getDate()} <span class="year">${cursor.getFullYear()}</span>`;
+    } else if (view === 'week') {
         const s = startOfWeek(cursor);
         const e = addDays(s, 6);
         const sameMonth = s.getMonth() === e.getMonth();
@@ -4266,6 +4292,97 @@ function renderPeriodLabel() {
     }
     // Show the small "•" affordance + tap-to-today cursor when not viewing today
     el.classList.toggle('off-today', !periodContainsToday());
+}
+
+// ────────────── DAY VIEW ──────────────
+// Mobile-first single-day view. Reuses the same .week-day card structure
+// as the week view (header / pathologist rows / hour grid) so all existing
+// CSS, click handlers, drag-and-drop, and procedure pill logic Just Works
+// — the only difference is we render one day at full width instead of a
+// grid of seven narrow columns. This is the only mobile view that shows
+// the procedure schedule (week/month/year on mobile are summary-only).
+function renderDay() {
+    const main = document.getElementById('main');
+    // Normalize cursor to midnight so date math/comparisons are stable.
+    const d = new Date(cursor);
+    d.setHours(0, 0, 0, 0);
+
+    const td = sameDay(d, today);
+    const we = isWeekend(d);
+    const holiday = getFederalHoliday(d);
+    const dayAssign = getDayAssignments(d);
+
+    const activePathologists = currentPathFilter === 'all'
+        ? pathologists
+        : pathologists.filter(p => p.id === parseInt(currentPathFilter));
+
+    let rows = '';
+
+    // Lake Forest sendout banner sits above the first pathologist row
+    // (same as in week view).
+    if (isLfSendoutDay(d)) {
+        rows += `<div class="wd-row lf-sendout" title="Lake Forest sendout">
+        <span class="lf-label">LF sendout</span>
+      </div>`;
+    }
+
+    activePathologists.forEach(p => {
+        const a = dayAssign[p.id];
+        if (a.type === 'blank') return; // pre-cutoff date — render no rows
+        const oc = a.onCall ? `<span class="oc-mark" title="On call this week">On Call</span>` : '';
+        if (a.type === 'pto') {
+            rows += `<div class="wd-row pto" style="--c:${p.color}">
+          <span class="pid">${p.initials}</span>
+          <span class="svc">PTO</span>
+          ${oc}
+        </div>`;
+        } else if (a.type === 'off_site') {
+            const cbg = pathBgColor(p.color);
+            rows += `<div class="wd-row off-site" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+          <span class="pid">${p.initials}</span>
+          <span class="svc"><span class="swatch"></span>${a.service.short}</span>
+          ${oc}
+        </div>`;
+        } else if (a.type === 'off') {
+            rows += `<div class="wd-row off" style="--c:${p.color}">
+          <span class="pid">${p.initials}</span>
+          <span class="svc">${(we || holiday) ? 'Off' : 'Unstaffed'}</span>
+          ${oc}
+        </div>`;
+        } else {
+            const cbg = pathBgColor(p.color);
+            rows += `<div class="wd-row" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+          <span class="pid">${p.initials}</span>
+          <span class="svc"><span class="swatch"></span>${a.service.short}</span>
+          ${oc}
+        </div>`;
+        }
+    });
+
+    const holidayBadge = holiday ? `<span class="holiday-badge" title="${holiday}">${holiday}</span>` : '';
+    const hoursHtml = renderHourGrid(d);
+
+    // The .day-view wrapper is just a layout container — the actual card
+    // uses the same .week-day class as week view so all styling/handlers
+    // line up. The .day-view-card modifier lets CSS opt into the wider,
+    // mobile-optimized treatment (bigger header, full-width hour grid).
+    const html = `<div class="day-view">
+      <div class="week-day day-view-card ${td ? 'today' : ''} ${we ? 'weekend' : ''} ${holiday ? 'holiday' : ''}" data-date="${fmt(d)}">
+        <div class="wd-head day-view-head">
+          <div class="day-view-head-main">
+            <span class="dow">${DOW[d.getDay()]}</span>
+            <span class="num">${d.getDate()}${flagHtml(d)}</span>
+            <span class="day-view-month">${MONTHS_SHORT[d.getMonth()]}</span>
+          </div>
+          ${holidayBadge}
+        </div>
+        <div class="wd-rows">${rows}</div>
+        ${hoursHtml}
+      </div>
+    </div>`;
+    main.innerHTML = html;
+    attachDayClickHandlers();
+    attachHourGridHandlers();
 }
 
 // ────────────── WEEK VIEW ──────────────
@@ -6584,7 +6701,8 @@ function renderAgenda() {
 
 function renderMain() {
     renderPeriodLabel();
-    if (view === 'week') renderWeek();
+    if (view === 'day') renderDay();
+    else if (view === 'week') renderWeek();
     else if (view === 'month') renderMonth();
     else if (view === 'year') renderYear();
     else if (view === 'agenda') renderAgenda(); // Add this line
@@ -6608,13 +6726,15 @@ document.getElementById('viewTabs').addEventListener('click', e => {
 });
 
 document.getElementById('prevBtn').addEventListener('click', () => {
-    if (view === 'week') cursor = addDays(cursor, -7);
+    if (view === 'day') cursor = addDays(cursor, -1);
+    else if (view === 'week') cursor = addDays(cursor, -7);
     else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
     else cursor = new Date(cursor.getFullYear() - 1, cursor.getMonth(), 1);
     renderMain();
 });
 document.getElementById('nextBtn').addEventListener('click', () => {
-    if (view === 'week') cursor = addDays(cursor, 7);
+    if (view === 'day') cursor = addDays(cursor, 1);
+    else if (view === 'week') cursor = addDays(cursor, 7);
     else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
     else cursor = new Date(cursor.getFullYear() + 1, cursor.getMonth(), 1);
     renderMain();
@@ -6630,6 +6750,29 @@ document.getElementById('pathTabs').addEventListener('click', e => {
     const filter = btn.dataset.filter === 'me' ? String(loggedInPathId) : 'all';
     setPathFilter(filter);
     renderMain();
+});
+
+// Viewport-aware view fallback: the Day tab is mobile-only (hidden on
+// desktop via CSS), so if the window crosses the mobile breakpoint while
+// Day view is active we swap to Week so the user isn't stranded on a tab
+// they can no longer see. We don't auto-switch the other direction
+// (desktop → mobile keeps the current view, e.g. week) — that respects
+// user intent if they deliberately picked Week mid-session. The initial
+// "mobile gets Day" override only fires on first load.
+let _wasMobileViewport = isMobileViewport();
+window.addEventListener('resize', () => {
+    const nowMobile = isMobileViewport();
+    if (_wasMobileViewport === nowMobile) return; // no breakpoint crossing
+    _wasMobileViewport = nowMobile;
+    if (!nowMobile && view === 'day') {
+        // Resized up to desktop while in Day view — fall back to Week so
+        // the user has a visible active tab.
+        view = 'week';
+        document.querySelectorAll('.view-tab').forEach(t => {
+            t.classList.toggle('active', t.dataset.view === view);
+        });
+        renderMain();
+    }
 });
 
 // ────────────── MOBILE HAMBURGER MENU ──────────────
@@ -6708,6 +6851,7 @@ document.addEventListener('keydown', e => {
     if (e.key === 'ArrowLeft') document.getElementById('prevBtn').click();
     else if (e.key === 'ArrowRight') document.getElementById('nextBtn').click();
     else if (e.key === 't' || e.key === 'T') document.getElementById('todayBtn').click();
+    else if (e.key === 'd' || e.key === 'D') document.querySelector('.view-tab[data-view="day"]').click();
     else if (e.key === '1') document.querySelector('.view-tab[data-view="week"]').click();
     else if (e.key === '2') document.querySelector('.view-tab[data-view="month"]').click();
     else if (e.key === '3') document.querySelector('.view-tab[data-view="year"]').click();

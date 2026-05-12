@@ -2873,8 +2873,12 @@ main {
     }
 
     .app {
-        /* No sidebar on mobile — single column, header then main */
-        grid-template-columns: 1fr;
+        /* No sidebar on mobile — single column, header then main.
+           !important is needed because a later unconditional rule
+           (.app { grid-template-columns: 220px 1fr; } around line 4333)
+           appears further down in the file and would otherwise win on
+           every viewport, including phones. */
+        grid-template-columns: 1fr !important;
         grid-template-rows: auto 1fr;
         height: auto;
         min-height: 100vh;

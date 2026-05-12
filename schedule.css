@@ -645,9 +645,10 @@ main {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
     gap: 6px;
-    /* Auto-size to content so the hourly grid below each day's
-       pathologist assignments can grow naturally. */
-    min-height: 540px;
+    /* Fill the remaining height of <main>; each day column stretches to
+       match via align-items:stretch (the grid default). */
+    flex: 1 1 0;
+    min-height: 0;
 }
 
 .week-day {
@@ -656,6 +657,7 @@ main {
     border-radius: 8px;
     display: flex;
     flex-direction: column;
+    min-height: 0;
     overflow: hidden;
     cursor: pointer;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -701,6 +703,7 @@ main {
     align-items: center;
     justify-content: space-between;
     gap: 6px;
+    flex-shrink: 0;
 }
 
 .wd-head .dow {
@@ -784,6 +787,7 @@ main {
     display: flex;
     flex-direction: column;
     gap: 4px;
+    flex-shrink: 0;
     /* No flex:1 — keep this section sized to its content so the
        hourly grid below it sits flush right after the assignments. */
 }
@@ -918,6 +922,16 @@ main {
     border-top: 1px solid var(--rule-soft);
     background: var(--paper);
     /* Don't bubble clicks up to .week-day (which would open the day modal) */
+    /* Fill whatever height remains in the day column after .wd-head and
+       .wd-rows. Flex column lets .hour-row children share that space.
+       overflow-y:auto adds a scrollbar only when pills push total row
+       height beyond the available space. */
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .wd-hours-head {
@@ -929,14 +943,19 @@ main {
     color: var(--ink-3);
     border-bottom: 1px solid var(--rule-soft);
     background: var(--paper-2);
+    flex-shrink: 0;
 }
 
 .hour-row {
     display: grid;
     grid-template-columns: 44px 1fr;
-    min-height: 22px;
+    min-height: 22px;   /* floor — preserved as the "default" slot height */
     user-select: none;
     cursor: pointer;
+    /* flex:1 0 auto: grow equally to fill .wd-hours; flex-shrink:0 + the
+       implicit min-height:auto floor means a slot with multiple pills
+       expands rather than overlapping, triggering .wd-hours to scroll. */
+    flex: 1 0 auto;
 }
 
 /* The bottom border of each row separates it from the row below.
@@ -1061,6 +1080,23 @@ main {
 }
 .proc-item:focus-visible {
     box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px var(--ink);
+}
+
+/* ── Drag-and-drop ── */
+
+/* The pill being dragged: dim it so users see the ghost is a copy */
+.proc-item.dragging {
+    opacity: 0.35;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+/* Drop-zone highlight: the target hour-row glows when a pill hovers over it */
+.hour-row.drag-over .hour-slot {
+    background: var(--accent-soft);
+    outline: 1.5px dashed var(--accent);
+    outline-offset: -1px;
+    border-radius: 3px;
 }
 
 .proc-item .proc-x {
@@ -2920,6 +2956,9 @@ main {
         overflow: visible;
         padding: 14px 12px 24px;
         height: auto;
+        /* Undo desktop fill-chain: on mobile, day cards stack and scroll
+           naturally so no fixed-height flex chain is needed. */
+        display: block;
     }
 
     /* Week view: each day as its own card, stacked */
@@ -2928,6 +2967,16 @@ main {
         min-height: auto;
         height: auto;
         gap: 8px;
+        flex: none;   /* cancel desktop flex:1 fill */
+    }
+
+    /* Hourly grids: revert to natural content height; the page scrolls. */
+    .wd-hours {
+        flex: none;
+        min-height: 0;
+        display: block;
+        overflow-y: visible;
+        overflow-x: visible;
     }
 
     .week-day {
@@ -2938,6 +2987,7 @@ main {
        cleanly, and make sure double-tap works (no zoom). */
     .wd-hours .hour-row {
         min-height: 26px;
+        flex: none;   /* cancel desktop flex:1 fill */
     }
 
     .wd-hours .hour-slot {
@@ -3940,6 +3990,7 @@ main {
 .chg-card.kind-oncall   { border-left-color: #2a8c46; }
 .chg-card.kind-service  { border-left-color: #3d6fa8; }
 .chg-card.kind-recompute { border-left-color: var(--ink-3); }
+.chg-card.kind-conference { border-left-color: #7e22ce; }
 
 .chg-card-head {
     display: flex;
@@ -4465,7 +4516,19 @@ aside {
 /* When the schedule page is active, the toolbar is shown and main is shown.
    When other pages are active, the toolbar and oc-callout-wrap are hidden,
    and the appropriate page-shell is shown. */
-.content-area > main,
+
+/* <main> is the root of the vertical fill chain: it takes remaining height
+   after the toolbar and becomes a flex column so .week-view can stretch
+   to fill it. overflow:hidden keeps scrolling inside .wd-hours only. */
+.content-area > main {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Page shells (Requests / Changes / Tracking / Settings) scroll themselves. */
 .content-area > .page-shell {
     flex: 1 1 auto;
     min-height: 0;
@@ -5094,4 +5157,544 @@ aside {
     .app[data-page="settings"] .schedule-toolbar > :not(.aside-toggle-btn) {
         display: none !important;
     }
+}
+/* ════════════════════════════════════════════════════════════════════
+   TRACKING PAGE — Conference Tracker
+   Lives inside .page-shell#trackingPage. Header DNA shares the family
+   look with .changes-page-* and .requests-page-*. Tracks how many of
+   each conference each pathologist has presented at. */
+
+.tracking-page-content {
+    max-width: 1020px;
+    margin: 0 auto;
+    padding: 12px 4px 60px;
+}
+
+.tracking-page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 22px;
+    margin-bottom: 22px;
+    border-bottom: 1px solid var(--rule-soft);
+    flex-wrap: wrap;
+}
+
+.tracking-page-heading {
+    min-width: 0;
+    flex: 1 1 280px;
+}
+
+.tracking-page-eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 8px;
+}
+
+.tracking-page-title {
+    font-family: var(--serif);
+    font-size: 36px;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+    margin: 0 0 8px;
+}
+
+.tracking-page-subtitle {
+    font-size: 13.5px;
+    color: var(--ink-2);
+    line-height: 1.55;
+    margin: 0;
+    max-width: 56ch;
+}
+
+.tracking-page-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.tracking-year-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.tracking-year-wrap label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    cursor: pointer;
+}
+
+#trackingYearSelect {
+    padding: 7px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    font-family: var(--sans);
+    font-size: 12.5px;
+    background: var(--paper);
+    color: var(--ink);
+    cursor: pointer;
+    min-width: 170px;
+}
+
+#trackingYearSelect:focus {
+    outline: 1px solid var(--ink-2);
+    border-color: var(--ink-2);
+}
+
+.tracking-add-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 5px;
+    background: var(--ink);
+    color: var(--paper);
+    border: 1px solid var(--ink);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    height: 34px;
+}
+
+.tracking-add-btn:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.tracking-add-plus {
+    font-size: 16px;
+    line-height: 1;
+    margin-top: -1px;
+}
+
+/* ── Historical import banner ────────────────────────────────────── */
+.tracking-import-banner {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    margin-bottom: 22px;
+    background: var(--accent-soft);
+    border: 1px solid var(--rule-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 7px;
+}
+
+.tracking-import-icon {
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.tracking-import-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.tracking-import-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+}
+
+.tracking-import-sub {
+    font-size: 12px;
+    color: var(--ink-2);
+    line-height: 1.45;
+}
+
+.tracking-import-btn {
+    padding: 7px 16px;
+    border-radius: 5px;
+    background: var(--ink);
+    color: var(--paper);
+    border: 1px solid var(--ink);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.tracking-import-btn:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+
+.tracking-import-btn:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+@media (max-width: 720px) {
+    .tracking-import-banner {
+        flex-wrap: wrap;
+        gap: 10px 12px;
+        padding: 11px 13px;
+    }
+    .tracking-import-btn {
+        width: 100%;
+        margin-top: 2px;
+    }
+}
+
+/* ── Summary count grid ─────────────────────────────────────────── */
+.tracking-summary-wrap {
+    margin-bottom: 28px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.tracking-summary-scroll {
+    overflow-x: auto;
+}
+
+table.tracking-summary {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+table.tracking-summary th,
+table.tracking-summary td {
+    padding: 12px 14px;
+    text-align: center;
+    border-bottom: 1px solid var(--rule-soft);
+    white-space: nowrap;
+}
+
+table.tracking-summary thead th {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--paper-2);
+    border-bottom: 1px solid var(--rule);
+}
+
+table.tracking-summary tbody tr:last-child td {
+    border-bottom: none;
+}
+
+table.tracking-summary .t-sum-name-col {
+    text-align: left;
+    width: 1%;
+    min-width: 160px;
+}
+
+table.tracking-summary tbody .t-sum-name {
+    text-align: left;
+    font-weight: 500;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+table.tracking-summary tbody .t-sum-name .t-sum-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--c, var(--ink-3));
+    flex-shrink: 0;
+}
+
+table.tracking-summary tbody .t-sum-name .t-sum-initials {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--ink-3);
+    letter-spacing: 0.08em;
+}
+
+table.tracking-summary tbody td {
+    color: var(--ink-2);
+    font-weight: 400;
+}
+
+table.tracking-summary tbody td.t-sum-zero {
+    color: var(--ink-4);
+}
+
+table.tracking-summary .t-sum-total-col {
+    background: var(--paper-2);
+    border-left: 1px solid var(--rule-soft);
+}
+
+table.tracking-summary tbody td.t-sum-total {
+    background: var(--paper-2);
+    border-left: 1px solid var(--rule-soft);
+    color: var(--ink);
+    font-weight: 600;
+}
+
+/* ── Tabs ───────────────────────────────────────────────────────── */
+.tracking-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--rule-soft);
+    margin-bottom: 18px;
+    overflow-x: auto;
+}
+
+.tracking-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 14px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink-3);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.tracking-tab:hover {
+    color: var(--ink-2);
+}
+
+.tracking-tab.active {
+    color: var(--ink);
+    border-bottom-color: var(--ink);
+}
+
+.tracking-tab-count {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--ink-3);
+    letter-spacing: 0.04em;
+    min-width: 18px;
+    text-align: center;
+}
+
+.tracking-tab.active .tracking-tab-count {
+    background: var(--ink);
+    color: var(--paper);
+}
+
+/* ── Entries list ───────────────────────────────────────────────── */
+.tracking-entries {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.tracking-entry {
+    display: grid;
+    grid-template-columns: 110px 1fr auto auto;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 7px;
+    border-left: 3px solid var(--c, var(--rule));
+    transition: border-color 0.15s ease;
+}
+
+.tracking-entry .te-date {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.tracking-entry .te-main {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.tracking-entry .te-presenter {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.tracking-entry .te-presenter .te-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--c, var(--ink-3));
+}
+
+.tracking-entry .te-meta {
+    font-size: 12px;
+    color: var(--ink-2);
+    line-height: 1.4;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+}
+
+.tracking-entry .te-meta .te-tag {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 1px 6px;
+    background: var(--bg);
+    color: var(--ink-3);
+    border-radius: 3px;
+}
+
+.tracking-entry .te-meta .te-title {
+    font-style: italic;
+    color: var(--ink-2);
+}
+
+.tracking-entry .te-meta .te-note {
+    color: var(--ink-3);
+}
+
+.tracking-entry .te-edit-btn {
+    background: transparent;
+    border: 1px solid var(--rule);
+    color: var(--ink-3);
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    font-family: var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.tracking-entry .te-edit-btn:hover {
+    border-color: var(--ink-2);
+    color: var(--ink);
+    background: var(--bg);
+}
+
+/* Empty state for entries list */
+.tracking-entries .empty {
+    background: var(--paper);
+    border: 1px dashed var(--rule);
+    border-radius: 10px;
+    padding: 56px 24px;
+    font-size: 13.5px;
+    color: var(--ink-3);
+    line-height: 1.6;
+    text-align: center;
+}
+
+.tracking-entries .empty .empty-headline {
+    display: block;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 22px;
+    color: var(--ink-2);
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+}
+
+/* Conference modal form error */
+.conf-form-error {
+    margin-top: 12px;
+    padding: 8px 10px;
+    border-radius: 5px;
+    background: rgba(185, 78, 42, 0.08);
+    border: 1px solid rgba(185, 78, 42, 0.25);
+    color: #b94e2a;
+    font-size: 12px;
+}
+
+/* ── Mobile responsive ───────────────────────────────────────────── */
+@media (max-width: 720px) {
+    .tracking-page-content {
+        padding: 8px 2px 60px;
+    }
+
+    .tracking-page-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 14px;
+        padding-bottom: 16px;
+        margin-bottom: 16px;
+    }
+
+    .tracking-page-title {
+        font-size: 28px;
+    }
+
+    .tracking-page-controls {
+        width: 100%;
+        gap: 8px;
+    }
+
+    .tracking-year-wrap {
+        flex: 1 1 auto;
+    }
+
+    #trackingYearSelect {
+        width: 100%;
+        min-width: 0;
+    }
+
+    table.tracking-summary {
+        font-size: 12px;
+    }
+
+    table.tracking-summary th,
+    table.tracking-summary td {
+        padding: 9px 10px;
+    }
+
+    table.tracking-summary .t-sum-name-col {
+        min-width: 130px;
+    }
+
+    .tracking-entry {
+        grid-template-columns: 1fr auto;
+        grid-template-areas:
+            "date  edit"
+            "main  main";
+        gap: 8px 12px;
+        padding: 10px 12px;
+    }
+
+    .tracking-entry .te-date  { grid-area: date; }
+    .tracking-entry .te-main  { grid-area: main; }
+    .tracking-entry .te-edit-btn { grid-area: edit; align-self: start; }
 }

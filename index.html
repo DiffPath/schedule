@@ -169,6 +169,10 @@
 
                 <div class="toolbar-right">
                     <div class="view-tabs" id="viewTabs">
+                        <!-- Day view: mobile-first single-day view with the procedure schedule.
+                             Hidden on desktop via CSS — desktop has plenty of room for the full
+                             week view, so the Day tab only appears on phones/narrow tablets. -->
+                        <button class="view-tab view-tab-day" data-view="day">Day</button>
                         <button class="view-tab active" data-view="week">Week</button>
                         <button class="view-tab" data-view="month">Month</button>
                         <button class="view-tab" data-view="year">Year</button>

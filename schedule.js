@@ -12,6 +12,17 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
+// Ensure the manager account (Kathleen) has her default password set in
+// Firebase. This runs once on first load; subsequent loads are no-ops.
+(function seedManagerPassword() {
+    const ref = db.ref('scheduler/passwords/' + 'kathleen');
+    ref.once('value').then(snap => {
+        if (!snap.exists() || !snap.val()) {
+            ref.set('discover');
+        }
+    });
+})();
+
 // ────────────── SEEDS (only used if Firebase is empty) ──────────────
 const SEED_PATHOLOGISTS = [
     { id: 1, name: 'Dr. Michael Moravek', initials: 'MM', color: 'var(--p1)', vacationAllotted: 35 },
@@ -124,6 +135,9 @@ const PROCEDURE_LOCATIONS = ['HH', 'MH'];
 const ADMIN_NAME_RE = /Michael\s+Moravek/i;
 // Special non-pathologist user that can only edit the procedure schedule
 const GROSS_ROOM_ID = 'gross_room';
+// Conference-tracker manager: can view the full schedule and edit the
+// conference tracking page, but cannot manage pathologist assignments or PTO.
+const MANAGER_ID = 'kathleen';
 let requests = {};            // { reqKey: { ...request fields } } from Firebase
 let requestsReady = false;    // becomes true after first snapshot resolves
 let _seenRequestKeys = null;  // for "new request arrived" detection
@@ -143,6 +157,12 @@ function isAdmin(pathId) {
 // Gross room can edit the procedure schedule but not the pathologist schedule.
 function isGrossRoom() {
     return loggedInPathId === GROSS_ROOM_ID;
+}
+
+// Returns true when the conference-tracker manager (Kathleen) is signed in.
+// She can view the full schedule and edit the conference tracking page.
+function isManager() {
+    return loggedInPathId === MANAGER_ID;
 }
 
 // Update the path-tab toggle to reflect val ('all' or a stringified pathId)
@@ -231,7 +251,7 @@ function applySettings() {
     // Gross-room is always forced to "All" regardless of the default-filter
     // setting, so hide that row to avoid showing a control that has no effect.
     const dfRow = document.getElementById('defaultFilterRow');
-    if (dfRow) dfRow.style.display = isGrossRoom() ? 'none' : '';
+    if (dfRow) dfRow.style.display = (isGrossRoom() || isManager()) ? 'none' : '';
 
     // Sync sidebar arrow button aria-label
     const stb = document.getElementById('sidebarToggleBtn');
@@ -253,6 +273,7 @@ const AUTH_STORAGE_KEY = 'schedCurrentPathId';
 let loggedInPathId = (() => {
     const raw = localStorage.getItem(AUTH_STORAGE_KEY);
     if (raw === GROSS_ROOM_ID) return GROSS_ROOM_ID;
+    if (raw === MANAGER_ID) return MANAGER_ID;
     const n = parseInt(raw, 10);
     return Number.isFinite(n) ? n : null;
 })();
@@ -1468,7 +1489,7 @@ function checkReady() {
         // Once data is loaded, decide whether to show the login screen.
         // If a returning user is already signed in on this device, we just
         // verify their stored id still corresponds to a real pathologist.
-        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && !pathologists.find(p => p.id === loggedInPathId)) {
+        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && !pathologists.find(p => p.id === loggedInPathId)) {
             // Stored id no longer matches anyone — clear it and force re-login
             localStorage.removeItem(AUTH_STORAGE_KEY);
             loggedInPathId = null;
@@ -1480,7 +1501,7 @@ function checkReady() {
             // preference. Gross room is always forced to all pathologists.
             // Otherwise, honor the user's defaultPathFilter setting ('all'
             // or 'me').
-            if (isGrossRoom()) {
+            if (isGrossRoom() || isManager()) {
                 setPathFilter('all');
             } else if (settings.defaultPathFilter === 'all') {
                 setPathFilter('all');
@@ -1500,8 +1521,8 @@ function populatePathFilter() {
     const meTab = document.getElementById('pathTabMe');
     if (!meTab) return;
 
-    // Gross room: always show all pathologists with no option to switch
-    if (isGrossRoom()) {
+    // Gross room / manager: always show all pathologists with no option to switch
+    if (isGrossRoom() || isManager()) {
         meTab.style.display = 'none';
         setPathFilter('all');
         return;
@@ -1532,7 +1553,8 @@ function showLoginOverlay() {
     sel.innerHTML = '<option value="">— Select your name —</option>' +
         pathologists.map(p => `<option value="${p.id}">${p.name}</option>`).join('') +
         '<option value="" disabled>──────────────</option>' +
-        `<option value="${GROSS_ROOM_ID}">Gross Room</option>`;
+        `<option value="${GROSS_ROOM_ID}">Gross Room</option>` +
+        `<option value="${MANAGER_ID}">Kathleen</option>`;
     pwInput.value = '';
     errEl.textContent = '';
     overlay.style.display = 'flex';
@@ -1559,7 +1581,8 @@ async function attemptLogin() {
     if (!pwAttempt) { errEl.textContent = 'Please enter your password.'; return; }
 
     const isGrossRoomLogin = pidRaw === GROSS_ROOM_ID;
-    const pid = isGrossRoomLogin ? GROSS_ROOM_ID : parseInt(pidRaw, 10);
+    const isManagerLogin = pidRaw === MANAGER_ID;
+    const pid = isGrossRoomLogin ? GROSS_ROOM_ID : (isManagerLogin ? MANAGER_ID : parseInt(pidRaw, 10));
     btn.disabled = true;
     btn.textContent = 'Signing in…';
     try {
@@ -1581,7 +1604,7 @@ async function attemptLogin() {
         // Refresh the filter tabs. Gross room always shows all; individual
         // pathologists honor their defaultPathFilter setting ('all' or 'me').
         populatePathFilter();
-        if (!isGrossRoomLogin) {
+        if (!isGrossRoomLogin && !isManagerLogin) {
             setPathFilter(settings.defaultPathFilter === 'all' ? 'all' : String(pid));
         }
         renderAll();
@@ -1807,9 +1830,9 @@ function renderSidebar() {
     const rcBtn = document.getElementById('recomputeBtn');
     if (rcBtn) rcBtn.style.display = admin ? '' : 'none';
 
-    // Gross room cannot manage PTO or view requests at all — hide those buttons
+    // Gross room / manager cannot manage PTO or view requests at all — hide those buttons
     const addPtoBtnEl = document.getElementById('addPtoBtn');
-    if (addPtoBtnEl) addPtoBtnEl.style.display = grossRoom ? 'none' : '';
+    if (addPtoBtnEl) addPtoBtnEl.style.display = (grossRoom || isManager()) ? 'none' : '';
 
     // The "Manage PTO" label changes to "Request PTO" for non-admins (not gross room)
     const ptoBtnLabel = document.getElementById('addPtoBtnLabel');
@@ -1851,6 +1874,9 @@ function renderSidebar() {
     if (sInfo && sWho) {
         if (isGrossRoom()) {
             sWho.textContent = 'Signed in · Gross Room';
+            sInfo.style.display = 'flex';
+        } else if (isManager()) {
+            sWho.textContent = 'Signed in · Kathleen';
             sInfo.style.display = 'flex';
         } else if (loggedInPathId !== null) {
             const me = pathologists.find(p => p.id === loggedInPathId);
@@ -2109,16 +2135,16 @@ function updateRequestsBadge() {
     // shared menu-dropdown click handler below)
     const menuRcItem = document.getElementById('menuRecomputeItem');
 
-    // Hide entirely if not signed in OR if gross room (who cannot manage requests or PTO)
-    if (loggedInPathId === null || isGrossRoom()) {
+    // Hide entirely if not signed in OR if gross room / manager (who cannot manage requests or PTO)
+    if (loggedInPathId === null || isGrossRoom() || isManager()) {
         if (btn) btn.style.display = 'none';
         if (menuBtn) menuBtn.classList.remove('has-alert');
         if (menuReqItem) menuReqItem.style.display = 'none';
         if (menuExportItem) menuExportItem.style.display = 'none';
         if (menuRcItem) menuRcItem.style.display = 'none';
-        // Also hide the PTO menu item for gross room
+        // Also hide the PTO menu item for gross room / manager
         const menuPtoItem = document.querySelector('.menu-item[data-action="pto"]');
-        if (menuPtoItem) menuPtoItem.style.display = isGrossRoom() ? 'none' : '';
+        if (menuPtoItem) menuPtoItem.style.display = (isGrossRoom() || isManager()) ? 'none' : '';
         return;
     }
 
@@ -2185,7 +2211,7 @@ function updateNavRequestsIndicator() {
     const dot = document.getElementById('navRequestsBadge');
     if (!dot) return;
 
-    if (!loggedInPathId || isGrossRoom()) {
+    if (!loggedInPathId || isGrossRoom() || isManager()) {
         dot.style.display = 'none';
         return;
     }
@@ -3230,6 +3256,876 @@ document.querySelectorAll('.nav-item[data-page="changes"]').forEach(btn => {
     });
 });
 
+// ════════════════════════════════════════════════════════════════════════
+//                          CONFERENCE TRACKER SUBSYSTEM
+// ════════════════════════════════════════════════════════════════════════
+// Tracks how many of each conference each pathologist has presented at.
+// Entries live in scheduler/conferenceLog. Each entry is shaped:
+//   {
+//     pathologistId: <number>,
+//     type: 'breast' | 'lung' | 'thoracic' | 'cdh' | 'other',
+//     date: 'YYYY-MM-DD',
+//     subtype: 'GI' | 'Heme' | 'Thoracic' | 'Neuro',  // cdh only
+//     otherTitle: <string>,                            // other only
+//     note: <string>,                                  // optional
+//     createdAt: <ms>,
+//     createdBy: <pathId>,
+//   }
+//
+// Editing privileges: admin OR any pathId in scheduler/conferencePresenters
+// (a small allow-list the admin populates to grant non-admin users the
+// ability to log conferences).
+//
+// The page shows:
+//   1. A summary count grid (rows = pathologists, cols = conference types)
+//   2. Tabs to drill into each conference type
+//   3. An entries list for the active tab
+// All views respect the selected academic-year period.
+
+// Conference type metadata. Keep keys in sync with HTML/CSS hooks.
+const CONF_TYPES = [
+    { id: 'breast',   label: 'Breast',       singular: 'Breast Conference' },
+    { id: 'lung',     label: 'Lung',         singular: 'Lung Conference' },
+    { id: 'thoracic', label: 'Thoracic',     singular: 'Thoracic Conference' },
+    { id: 'cdh',      label: 'Morning/CDH',  singular: 'Morning / CDH' },
+    { id: 'other',    label: 'Other',        singular: 'Other Tumor Board' },
+];
+const CONF_TYPE_BY_ID = Object.fromEntries(CONF_TYPES.map(t => [t.id, t]));
+const CDH_SUBTYPES = ['GI', 'Heme', 'Thoracic', 'Neuro'];
+
+// ── Data store ───────────────────────────────────────────────────────────
+let conferenceLog = {};               // { pushKey: entry }
+let conferenceLogReady = false;
+let conferencePresenters = {};        // { pathId: true } — allow-list
+
+// ── UI state ─────────────────────────────────────────────────────────────
+let activeTrackingTab = 'breast';
+// Period filter: '<startYearShort>' string like '2025' (= academic year
+// Sept 2025 – Aug 2026), or 'all' for no filter.
+let trackingPeriod = null;            // set on first render
+
+// ── Firebase subscriptions ───────────────────────────────────────────────
+db.ref('scheduler/conferenceLog').on('value', snap => {
+    conferenceLog = snap.exists() ? snap.val() : {};
+    conferenceLogReady = true;
+    const _appEl = document.getElementById('app');
+    if (_appEl && _appEl.getAttribute('data-page') === 'tracking'
+        && typeof renderTrackingPage === 'function') {
+        renderTrackingPage();
+    }
+}, err => {
+    console.error('Firebase conferenceLog error:', err);
+});
+
+db.ref('scheduler/conferencePresenters').on('value', snap => {
+    conferencePresenters = snap.exists() ? snap.val() : {};
+    // Update Add button visibility / row edit buttons if visible now
+    const _appEl = document.getElementById('app');
+    if (_appEl && _appEl.getAttribute('data-page') === 'tracking'
+        && typeof renderTrackingPage === 'function') {
+        renderTrackingPage();
+    }
+}, err => {
+    console.error('Firebase conferencePresenters error:', err);
+});
+
+// ── Permission helper ────────────────────────────────────────────────────
+// Admin always qualifies. Otherwise the signed-in user must be in the
+// conferencePresenters allow-list (managed manually for now). Gross room
+// never qualifies (it's the procedure-only account).
+function canEditConferences(pathId) {
+    const id = (pathId !== undefined && pathId !== null) ? pathId : loggedInPathId;
+    if (id === null || id === undefined) return false;
+    if (id === GROSS_ROOM_ID) return false;
+    if (id === MANAGER_ID) return true;
+    if (isAdmin(id)) return true;
+    return !!(conferencePresenters && conferencePresenters[id]);
+}
+
+// ── Period helpers ───────────────────────────────────────────────────────
+// Academic year runs Sept 1 → Aug 31. We label it by the start year.
+//   getAcademicYearOfDate(new Date('2025-09-05')) → 2025
+//   getAcademicYearOfDate(new Date('2026-08-31')) → 2025
+//   getAcademicYearOfDate(new Date('2026-09-01')) → 2026
+function getAcademicYearOfDate(date) {
+    return date.getMonth() >= 8 ? date.getFullYear() : date.getFullYear() - 1;
+}
+function getAcademicYearOfKey(dateKey) {
+    if (!dateKey || typeof dateKey !== 'string') return null;
+    const m = dateKey.match(/^(\d{4})-(\d{2})-/);
+    if (!m) return null;
+    const year = parseInt(m[1], 10);
+    const month = parseInt(m[2], 10); // 1-indexed
+    return month >= 9 ? year : year - 1;
+}
+function academicYearLabel(startYear) {
+    return startYear + '–' + (startYear + 1);
+}
+
+// ── Filtered-entries cache ───────────────────────────────────────────────
+// Returns the array of {key, entry} pairs matching the current period
+// filter, sorted by date descending (most recent first).
+function getFilteredEntries() {
+    const period = trackingPeriod;
+    const entries = Object.entries(conferenceLog || {})
+        .filter(([, e]) => !!e && e.date && e.pathologistId !== undefined && e.type);
+
+    let filtered = entries;
+    if (period !== null && period !== 'all') {
+        const yr = parseInt(period, 10);
+        if (Number.isFinite(yr)) {
+            filtered = entries.filter(([, e]) => getAcademicYearOfKey(e.date) === yr);
+        }
+    }
+
+    return filtered.sort((a, b) => {
+        // newest date first; tiebreak by createdAt desc
+        if (a[1].date !== b[1].date) return a[1].date < b[1].date ? 1 : -1;
+        return (b[1].createdAt || 0) - (a[1].createdAt || 0);
+    });
+}
+
+// ── Period selector population ───────────────────────────────────────────
+function populateTrackingYearSelect() {
+    const sel = document.getElementById('trackingYearSelect');
+    if (!sel) return;
+
+    // Build a set of years that have entries, plus the current academic year
+    const yearsWithEntries = new Set();
+    Object.values(conferenceLog || {}).forEach(e => {
+        if (!e || !e.date) return;
+        const yr = getAcademicYearOfKey(e.date);
+        if (yr !== null) yearsWithEntries.add(yr);
+    });
+    const currentAy = getAcademicYearOfDate(new Date());
+    yearsWithEntries.add(currentAy);
+
+    // Sort descending so newest year is first
+    const years = Array.from(yearsWithEntries).sort((a, b) => b - a);
+
+    // Default selection: current academic year if available, else newest
+    if (trackingPeriod === null) {
+        trackingPeriod = years.includes(currentAy) ? String(currentAy) : String(years[0]);
+    }
+
+    const prev = trackingPeriod;
+    sel.innerHTML =
+        years.map(y => `<option value="${y}">${academicYearLabel(y)}</option>`).join('') +
+        `<option value="all">All time</option>`;
+    sel.value = prev;
+    // If the saved value is no longer valid (e.g. period was removed), fallback
+    if (sel.value !== prev) {
+        sel.value = String(currentAy);
+        trackingPeriod = sel.value;
+    }
+}
+
+// ── Summary count grid ───────────────────────────────────────────────────
+function renderTrackingSummary(filteredEntries) {
+    const body = document.getElementById('trackingSummaryBody');
+    if (!body) return;
+
+    if (!pathologists || pathologists.length === 0) {
+        body.innerHTML = '';
+        return;
+    }
+
+    // Build a (pathId, type) → count map
+    const counts = {};
+    pathologists.forEach(p => {
+        counts[p.id] = { breast: 0, lung: 0, thoracic: 0, cdh: 0, other: 0, total: 0 };
+    });
+    filteredEntries.forEach(([, e]) => {
+        const c = counts[e.pathologistId];
+        if (!c) return;
+        if (CONF_TYPE_BY_ID[e.type]) {
+            c[e.type] = (c[e.type] || 0) + 1;
+            c.total += 1;
+        }
+    });
+
+    body.innerHTML = pathologists.map(p => {
+        const c = counts[p.id];
+        const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
+        const cell = (val) =>
+            `<td class="${val === 0 ? 't-sum-zero' : ''}">${val}</td>`;
+        return `
+            <tr>
+                <td class="t-sum-name" style="--c:${p.color};">
+                    <span class="t-sum-dot"></span>
+                    <span>Dr. ${escapeHtml(lastName)}</span>
+                    <span class="t-sum-initials">${escapeHtml(p.initials || '')}</span>
+                </td>
+                ${cell(c.breast)}
+                ${cell(c.lung)}
+                ${cell(c.thoracic)}
+                ${cell(c.cdh)}
+                ${cell(c.other)}
+                <td class="t-sum-total">${c.total}</td>
+            </tr>`;
+    }).join('');
+}
+
+// ── Tab counts ───────────────────────────────────────────────────────────
+function renderTrackingTabCounts(filteredEntries) {
+    const counts = { breast: 0, lung: 0, thoracic: 0, cdh: 0, other: 0 };
+    filteredEntries.forEach(([, e]) => {
+        if (counts[e.type] !== undefined) counts[e.type] += 1;
+    });
+    const set = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = String(val);
+    };
+    set('trackingTabCountBreast', counts.breast);
+    set('trackingTabCountLung', counts.lung);
+    set('trackingTabCountThoracic', counts.thoracic);
+    set('trackingTabCountCdh', counts.cdh);
+    set('trackingTabCountOther', counts.other);
+}
+
+// ── Entries list (per active tab) ────────────────────────────────────────
+function renderTrackingEntries(filteredEntries) {
+    const listEl = document.getElementById('trackingEntries');
+    if (!listEl) return;
+
+    const tabEntries = filteredEntries.filter(([, e]) => e.type === activeTrackingTab);
+    const editable = canEditConferences();
+
+    if (tabEntries.length === 0) {
+        const typeLabel = CONF_TYPE_BY_ID[activeTrackingTab]
+            ? CONF_TYPE_BY_ID[activeTrackingTab].singular
+            : 'this conference';
+        listEl.innerHTML = `
+            <div class="empty">
+                <span class="empty-headline">No entries yet.</span>
+                Logged ${escapeHtml(typeLabel.toLowerCase())} sessions will appear here.
+            </div>`;
+        return;
+    }
+
+    listEl.innerHTML = tabEntries.map(([key, e]) => {
+        const p = pathologists.find(x => x.id === e.pathologistId);
+        const dateLabel = (function() {
+            try {
+                const d = parseDate(e.date);
+                return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+            } catch (_) {
+                return e.date;
+            }
+        })();
+        const presenterName = p ? p.name : 'Unknown pathologist';
+        const presenterColor = p ? p.color : 'var(--ink-3)';
+
+        // Meta line: subtype tag (cdh), title (other), and note
+        const metaParts = [];
+        if (e.type === 'cdh' && e.subtype) {
+            metaParts.push(`<span class="te-tag">${escapeHtml(e.subtype)}</span>`);
+        }
+        if (e.type === 'other' && e.otherTitle) {
+            metaParts.push(`<span class="te-title">${escapeHtml(e.otherTitle)}</span>`);
+        }
+        if (e.note) {
+            metaParts.push(`<span class="te-note">${escapeHtml(e.note)}</span>`);
+        }
+
+        const metaHtml = metaParts.length
+            ? `<div class="te-meta">${metaParts.join(' ')}</div>`
+            : '';
+
+        const editBtn = editable
+            ? `<button class="te-edit-btn" data-conf-edit="${escapeHtml(key)}" type="button">Edit</button>`
+            : '';
+
+        return `
+            <div class="tracking-entry" style="--c:${presenterColor};">
+                <div class="te-date">${escapeHtml(dateLabel)}</div>
+                <div class="te-main">
+                    <div class="te-presenter">
+                        <span class="te-dot"></span>
+                        <span>${escapeHtml(presenterName)}</span>
+                    </div>
+                    ${metaHtml}
+                </div>
+                ${editBtn}
+            </div>`;
+    }).join('');
+}
+
+// ── Master renderer ──────────────────────────────────────────────────────
+function renderTrackingPage() {
+    const pg = document.getElementById('trackingPage');
+    if (!pg) return;
+
+    // First render: populate the year select before reading its value
+    populateTrackingYearSelect();
+
+    // Sync the period dropdown to the current state
+    const yearSel = document.getElementById('trackingYearSelect');
+    if (yearSel && trackingPeriod !== null && yearSel.value !== trackingPeriod) {
+        yearSel.value = trackingPeriod;
+    }
+
+    // Show/hide the Add button based on permissions
+    const addBtn = document.getElementById('trackingAddBtn');
+    if (addBtn) {
+        addBtn.style.display = canEditConferences() ? '' : 'none';
+    }
+
+    // Show/hide the one-time historical import banner (admin only)
+    if (typeof syncImportBanner === 'function') syncImportBanner();
+
+    // Sync active-tab visual state
+    document.querySelectorAll('#trackingTabs .tracking-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.conf === activeTrackingTab);
+    });
+
+    const filtered = getFilteredEntries();
+    renderTrackingSummary(filtered);
+    renderTrackingTabCounts(filtered);
+    renderTrackingEntries(filtered);
+}
+
+// Expose for any caller that needs to refresh the page (e.g. after sign-in)
+window.__renderTrackingPage = renderTrackingPage;
+
+// ── Wire-up: nav-item click (re-render after setPage un-hides shell) ─────
+document.querySelectorAll('.nav-item[data-page="tracking"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+        setTimeout(renderTrackingPage, 0);
+    });
+});
+
+// ── Wire-up: tab clicks ──────────────────────────────────────────────────
+(function wireTrackingTabs() {
+    const tabsEl = document.getElementById('trackingTabs');
+    if (!tabsEl) return;
+    tabsEl.addEventListener('click', e => {
+        const btn = e.target.closest('.tracking-tab');
+        if (!btn) return;
+        activeTrackingTab = btn.dataset.conf;
+        renderTrackingPage();
+    });
+})();
+
+// ── Wire-up: period dropdown ─────────────────────────────────────────────
+(function wireTrackingYearSelect() {
+    const sel = document.getElementById('trackingYearSelect');
+    if (!sel) return;
+    sel.addEventListener('change', () => {
+        trackingPeriod = sel.value;
+        renderTrackingPage();
+    });
+})();
+
+// ── Wire-up: entry edit buttons (delegated) ──────────────────────────────
+(function wireTrackingEntryEdits() {
+    const listEl = document.getElementById('trackingEntries');
+    if (!listEl) return;
+    listEl.addEventListener('click', e => {
+        const btn = e.target.closest('[data-conf-edit]');
+        if (!btn) return;
+        if (!canEditConferences()) return;
+        openConferenceModal(btn.getAttribute('data-conf-edit'));
+    });
+})();
+
+// ── Conference modal: open / close / save / delete ───────────────────────
+// Track which entry is being edited (null when adding a new one)
+let _editingConferenceKey = null;
+
+function openConferenceModal(editKey) {
+    if (!canEditConferences()) return;
+
+    const back = document.getElementById('confModalBack');
+    if (!back) return;
+
+    const titleEl = document.getElementById('confModalTitle');
+    const subEl = document.getElementById('confModalSub');
+    const typeSel = document.getElementById('confType');
+    const subtypeSel = document.getElementById('confSubtype');
+    const otherTitleInput = document.getElementById('confOtherTitle');
+    const dateInput = document.getElementById('confDate');
+    const pathSel = document.getElementById('confPathologist');
+    const noteInput = document.getElementById('confNote');
+    const deleteBtn = document.getElementById('confDelete');
+    const saveBtn = document.getElementById('confSave');
+    const errEl = document.getElementById('confFormError');
+
+    // Reset error
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+    // Populate the pathologist select fresh each open (pathologist list
+    // can change as users are added/removed in Firebase)
+    pathSel.innerHTML = pathologists
+        .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
+        .join('');
+
+    if (editKey && conferenceLog[editKey]) {
+        _editingConferenceKey = editKey;
+        const e = conferenceLog[editKey];
+        titleEl.textContent = 'Edit conference entry';
+        if (subEl) subEl.textContent = 'Update or remove this entry.';
+        saveBtn.textContent = 'Save changes';
+        deleteBtn.style.display = '';
+
+        typeSel.value = e.type || 'breast';
+        subtypeSel.value = CDH_SUBTYPES.includes(e.subtype) ? e.subtype : 'GI';
+        otherTitleInput.value = e.otherTitle || '';
+        dateInput.value = e.date || '';
+        if (pathologists.some(p => p.id === e.pathologistId)) {
+            pathSel.value = String(e.pathologistId);
+        }
+        noteInput.value = e.note || '';
+    } else {
+        _editingConferenceKey = null;
+        titleEl.textContent = 'Add conference entry';
+        if (subEl) subEl.textContent = 'Log when a pathologist presented at a conference.';
+        saveBtn.textContent = 'Add entry';
+        deleteBtn.style.display = 'none';
+
+        // Sensible defaults: type = the currently active tab, today's date,
+        // first pathologist selected.
+        typeSel.value = activeTrackingTab || 'breast';
+        subtypeSel.value = 'GI';
+        otherTitleInput.value = '';
+        dateInput.value = fmt(new Date());
+        if (pathologists.length) pathSel.value = String(pathologists[0].id);
+        noteInput.value = '';
+    }
+
+    syncConferenceTypeFields();
+    back.classList.add('open');
+    // Focus first relevant field
+    setTimeout(() => { try { typeSel.focus(); } catch (_) {} }, 30);
+}
+
+function closeConferenceModal() {
+    const back = document.getElementById('confModalBack');
+    if (back) back.classList.remove('open');
+    _editingConferenceKey = null;
+}
+
+// Show/hide the subtype and other-title fields based on the selected type
+function syncConferenceTypeFields() {
+    const typeSel = document.getElementById('confType');
+    const subtypeWrap = document.getElementById('confSubtypeWrap');
+    const otherTitleWrap = document.getElementById('confOtherTitleWrap');
+    if (!typeSel || !subtypeWrap || !otherTitleWrap) return;
+    const t = typeSel.value;
+    subtypeWrap.style.display = (t === 'cdh') ? '' : 'none';
+    otherTitleWrap.style.display = (t === 'other') ? '' : 'none';
+}
+
+async function saveConferenceEntry() {
+    if (!canEditConferences()) return;
+
+    const typeSel = document.getElementById('confType');
+    const subtypeSel = document.getElementById('confSubtype');
+    const otherTitleInput = document.getElementById('confOtherTitle');
+    const dateInput = document.getElementById('confDate');
+    const pathSel = document.getElementById('confPathologist');
+    const noteInput = document.getElementById('confNote');
+    const errEl = document.getElementById('confFormError');
+
+    const showError = (msg) => {
+        if (!errEl) return;
+        errEl.textContent = msg;
+        errEl.style.display = '';
+    };
+    if (errEl) errEl.style.display = 'none';
+
+    const type = typeSel.value;
+    const date = dateInput.value;
+    const pathId = parseInt(pathSel.value, 10);
+    const note = (noteInput.value || '').trim();
+
+    if (!type || !CONF_TYPE_BY_ID[type]) {
+        showError('Please select a conference type.');
+        return;
+    }
+    if (!date) {
+        showError('Please pick a date.');
+        return;
+    }
+    if (!Number.isFinite(pathId) || !pathologists.some(p => p.id === pathId)) {
+        showError('Please select a presenter.');
+        return;
+    }
+
+    const payload = {
+        pathologistId: pathId,
+        type,
+        date,
+    };
+    if (type === 'cdh') {
+        const st = subtypeSel.value;
+        if (!CDH_SUBTYPES.includes(st)) {
+            showError('Please pick a CDH subtype.');
+            return;
+        }
+        payload.subtype = st;
+    }
+    if (type === 'other') {
+        const t = (otherTitleInput.value || '').trim();
+        if (!t) {
+            showError('Please enter a title for the other tumor board.');
+            return;
+        }
+        payload.otherTitle = t.slice(0, 80);
+    }
+    if (note) payload.note = note.slice(0, 160);
+
+    try {
+        if (_editingConferenceKey) {
+            // Preserve original createdAt/createdBy; update the editable fields
+            const existing = conferenceLog[_editingConferenceKey] || {};
+            const merged = Object.assign({}, existing, payload, {
+                updatedAt: Date.now(),
+                updatedBy: loggedInPathId,
+            });
+            // If switching away from cdh/other, clear stale fields
+            if (type !== 'cdh') merged.subtype = null;
+            if (type !== 'other') merged.otherTitle = null;
+            await db.ref('scheduler/conferenceLog/' + _editingConferenceKey).set(merged);
+            // Log to changes feed
+            const p = pathologists.find(x => x.id === pathId);
+            const summary = _confChangeSummary('Updated', type, date, p, payload);
+            try {
+                await logChange({ kind: 'conference', summary, source: 'direct' });
+            } catch (_) {}
+        } else {
+            const full = Object.assign({}, payload, {
+                createdAt: Date.now(),
+                createdBy: loggedInPathId,
+            });
+            await db.ref('scheduler/conferenceLog').push(full);
+            const p = pathologists.find(x => x.id === pathId);
+            const summary = _confChangeSummary('Logged', type, date, p, payload);
+            try {
+                await logChange({ kind: 'conference', summary, source: 'direct' });
+            } catch (_) {}
+        }
+        closeConferenceModal();
+    } catch (err) {
+        console.error('Save conference entry error:', err);
+        showError('Could not save. Please try again.');
+    }
+}
+
+async function deleteConferenceEntry() {
+    if (!canEditConferences()) return;
+    const key = _editingConferenceKey;
+    if (!key) return;
+    if (!conferenceLog[key]) { closeConferenceModal(); return; }
+
+    if (!confirm('Delete this conference entry? This cannot be undone.')) return;
+
+    try {
+        const existing = conferenceLog[key];
+        await db.ref('scheduler/conferenceLog/' + key).remove();
+        if (existing) {
+            const p = pathologists.find(x => x.id === existing.pathologistId);
+            const summary = _confChangeSummary('Removed', existing.type, existing.date, p, existing);
+            try {
+                await logChange({ kind: 'conference', summary, source: 'direct' });
+            } catch (_) {}
+        }
+        closeConferenceModal();
+    } catch (err) {
+        console.error('Delete conference entry error:', err);
+        const errEl = document.getElementById('confFormError');
+        if (errEl) { errEl.textContent = 'Could not delete. Please try again.'; errEl.style.display = ''; }
+    }
+}
+
+// Build a one-line summary string for the changes feed.
+function _confChangeSummary(verb, type, dateKey, pathObj, payload) {
+    const typeLabel = (CONF_TYPE_BY_ID[type] && CONF_TYPE_BY_ID[type].singular) || type;
+    let datePretty = dateKey;
+    try { datePretty = parseDate(dateKey).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }); } catch (_) {}
+    const who = pathObj ? pathObj.name : 'a pathologist';
+    let extra = '';
+    if (type === 'cdh' && payload.subtype) extra = ` (${payload.subtype})`;
+    if (type === 'other' && payload.otherTitle) extra = ` — ${payload.otherTitle}`;
+    return `${verb} ${typeLabel}${extra} on ${datePretty} for ${who}`;
+}
+
+// ── Wire-up: modal buttons, type changes, backdrop close ─────────────────
+(function wireConferenceModal() {
+    const back = document.getElementById('confModalBack');
+    const addBtn = document.getElementById('trackingAddBtn');
+    const typeSel = document.getElementById('confType');
+    const cancelBtn = document.getElementById('confCancel');
+    const saveBtn = document.getElementById('confSave');
+    const deleteBtn = document.getElementById('confDelete');
+    if (!back) return;
+
+    if (addBtn) addBtn.addEventListener('click', () => openConferenceModal(null));
+    if (cancelBtn) cancelBtn.addEventListener('click', closeConferenceModal);
+    if (saveBtn) saveBtn.addEventListener('click', saveConferenceEntry);
+    if (deleteBtn) deleteBtn.addEventListener('click', deleteConferenceEntry);
+    if (typeSel) typeSel.addEventListener('change', syncConferenceTypeFields);
+
+    // Click outside the modal card closes
+    back.addEventListener('click', e => {
+        if (e.target.id === 'confModalBack') closeConferenceModal();
+    });
+
+    // Esc closes when the modal is open
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && back.classList.contains('open')) {
+            closeConferenceModal();
+        }
+    });
+})();
+
+// ── Historical data import (one-time) ────────────────────────────────────
+// The 2025–2026 academic-year spreadsheet is reproduced here as a seed
+// dataset. Only entries with date ≤ today's parse cutoff (May 11, 2026)
+// are included — future scheduled presentations are intentionally
+// excluded as the user requested. Cancelled spreadsheet rows are skipped.
+//
+// Once imported, scheduler/conferenceLogImported is set to a record of
+// the import; that flag hides the banner permanently. Keys are
+// deterministic ("hist_<type>_<date>[_<subtypeOrTitle>]") so re-clicking
+// produces an idempotent overwrite, not duplicates.
+
+const HISTORICAL_CONFERENCE_DATA = [
+    // ── Breast Conference (31 entries) ───────────────────────────────
+    { type: 'breast', date: '2025-09-05', presenter: 'MR' },
+    { type: 'breast', date: '2025-09-12', presenter: 'IM' },
+    { type: 'breast', date: '2025-09-19', presenter: 'JR' },
+    { type: 'breast', date: '2025-10-03', presenter: 'MR' },
+    { type: 'breast', date: '2025-10-10', presenter: 'MM' },
+    { type: 'breast', date: '2025-10-17', presenter: 'IM' },
+    { type: 'breast', date: '2025-10-31', presenter: 'MM' },
+    { type: 'breast', date: '2025-11-07', presenter: 'IM' },
+    { type: 'breast', date: '2025-11-14', presenter: 'MM' },
+    { type: 'breast', date: '2025-11-21', presenter: 'MM' },
+    { type: 'breast', date: '2025-12-05', presenter: 'IM' },
+    { type: 'breast', date: '2025-12-12', presenter: 'MM' },
+    { type: 'breast', date: '2025-12-19', presenter: 'MR' },
+    { type: 'breast', date: '2026-01-09', presenter: 'MR' },
+    { type: 'breast', date: '2026-01-16', presenter: 'IM' },
+    { type: 'breast', date: '2026-01-23', presenter: 'JR' },
+    { type: 'breast', date: '2026-01-30', presenter: 'MM' },
+    { type: 'breast', date: '2026-02-06', presenter: 'IM' },
+    { type: 'breast', date: '2026-02-13', presenter: 'MR' },
+    { type: 'breast', date: '2026-02-20', presenter: 'JR' },
+    { type: 'breast', date: '2026-02-27', presenter: 'JR' },
+    { type: 'breast', date: '2026-03-06', presenter: 'MM' },
+    { type: 'breast', date: '2026-03-13', presenter: 'MM' },
+    { type: 'breast', date: '2026-03-20', presenter: 'MM' },
+    { type: 'breast', date: '2026-03-27', presenter: 'JR' },
+    { type: 'breast', date: '2026-04-03', presenter: 'IM' },
+    { type: 'breast', date: '2026-04-10', presenter: 'JR' },
+    { type: 'breast', date: '2026-04-17', presenter: 'MR' },
+    { type: 'breast', date: '2026-04-24', presenter: 'MM' },
+    { type: 'breast', date: '2026-05-01', presenter: 'JR' },
+    { type: 'breast', date: '2026-05-08', presenter: 'MM' },
+
+    // ── Lung Conference (8 entries) ──────────────────────────────────
+    { type: 'lung', date: '2025-09-10', presenter: 'MM' },
+    { type: 'lung', date: '2025-10-08', presenter: 'MR' },
+    { type: 'lung', date: '2025-11-12', presenter: 'MM' },
+    { type: 'lung', date: '2025-12-10', presenter: 'MR' },
+    { type: 'lung', date: '2026-01-14', presenter: 'MM' },
+    { type: 'lung', date: '2026-02-11', presenter: 'MM' },
+    { type: 'lung', date: '2026-03-11', presenter: 'JR' },
+    { type: 'lung', date: '2026-04-08', presenter: 'JR' },
+
+    // ── Thoracic Conference (7 entries) ──────────────────────────────
+    { type: 'thoracic', date: '2025-09-17', presenter: 'MM' },
+    { type: 'thoracic', date: '2025-10-15', presenter: 'JR' },
+    { type: 'thoracic', date: '2025-11-19', presenter: 'MM' },
+    { type: 'thoracic', date: '2026-01-21', presenter: 'MM' },
+    { type: 'thoracic', date: '2026-02-18', presenter: 'IM' },
+    { type: 'thoracic', date: '2026-03-18', presenter: 'MM' },
+    { type: 'thoracic', date: '2026-04-15', presenter: 'IM' },
+
+    // ── Morning / CDH (27 entries) ───────────────────────────────────
+    { type: 'cdh', date: '2025-09-02', subtype: 'GI',       presenter: 'MR' },
+    { type: 'cdh', date: '2025-09-05', subtype: 'Heme',     presenter: 'MM' },
+    { type: 'cdh', date: '2025-09-10', subtype: 'Thoracic', presenter: 'JR' },
+    { type: 'cdh', date: '2025-09-16', subtype: 'GI',       presenter: 'JR' },
+    { type: 'cdh', date: '2025-09-23', subtype: 'GI',       presenter: 'MM' },
+    { type: 'cdh', date: '2025-10-03', subtype: 'Heme',     presenter: 'MR' },
+    { type: 'cdh', date: '2025-10-14', subtype: 'GI',       presenter: 'IM' },
+    { type: 'cdh', date: '2025-11-04', subtype: 'GI',       presenter: 'JR' },
+    { type: 'cdh', date: '2025-11-21', subtype: 'Heme',     presenter: 'MM' },
+    { type: 'cdh', date: '2025-12-02', subtype: 'GI',       presenter: 'MM' },
+    { type: 'cdh', date: '2025-12-09', subtype: 'GI',       presenter: 'MM' },
+    { type: 'cdh', date: '2025-12-16', subtype: 'GI',       presenter: 'MR' },
+    { type: 'cdh', date: '2026-01-20', subtype: 'GI',       presenter: 'JR' },
+    { type: 'cdh', date: '2026-01-27', subtype: 'GI',       presenter: 'IM' },
+    { type: 'cdh', date: '2026-01-29', subtype: 'Thoracic', presenter: 'JR' },
+    { type: 'cdh', date: '2026-02-06', subtype: 'Heme',     presenter: 'MR' },
+    { type: 'cdh', date: '2026-02-10', subtype: 'GI',       presenter: 'JR' },
+    { type: 'cdh', date: '2026-02-17', subtype: 'GI',       presenter: 'MM' },
+    { type: 'cdh', date: '2026-02-24', subtype: 'GI',       presenter: 'MM' },
+    { type: 'cdh', date: '2026-03-03', subtype: 'GI',       presenter: 'IM' },
+    { type: 'cdh', date: '2026-03-06', subtype: 'Heme',     presenter: 'MM' },
+    { type: 'cdh', date: '2026-03-17', subtype: 'GI',       presenter: 'MR' },
+    { type: 'cdh', date: '2026-03-24', subtype: 'GI',       presenter: 'MR' },
+    { type: 'cdh', date: '2026-04-14', subtype: 'GI',       presenter: 'MM' },
+    { type: 'cdh', date: '2026-04-21', subtype: 'GI',       presenter: 'IM' },
+    { type: 'cdh', date: '2026-04-30', subtype: 'Thoracic', presenter: 'MR' },
+    { type: 'cdh', date: '2026-05-05', subtype: 'GI',       presenter: 'IM' },
+
+    // ── Other Tumor Boards (1 entry) ─────────────────────────────────
+    { type: 'other', date: '2025-09-12', otherTitle: 'NMH Gyn Onc', presenter: 'IM' },
+];
+
+// Flag indicating the historical import has been run (or explicitly
+// dismissed via Firebase console). When truthy, the banner stays hidden.
+let conferenceLogImported = null;
+db.ref('scheduler/conferenceLogImported').on('value', snap => {
+    conferenceLogImported = snap.exists() ? snap.val() : null;
+    const _appEl = document.getElementById('app');
+    if (_appEl && _appEl.getAttribute('data-page') === 'tracking'
+        && typeof renderTrackingPage === 'function') {
+        renderTrackingPage();
+    }
+}, err => {
+    console.error('Firebase conferenceLogImported error:', err);
+});
+
+// Build {initials: pathId} from the live pathologists list. Used to
+// resolve the seed's 'MR', 'IM', etc. → real ids.
+function _getInitialsToPathIdMap() {
+    const m = {};
+    pathologists.forEach(p => { if (p.initials) m[p.initials] = p.id; });
+    return m;
+}
+
+// Sanitize an "otherTitle" string into a Firebase-key-safe slug.
+// Firebase keys disallow: . $ # [ ] /  and whitespace.
+function _slugifyKeyPart(s) {
+    return String(s || '')
+        .replace(/[^A-Za-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 40)
+        || 'untitled';
+}
+
+// Build the deterministic key for a historical seed entry. Re-running
+// the import overwrites in place — no duplicates.
+function _historicalKey(e) {
+    let key = 'hist_' + e.type + '_' + e.date;
+    if (e.type === 'cdh' && e.subtype) key += '_' + _slugifyKeyPart(e.subtype);
+    if (e.type === 'other' && e.otherTitle) key += '_' + _slugifyKeyPart(e.otherTitle);
+    return key;
+}
+
+// Update the import-banner visibility / disabled state. Called from
+// renderTrackingPage and from the click handler during the in-flight
+// save so the button shows "Importing…".
+function syncImportBanner() {
+    const banner = document.getElementById('trackingImportBanner');
+    const btn = document.getElementById('trackingImportBtn');
+    const sub = document.getElementById('trackingImportSub');
+    if (!banner) return;
+
+    // Hide unless: admin (only admin runs the one-time import), the
+    // flag isn't set yet, and the seed data exists.
+    const shouldShow = isAdmin()
+        && !conferenceLogImported
+        && HISTORICAL_CONFERENCE_DATA.length > 0;
+    banner.style.display = shouldShow ? '' : 'none';
+
+    if (sub) {
+        sub.textContent =
+            'Import ' + HISTORICAL_CONFERENCE_DATA.length +
+            ' past entries (Sept 2025 – today) from your 2025–2026 spreadsheet. ' +
+            'Future scheduled presentations are not included.';
+    }
+    if (btn) btn.disabled = false;
+}
+
+// Run the import. Validates that every initials referenced in the seed
+// data resolves to a current pathologist, builds one multi-path update,
+// and writes everything atomically.
+async function importHistoricalConferenceData() {
+    if (!isAdmin()) return;
+    if (conferenceLogImported) return;
+
+    const map = _getInitialsToPathIdMap();
+    const missing = new Set();
+    HISTORICAL_CONFERENCE_DATA.forEach(e => {
+        if (!map[e.presenter]) missing.add(e.presenter);
+    });
+    if (missing.size > 0) {
+        alert(
+            'Cannot import: these initials in the seed data have no matching pathologist: '
+            + [...missing].join(', ')
+            + '. Check the pathologist list in Firebase.'
+        );
+        return;
+    }
+
+    const count = HISTORICAL_CONFERENCE_DATA.length;
+    if (!confirm(
+        'Import ' + count + ' past conference entries from the 2025–2026 spreadsheet?\n\n'
+        + 'This is a one-time action. Future-scheduled presentations are not included. '
+        + 'Existing entries with the same date/type are overwritten with the seed values.'
+    )) return;
+
+    const btn = document.getElementById('trackingImportBtn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+
+    const now = Date.now();
+    const updates = {};
+
+    HISTORICAL_CONFERENCE_DATA.forEach(e => {
+        const key = _historicalKey(e);
+        const entry = {
+            pathologistId: map[e.presenter],
+            type: e.type,
+            date: e.date,
+            createdAt: now,
+            createdBy: loggedInPathId,
+            source: 'historical_import',
+        };
+        if (e.subtype) entry.subtype = e.subtype;
+        if (e.otherTitle) entry.otherTitle = e.otherTitle;
+        updates['scheduler/conferenceLog/' + key] = entry;
+    });
+
+    updates['scheduler/conferenceLogImported'] = {
+        at: now,
+        by: loggedInPathId,
+        count,
+        action: 'imported',
+    };
+
+    try {
+        await db.ref().update(updates);
+        // Audit trail entry in the Changes feed
+        try {
+            await logChange({
+                kind: 'conference',
+                summary: 'Imported ' + count + ' historical conference entries (2025–2026 academic year)',
+                source: 'direct',
+            });
+        } catch (_) { /* non-fatal */ }
+        // Listener will auto-re-render; explicit call is a safety net in
+        // case the listener races the visible state.
+        if (typeof renderTrackingPage === 'function') renderTrackingPage();
+    } catch (err) {
+        console.error('Historical import error:', err);
+        alert('Import failed. Please try again or check the console.');
+        if (btn) { btn.disabled = false; btn.textContent = 'Import'; }
+    }
+}
+
+// Wire the import button. Banner visibility itself is handled by
+// renderTrackingPage / syncImportBanner.
+(function wireHistoricalImportBtn() {
+    const btn = document.getElementById('trackingImportBtn');
+    if (!btn) return;
+    btn.addEventListener('click', importHistoricalConferenceData);
+})();
+
 // ────────────── COVERAGE RULE CHECK (red flag) ──────────────
 // Hard rule: given the final day assignments, verifies that the required
 // services are covered based on how many pathologists are working.
@@ -3487,7 +4383,7 @@ function renderHourGrid(date) {
                 // Hover tooltip: procedure label + time range. Each procedure
                 // is 30 min by default (durationMin can override).
                 const tooltip = `${baseLbl} — ${formatTimeRange(p.time, p.durationMin)}`;
-                return `<span class="proc-item proc-cat-${cat}" data-day="${dayKey}" data-key="${p.key}" tabindex="0" title="${escapeHtml(tooltip)}">${escapeHtml(lbl)}</span>`;
+                return `<span class="proc-item proc-cat-${cat}" data-day="${dayKey}" data-key="${p.key}" tabindex="0" draggable="true" title="${escapeHtml(tooltip)}">${escapeHtml(lbl)}</span>`;
             }).join('');
             rowsHtml += `<div class="hour-row ${cls}" data-day="${dayKey}" data-time="${timeKey}" title="Double-click an empty slot to add a procedure">
               <div class="hour-label">${label}</div>
@@ -3700,6 +4596,87 @@ function attachHourGridHandlers() {
             const proc = (procedures[dayKey] || {})[procKey];
             if (!proc) return;
             openProcedureModal(dayKey, proc.time, procKey);
+        });
+
+        // ── Drag-and-drop: move procedure to a different time slot ──
+        item.addEventListener('dragstart', e => {
+            e.stopPropagation();
+            // Store the source info in dataTransfer so the drop handler knows
+            // which procedure is being moved, even across grid columns.
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain',
+                JSON.stringify({ dayKey: item.dataset.day, procKey: item.dataset.key }));
+            // Small timeout so the "ghost" image captures the normal pill style
+            // before the .dragging class dims it.
+            setTimeout(() => item.classList.add('dragging'), 0);
+        });
+        item.addEventListener('dragend', () => {
+            item.classList.remove('dragging');
+            // Remove all drop-zone highlights left behind.
+            document.querySelectorAll('.hour-row.drag-over').forEach(r => r.classList.remove('drag-over'));
+        });
+    });
+
+    // ── Drop zones: every hour-row in every visible grid ──
+    document.querySelectorAll('.hour-row').forEach(row => {
+        row.addEventListener('dragover', e => {
+            e.preventDefault(); // required to allow drop
+            e.dataTransfer.dropEffect = 'move';
+            // Highlight this row and clear any previously-highlighted sibling.
+            document.querySelectorAll('.hour-row.drag-over').forEach(r => {
+                if (r !== row) r.classList.remove('drag-over');
+            });
+            row.classList.add('drag-over');
+        });
+        row.addEventListener('dragleave', e => {
+            // Only remove the highlight when leaving the row entirely, not
+            // when moving between its children (label ↔ slot).
+            if (!row.contains(e.relatedTarget)) {
+                row.classList.remove('drag-over');
+            }
+        });
+        row.addEventListener('drop', async e => {
+            e.preventDefault();
+            e.stopPropagation();
+            row.classList.remove('drag-over');
+
+            let payload;
+            try {
+                payload = JSON.parse(e.dataTransfer.getData('text/plain'));
+            } catch (_) { return; }
+
+            const { dayKey: srcDay, procKey } = payload;
+            const dstDay  = row.dataset.day;   // day of the target row
+            const newTime = row.dataset.time;  // "HH:MM" of the target slot
+            if (!srcDay || !procKey || !dstDay || !newTime) return;
+
+            const proc = (procedures[srcDay] || {})[procKey];
+            if (!proc) return;
+
+            // Nothing to do if dropped onto the exact same day+slot.
+            const currentSlot = slotKeyForTime(proc.time);
+            if (srcDay === dstDay && currentSlot === newTime) return;
+
+            try {
+                if (srcDay === dstDay) {
+                    // Same day — just update the time field.
+                    await db.ref('scheduler/procedures/' + srcDay + '/' + procKey + '/time').set(newTime);
+                } else {
+                    // Different day — write the full record to the new path,
+                    // then delete from the old path atomically via multi-path update.
+                    const updatedProc = Object.assign({}, proc, { time: newTime });
+                    // Remove internal-only fields that aren't stored in Firebase.
+                    delete updatedProc.key;
+                    delete updatedProc.durationMin; // only set if explicitly stored; re-derived on read
+
+                    const updates = {};
+                    updates['scheduler/procedures/' + dstDay + '/' + procKey] = updatedProc;
+                    updates['scheduler/procedures/' + srcDay + '/' + procKey] = null; // delete
+                    await db.ref().update(updates);
+                }
+            } catch (err) {
+                showToast('Could not move procedure: ' + (err.message || err), { type: 'error' });
+            }
         });
     });
 

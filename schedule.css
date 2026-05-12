@@ -5165,7 +5165,7 @@ aside {
    each conference each pathologist has presented at. */
 
 .tracking-page-content {
-    max-width: 1020px;
+    max-width: 1280px;
     margin: 0 auto;
     padding: 12px 4px 60px;
 }
@@ -5360,7 +5360,7 @@ aside {
 
 /* ── Summary count grid ─────────────────────────────────────────── */
 .tracking-summary-wrap {
-    margin-bottom: 28px;
+    margin-bottom: 0;
     background: var(--paper);
     border: 1px solid var(--rule-soft);
     border-radius: 10px;
@@ -5380,7 +5380,7 @@ table.tracking-summary {
 
 table.tracking-summary th,
 table.tracking-summary td {
-    padding: 12px 14px;
+    padding: 9px 6px;
     text-align: center;
     border-bottom: 1px solid var(--rule-soft);
     white-space: nowrap;
@@ -5404,7 +5404,7 @@ table.tracking-summary tbody tr:last-child td {
 table.tracking-summary .t-sum-name-col {
     text-align: left;
     width: 1%;
-    min-width: 160px;
+    min-width: 130px;
 }
 
 table.tracking-summary tbody .t-sum-name {
@@ -5413,7 +5413,7 @@ table.tracking-summary tbody .t-sum-name {
     color: var(--ink);
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 8px;
 }
 
 table.tracking-summary tbody .t-sum-name .t-sum-dot {
@@ -5456,17 +5456,17 @@ table.tracking-summary tbody td.t-sum-total {
 /* ── Tabs ───────────────────────────────────────────────────────── */
 .tracking-tabs {
     display: flex;
-    gap: 4px;
+    flex-wrap: wrap;
+    gap: 2px 4px;
     border-bottom: 1px solid var(--rule-soft);
     margin-bottom: 18px;
-    overflow-x: auto;
 }
 
 .tracking-tab {
     display: inline-flex;
     align-items: center;
-    gap: 7px;
-    padding: 10px 14px;
+    gap: 6px;
+    padding: 10px 11px;
     background: transparent;
     border: none;
     border-bottom: 2px solid transparent;
@@ -5493,12 +5493,12 @@ table.tracking-summary tbody td.t-sum-total {
     font-family: var(--mono);
     font-size: 10px;
     font-weight: 500;
-    padding: 1px 6px;
+    padding: 1px 5px;
     border-radius: 8px;
     background: var(--bg);
     color: var(--ink-3);
     letter-spacing: 0.04em;
-    min-width: 18px;
+    min-width: 16px;
     text-align: center;
 }
 
@@ -5697,4 +5697,165 @@ table.tracking-summary tbody td.t-sum-total {
     .tracking-entry .te-date  { grid-area: date; }
     .tracking-entry .te-main  { grid-area: main; }
     .tracking-entry .te-edit-btn { grid-area: edit; align-self: start; }
+}
+/* ════════════════════════════════════════════════════════════════════
+   TRACKING PAGE — Two-column layout
+   Left column: per-conference quick-add buttons + presentation-counts
+   table. Right column: history/log (tabs + entries list).
+   Collapses to single column on narrow viewports.
+   ════════════════════════════════════════════════════════════════════ */
+
+.tracking-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+    gap: 36px;
+    align-items: start;
+}
+
+.tracking-col {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Small mono section labels that anchor each block in the new layout. */
+.tracking-section-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin: 0 0 12px;
+}
+
+/* ── Left column — quick-add buttons ─────────────────────────────── */
+
+.tracking-conf-add {
+    margin-bottom: 32px;
+}
+
+.tracking-conf-btn-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.tracking-conf-btn {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 13px 16px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 7px;
+    font-family: var(--sans);
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--ink);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.tracking-conf-btn:hover {
+    background: var(--paper-2);
+    border-color: var(--ink-4);
+    transform: translateX(2px);
+}
+
+.tracking-conf-btn:focus-visible {
+    outline: 1px solid var(--ink-2);
+    outline-offset: 2px;
+}
+
+.tracking-conf-btn:active {
+    transform: translateX(2px) scale(0.995);
+}
+
+.tracking-conf-btn .tcb-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--c, var(--ink-3));
+    flex-shrink: 0;
+}
+
+.tracking-conf-btn .tcb-label {
+    flex: 1;
+    min-width: 0;
+    line-height: 1.2;
+}
+
+.tracking-conf-btn .tcb-plus {
+    font-family: var(--mono);
+    font-size: 17px;
+    font-weight: 300;
+    color: var(--ink-3);
+    line-height: 1;
+    flex-shrink: 0;
+    transition: color 0.15s ease;
+}
+
+.tracking-conf-btn:hover .tcb-plus {
+    color: var(--ink);
+}
+
+/* Per-conference accent colors — deep, muted tones that read clinical
+   rather than candy-bright. Used as the dot color via --c. */
+.tracking-conf-btn[data-conf="breast"]   { --c: #a85878; }
+.tracking-conf-btn[data-conf="lung"]     { --c: #3a7ca5; }
+.tracking-conf-btn[data-conf="thoracic"] { --c: #2e7e7a; }
+.tracking-conf-btn[data-conf="cdh"]      { --c: #c08840; }
+.tracking-conf-btn[data-conf="other"]    { --c: #6a7d92; }
+
+/* ── Stack collapse ──────────────────────────────────────────────────
+   When the viewport is narrow enough that the sidebar eats into the
+   content area (the app sidebar is ~240px wide at viewports >800px),
+   drop to a single column. Buttons stay on top, then counts table,
+   then the log. Threshold roughly matches a 13" laptop with sidebar. */
+@media (max-width: 1100px) {
+    .tracking-grid {
+        grid-template-columns: 1fr;
+        gap: 28px;
+    }
+}
+
+@media (max-width: 720px) {
+    .tracking-conf-add {
+        margin-bottom: 24px;
+    }
+    .tracking-conf-btn {
+        padding: 12px 14px;
+        font-size: 13px;
+        gap: 10px;
+    }
+    .tracking-conf-btn .tcb-plus {
+        font-size: 16px;
+    }
+}
+
+/* ── History list — internal scroll ──────────────────────────────────
+   When the history is long enough to exceed the viewport in two-column
+   mode, keep the rest of the page static and scroll only the entries
+   list inside its panel. In single-column mode (stacked layout below
+   1100px), the natural page scroll is the right behaviour, so we don't
+   constrain the height there. */
+.tracking-entries {
+    max-height: calc(100vh - 360px);
+    min-height: 240px;
+    overflow-y: auto;
+    /* A small inside-bottom buffer so the last entry's border-radius
+       doesn't kiss the scroll container's edge. */
+    padding-bottom: 4px;
+}
+
+@media (max-width: 1100px) {
+    .tracking-entries {
+        max-height: none;
+        min-height: 0;
+        overflow-y: visible;
+        padding-bottom: 0;
+    }
 }

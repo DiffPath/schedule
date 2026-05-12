@@ -273,6 +273,22 @@ header {
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
+/* The Day tab is mobile-only — desktop has plenty of horizontal space
+   to render the full week, so the Day tab only appears at the same
+   breakpoint where the toolbar collapses to its 2-row mobile layout
+   (max-width: 800px). The matching mobile rule below makes it visible. */
+.view-tab-day {
+    display: none;
+}
+
+@media (max-width: 800px) {
+    .view-tab-day {
+        display: flex;            /* match other .view-tab flex layout */
+        align-items: center;
+        justify-content: center;
+    }
+}
+
 /* ── Path (All / Just Me) toggle — same visual system as view-tabs ── */
 /* Short label spans: hidden on desktop (full text shown), revealed on mobile */
 .tab-short { display: none; }
@@ -638,6 +654,82 @@ main {
     overflow: auto;
     padding: 18px 28px 28px;
     background: var(--bg);
+}
+
+/* ─────────────────── DAY VIEW ───────────────────
+   Mobile-first single-day view. Reuses .week-day / .wd-head / .wd-rows /
+   .wd-hours from week view (same classes → same theming, same handlers)
+   and just gives the lone card a wider, more readable layout. The Day
+   tab is hidden on desktop (see the @media (min-width: 801px) block
+   further down) — desktop users see Week / Month / Year / Compact and
+   never need a single-day view.
+*/
+.day-view {
+    display: flex;
+    flex-direction: column;
+    /* Match .week-view's fill behaviour so the hour-grid can claim
+       remaining vertical space inside the .week-day card. */
+    flex: 1 1 0;
+    min-height: 0;
+}
+
+.day-view .day-view-card {
+    /* The single card stretches to fill the viewport (no grid columns
+       to share space with). On wider screens we cap the width so the
+       hour-grid rows don't get absurdly long; the card stays centered. */
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
+    /* Day view's card is the entire screen on mobile — disable the
+       hover/cursor:pointer that week view uses (clicking a tiny week-day
+       card to drill in makes sense; clicking a giant day-view card
+       doesn't, since you're already viewing the day in detail). The
+       day-modal still opens via tapping a pathologist row if needed. */
+    cursor: default;
+}
+
+.day-view .day-view-card:hover {
+    /* Cancel the week-day hover border-tint — not useful for a single
+       full-size card. */
+    border-color: var(--rule-soft);
+}
+
+.day-view .day-view-card.today:hover,
+.day-view .day-view-card.holiday:hover {
+    /* Preserve today/holiday border colors on hover (don't override them
+       back to the soft rule color). */
+    border-color: inherit;
+}
+
+/* Larger, more legible header for the single-day view. */
+.day-view .day-view-head {
+    padding: 14px 18px 12px;
+    gap: 10px;
+}
+
+.day-view .day-view-head-main {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.day-view .day-view-head .dow {
+    font-size: 11px;
+    letter-spacing: 0.18em;
+}
+
+.day-view .day-view-head .num {
+    font-size: 28px;
+}
+
+.day-view .day-view-month {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--ink-3);
 }
 
 /* ─────────────────── WEEK VIEW ─────────────────── */
@@ -2979,8 +3071,51 @@ main {
         overflow-x: visible;
     }
 
+    /* On mobile, the Day view is the only schedule view that shows the
+       procedure hour grid. Week view becomes a summary-only stack of
+       assignment cards — much more scannable on a phone — and users tap
+       the Day tab to see procedures for a specific date. (Month and Year
+       views never had hour grids to begin with.) */
+    .week-view .wd-hours {
+        display: none;
+    }
+
     .week-day {
         min-height: 0;
+    }
+
+    /* ── Day view: mobile-optimized single-day card ──
+       Wider header, full-width card, slightly chunkier hour-grid rows
+       for finger-friendly taps. The .wd-hours block-level layout from
+       the rule above already gives us natural content height. */
+    .day-view {
+        flex: none;             /* cancel desktop flex:1 fill */
+        display: block;
+    }
+
+    .day-view .day-view-card {
+        max-width: none;        /* no width cap on phones */
+        margin: 0;
+    }
+
+    .day-view .day-view-head {
+        padding: 12px 14px 10px;
+    }
+
+    .day-view .day-view-head .num {
+        font-size: 26px;
+    }
+
+    /* Slightly taller hour-grid rows in Day view so 30-min slots are
+       comfortable touch targets on a phone (the user's primary use case
+       for this view). */
+    .day-view .wd-hours .hour-row {
+        min-height: 32px;
+    }
+
+    .day-view .wd-hours .hour-slot {
+        min-height: 32px;
+        padding: 4px 8px;
     }
 
     /* Hourly grid: a bit taller per row on touch so taps register

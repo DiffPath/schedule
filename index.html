@@ -101,6 +101,14 @@
                 <button id="exportBtn">Export to Outlook</button>
                 <button id="recomputeBtn">Recompute Schedule</button>
                 <button id="todayBtn">Today</button>
+                <!-- Conference-add proxy: kept in the DOM so schedule.js can still toggle
+                     its display based on admin status. The conference-add buttons in the
+                     tracking page's left column mirror that state and click() this to
+                     open the same modal that used to be opened by the header "Add entry" button. -->
+                <button id="trackingAddBtn" class="tracking-add-btn" style="display:none;" type="button">
+                    <span class="tracking-add-plus" aria-hidden="true">+</span>
+                    <span>Add entry</span>
+                </button>
             </div>
 
             <div class="aside-bottom">
@@ -183,7 +191,6 @@
                 <div class="requests-page-content">
                     <header class="requests-page-header">
                         <div class="requests-page-heading">
-                            <div class="requests-page-eyebrow">Workflow</div>
                             <h2 class="requests-page-title" id="requestsPageTitle">Requests</h2>
                             <p class="requests-page-subtitle" id="requestsPageSubtitle">Review and decide on schedule change requests from the team.</p>
                         </div>
@@ -220,7 +227,6 @@
                 <div class="changes-page-content">
                     <header class="changes-page-header">
                         <div class="changes-page-heading">
-                            <div class="changes-page-eyebrow">Activity</div>
                             <h2 class="changes-page-title">Changes</h2>
                             <p class="changes-page-subtitle">Every recent update to the schedule, newest first.</p>
                         </div>
@@ -241,7 +247,6 @@
                 <div class="tracking-page-content">
                     <header class="tracking-page-header">
                         <div class="tracking-page-heading">
-                            <div class="tracking-page-eyebrow">Performance</div>
                             <h2 class="tracking-page-title">Conference Tracker</h2>
                             <p class="tracking-page-subtitle">Track how many of each conference each pathologist has presented at.</p>
                         </div>
@@ -250,10 +255,6 @@
                                 <label for="trackingYearSelect">Period</label>
                                 <select id="trackingYearSelect"></select>
                             </div>
-                            <button id="trackingAddBtn" class="tracking-add-btn" style="display:none;" type="button">
-                                <span class="tracking-add-plus" aria-hidden="true">+</span>
-                                <span>Add entry</span>
-                            </button>
                         </div>
                     </header>
 
@@ -274,52 +275,105 @@
                         <button id="trackingImportBtn" class="tracking-import-btn" type="button">Import</button>
                     </div>
 
-                    <!-- Summary count grid -->
-                    <div class="tracking-summary-wrap">
-                        <div class="tracking-summary-scroll">
-                            <table class="tracking-summary">
-                                <thead>
-                                    <tr>
-                                        <th class="t-sum-name-col">Pathologist</th>
-                                        <th>Breast</th>
-                                        <th>Lung</th>
-                                        <th>Thoracic</th>
-                                        <th>Morning/CDH</th>
-                                        <th>Other</th>
-                                        <th class="t-sum-total-col">Total</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="trackingSummaryBody"></tbody>
-                            </table>
+                    <!-- Two-column body: left = quick-add buttons + counts table; right = history/log -->
+                    <div class="tracking-grid">
+
+                        <!-- ── LEFT COLUMN ─────────────────────────────────────── -->
+                        <div class="tracking-col tracking-col-left">
+
+                            <!-- Per-conference quick-add buttons (admin only; visibility
+                                 mirrors the hidden #trackingAddBtn proxy in .hidden-actions). -->
+                            <section class="tracking-conf-add" id="trackingConfAdd" style="display:none;">
+                                <div class="tracking-section-label">Log a conference</div>
+                                <div class="tracking-conf-btn-stack">
+                                    <button class="tracking-conf-btn" data-conf="breast" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Breast Conference</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="lung" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Lung Conference</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="thoracic" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Thoracic Conference</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="cdh" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Morning / CDH</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="other" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Other Tumor Board</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                </div>
+                            </section>
+
+                            <!-- Counts table — each pathologist × each conference type. -->
+                            <section class="tracking-summary-section">
+                                <div class="tracking-section-label">Presentation counts</div>
+                                <div class="tracking-summary-wrap">
+                                    <div class="tracking-summary-scroll">
+                                        <table class="tracking-summary">
+                                            <thead>
+                                                <tr>
+                                                    <th class="t-sum-name-col">Pathologist</th>
+                                                    <th>Breast</th>
+                                                    <th>Lung</th>
+                                                    <th>Thoracic</th>
+                                                    <th>Morning/CDH</th>
+                                                    <th>Other</th>
+                                                    <th class="t-sum-total-col">Total</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="trackingSummaryBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </section>
+
                         </div>
-                    </div>
 
-                    <!-- Conference type tabs -->
-                    <div class="tracking-tabs" id="trackingTabs" role="tablist">
-                        <button class="tracking-tab active" data-conf="breast" role="tab">
-                            <span>Breast</span>
-                            <span class="tracking-tab-count" id="trackingTabCountBreast">0</span>
-                        </button>
-                        <button class="tracking-tab" data-conf="lung" role="tab">
-                            <span>Lung</span>
-                            <span class="tracking-tab-count" id="trackingTabCountLung">0</span>
-                        </button>
-                        <button class="tracking-tab" data-conf="thoracic" role="tab">
-                            <span>Thoracic</span>
-                            <span class="tracking-tab-count" id="trackingTabCountThoracic">0</span>
-                        </button>
-                        <button class="tracking-tab" data-conf="cdh" role="tab">
-                            <span>Morning/CDH</span>
-                            <span class="tracking-tab-count" id="trackingTabCountCdh">0</span>
-                        </button>
-                        <button class="tracking-tab" data-conf="other" role="tab">
-                            <span>Other</span>
-                            <span class="tracking-tab-count" id="trackingTabCountOther">0</span>
-                        </button>
-                    </div>
+                        <!-- ── RIGHT COLUMN ────────────────────────────────────── -->
+                        <div class="tracking-col tracking-col-right">
 
-                    <!-- Entries list for active tab -->
-                    <div class="tracking-entries" id="trackingEntries"></div>
+                            <div class="tracking-section-label">History</div>
+
+                            <!-- Conference type tabs -->
+                            <div class="tracking-tabs" id="trackingTabs" role="tablist">
+                                <button class="tracking-tab active" data-conf="breast" role="tab">
+                                    <span>Breast</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountBreast">0</span>
+                                </button>
+                                <button class="tracking-tab" data-conf="lung" role="tab">
+                                    <span>Lung</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountLung">0</span>
+                                </button>
+                                <button class="tracking-tab" data-conf="thoracic" role="tab">
+                                    <span>Thoracic</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountThoracic">0</span>
+                                </button>
+                                <button class="tracking-tab" data-conf="cdh" role="tab">
+                                    <span>Morning/CDH</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountCdh">0</span>
+                                </button>
+                                <button class="tracking-tab" data-conf="other" role="tab">
+                                    <span>Other</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountOther">0</span>
+                                </button>
+                            </div>
+
+                            <!-- Entries list for active tab -->
+                            <div class="tracking-entries" id="trackingEntries"></div>
+
+                        </div>
+
+                    </div>
                 </div>
             </div>
 
@@ -691,6 +745,55 @@
 
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
+    <!-- Tracking-page conference quick-add wiring.
+         Hooks the five per-conference buttons in #trackingConfAdd to the same
+         modal that the legacy #trackingAddBtn opens. Visibility of the whole
+         section mirrors #trackingAddBtn's display state (set by schedule.js
+         based on admin status). -->
+    <script>
+        (function () {
+            function init() {
+                var addBtn = document.getElementById('trackingAddBtn');
+                var section = document.getElementById('trackingConfAdd');
+                if (!addBtn || !section) return;
+
+                // Mirror admin-only visibility from the hidden proxy button to our section.
+                // schedule.js toggles addBtn.style.display = 'none' / '' / 'inline-flex'.
+                function syncVisibility() {
+                    section.style.display = (addBtn.style.display === 'none') ? 'none' : '';
+                }
+                syncVisibility();
+                new MutationObserver(syncVisibility).observe(addBtn, {
+                    attributes: true,
+                    attributeFilter: ['style']
+                });
+
+                // Wire each per-conference button: open the modal via the proxy,
+                // then pre-select the matching conference type and dispatch 'change'
+                // so any dependent fields (CDH subtype, Other title) render correctly.
+                var btns = section.querySelectorAll('.tracking-conf-btn');
+                for (var i = 0; i < btns.length; i++) {
+                    btns[i].addEventListener('click', function () {
+                        var conf = this.getAttribute('data-conf');
+                        addBtn.click();
+                        var sel = document.getElementById('confType');
+                        if (sel && conf) {
+                            sel.value = conf;
+                            sel.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    });
+                }
+            }
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', init);
+            } else {
+                init();
+            }
+        })();
+    </script>
+
     <script src="schedule.js"></script>
 </body>
 </html>

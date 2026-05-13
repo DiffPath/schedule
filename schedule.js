@@ -172,6 +172,11 @@ function setPathFilter(val) {
         const wantsAll = btn.dataset.filter === 'all';
         btn.classList.toggle('active', wantsAll ? val === 'all' : val !== 'all');
     });
+    // Mirror to the mobile select (single-row toolbar on phone viewports).
+    // The select only has 'all' and 'me' as values; any non-'all' filter is
+    // the user's own id, which the mobile UI represents as 'me'.
+    const mobileSel = document.getElementById('mobilePathSelect');
+    if (mobileSel) mobileSel.value = (val === 'all') ? 'all' : 'me';
 }
 let view;                             // 'day' | 'week' | 'month' | 'year' — assigned after settings load below
 let today;
@@ -1540,9 +1545,18 @@ function populatePathFilter() {
     const meTab = document.getElementById('pathTabMe');
     if (!meTab) return;
 
+    // Mirror visibility on the mobile select: when "Me" isn't available there's
+    // only one option, so we just hide the whole select rather than show a
+    // pointless one-item dropdown.
+    const mobileSel = document.getElementById('mobilePathSelect');
+    const mobileWrap = document.getElementById('mobilePathSelectWrap');
+    const mobileMeOpt = mobileSel ? mobileSel.querySelector('option[value="me"]') : null;
+
     // Gross room / manager: always show all pathologists with no option to switch
     if (isGrossRoom() || isManager()) {
         meTab.style.display = 'none';
+        if (mobileMeOpt) mobileMeOpt.hidden = true;
+        if (mobileWrap) mobileWrap.style.display = 'none';
         setPathFilter('all');
         return;
     }
@@ -1553,12 +1567,16 @@ function populatePathFilter() {
 
     if (me) {
         meTab.style.display = '';
+        if (mobileMeOpt) mobileMeOpt.hidden = false;
+        if (mobileWrap) mobileWrap.style.display = '';
         const validVals = new Set(['all', String(me.id)]);
         const fallback = settings.defaultPathFilter === 'all' ? 'all' : String(me.id);
         const next = validVals.has(currentPathFilter) ? currentPathFilter : fallback;
         setPathFilter(next);
     } else {
         meTab.style.display = 'none';
+        if (mobileMeOpt) mobileMeOpt.hidden = true;
+        if (mobileWrap) mobileWrap.style.display = 'none';
         setPathFilter('all');
     }
 }
@@ -6594,6 +6612,11 @@ document.getElementById('viewTabs').addEventListener('click', e => {
     document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
     view = btn.dataset.view;
+    // Mirror to the mobile view select so the two surfaces stay in sync
+    // (e.g. if a desktop tab is clicked programmatically or the user
+    // crosses the breakpoint after picking a view).
+    const mobileViewSel = document.getElementById('mobileViewSelect');
+    if (mobileViewSel) mobileViewSel.value = view;
     renderMain();
 });
 
@@ -6624,6 +6647,95 @@ document.getElementById('pathTabs').addEventListener('click', e => {
     renderMain();
 });
 
+// ── Mobile dropdown handlers ─────────────────────────────────────────
+// On phones the .path-tabs / .view-tabs button groups are hidden and
+// replaced by these compact <select>s in the toolbar. We delegate to the
+// existing tab buttons via .click() so the canonical logic (active class,
+// state updates, mirror sync) runs from a single code path.
+const mobileViewSel = document.getElementById('mobileViewSelect');
+if (mobileViewSel) {
+    mobileViewSel.addEventListener('change', e => {
+        const want = e.target.value;
+        const tab = document.querySelector(`.view-tab[data-view="${want}"]`);
+        if (tab) tab.click();
+    });
+    // Initial sync — pick up whatever 'view' the page booted with.
+    mobileViewSel.value = view;
+}
+
+const mobilePathSel = document.getElementById('mobilePathSelect');
+if (mobilePathSel) {
+    mobilePathSel.addEventListener('change', e => {
+        const want = e.target.value; // 'all' | 'me'
+        const filter = want === 'me' && loggedInPathId !== null
+            ? String(loggedInPathId)
+            : 'all';
+        setPathFilter(filter);
+        renderMain();
+    });
+}
+
+// ── Swipe navigation (mobile only) ───────────────────────────────────
+// Replaces the prev/next arrow buttons on phone viewports. Listens on
+// #main (which persists across re-renders — only its innerHTML is rewritten).
+// We require a predominantly-horizontal gesture so vertical scrolling
+// inside the schedule isn't accidentally interpreted as navigation.
+(function setupSwipeNavigation() {
+    const mainEl = document.getElementById('main');
+    if (!mainEl) return;
+
+    let startX = 0;
+    let startY = 0;
+    let startTime = 0;
+    let tracking = false;
+
+    const MIN_DISTANCE_PX = 60;     // horizontal travel required to count as a swipe
+    const MAX_VERTICAL_PX = 60;     // vertical drift allowed (keeps scroll gestures intact)
+    const MAX_DURATION_MS = 600;    // flicks only — long drags are probably scrolling
+
+    mainEl.addEventListener('touchstart', (e) => {
+        if (!isMobileViewport()) return;
+        if (e.touches.length !== 1) { tracking = false; return; }
+        const t = e.touches[0];
+        startX = t.clientX;
+        startY = t.clientY;
+        startTime = Date.now();
+        tracking = true;
+    }, { passive: true });
+
+    mainEl.addEventListener('touchmove', (e) => {
+        if (!tracking) return;
+        // Cancel tracking the moment the gesture goes more vertical than
+        // horizontal — that way native vertical scrolling stays smooth and
+        // we don't fire a swipe at the end.
+        const t = e.touches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) {
+            tracking = false;
+        }
+    }, { passive: true });
+
+    mainEl.addEventListener('touchend', (e) => {
+        if (!tracking) return;
+        tracking = false;
+        if (Date.now() - startTime > MAX_DURATION_MS) return;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        if (Math.abs(dx) < MIN_DISTANCE_PX) return;
+        if (Math.abs(dy) > MAX_VERTICAL_PX) return;
+        if (Math.abs(dx) <= Math.abs(dy)) return;
+
+        // Swipe right → previous period; swipe left → next period.
+        // Delegating to the buttons keeps a single navigation code path.
+        if (dx > 0) document.getElementById('prevBtn').click();
+        else        document.getElementById('nextBtn').click();
+    }, { passive: true });
+
+    mainEl.addEventListener('touchcancel', () => { tracking = false; }, { passive: true });
+})();
+
 // Viewport-aware view fallback: the Day tab is mobile-only (hidden on
 // desktop via CSS), so if the window crosses the mobile breakpoint while
 // Day view is active we swap to Week so the user isn't stranded on a tab
@@ -6643,6 +6755,8 @@ window.addEventListener('resize', () => {
         document.querySelectorAll('.view-tab').forEach(t => {
             t.classList.toggle('active', t.dataset.view === view);
         });
+        const mobileViewSel = document.getElementById('mobileViewSelect');
+        if (mobileViewSel) mobileViewSel.value = view;
         renderMain();
     }
 });

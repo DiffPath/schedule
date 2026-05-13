@@ -173,7 +173,7 @@ function setPathFilter(val) {
         btn.classList.toggle('active', wantsAll ? val === 'all' : val !== 'all');
     });
 }
-let view;                             // 'day' | 'week' | 'month' | 'year' | 'agenda' — assigned after settings load below
+let view;                             // 'day' | 'week' | 'month' | 'year' — assigned after settings load below
 let today;
 let cursor;
 
@@ -189,7 +189,7 @@ function isMobileViewport() {
 // ────────────── DISPLAY SETTINGS ──────────────
 // Persisted in localStorage so preferences survive page refreshes.
 const SETTINGS_STORAGE_KEY = 'schedDisplaySettings';
-const VALID_DEFAULT_VIEWS = ['day', 'week', 'month', 'year', 'agenda'];
+const VALID_DEFAULT_VIEWS = ['day', 'week', 'month', 'year'];
 const VALID_DEFAULT_FILTERS = ['all', 'me'];
 const DEFAULT_SETTINGS = {
     weekdaysOnly: false,
@@ -1721,13 +1721,21 @@ db.ref('scheduler/lfSendoutWeeks').on('value', snap => {
     if (pathologistsReady && vacationsReady) renderAll();
 });
 
-// Procedures: hourly entries for the week-view grid. Independent of the
-// pathologist rotation, so we don't need to clear the day cache or wait
-// on it to render the rest of the calendar — just re-render the main view
-// when this changes (and only if we're currently on the week view).
+// Procedures: hourly entries for the week-view grid (and the mobile day
+// view, which uses the same hourly grid). Independent of the pathologist
+// rotation, so we don't need to clear the day cache or wait on it to
+// render the rest of the calendar — just re-render the main view when
+// this changes, but only if we're on a view that actually shows the
+// procedure schedule (week or day). Skipping month/year avoids a wasted
+// render on views that don't display procedures.
+//
+// NOTE: this re-render is required for the case where the procedures
+// snapshot arrives AFTER pathologists + vacations have already triggered
+// the initial renderAll(); without it, the day/week view paints with an
+// empty `procedures` global and stays blank until the user changes view.
 db.ref('scheduler/procedures').on('value', snap => {
     procedures = snap.exists() ? snap.val() : {};
-    if (pathologistsReady && vacationsReady && view === 'week') renderMain();
+    if (pathologistsReady && vacationsReady && (view === 'week' || view === 'day')) renderMain();
 }, err => {
     console.error('Firebase procedures error:', err);
 });
@@ -4264,7 +4272,7 @@ function periodContainsToday() {
     } else if (view === 'month') {
         return cursor.getFullYear() === today.getFullYear() &&
             cursor.getMonth() === today.getMonth();
-    } else { // year, agenda
+    } else { // year
         return cursor.getFullYear() === today.getFullYear();
     }
 }
@@ -6564,148 +6572,12 @@ document.getElementById('svcReset').addEventListener('click', async () => {
 });
 
 // ────────────── DISPATCH ──────────────
-function renderAgenda() {
-    const main = document.getElementById('main');
-
-    // Determine which pathologists to show
-    const activePaths = currentPathFilter === 'all'
-        ? pathologists
-        : pathologists.filter(p => p.id === parseInt(currentPathFilter));
-
-    if (activePaths.length === 0) return;
-
-    // Single-pathologist mode: existing compact list view
-    if (activePaths.length === 1) {
-        const p = activePaths[0];
-        const pid = p.id;
-
-        let html = `<div style="max-width: 600px; margin: 0 auto;">
-      <h3 style="font-family: var(--serif); font-size: 26px; margin-bottom: 16px; color: var(--ink);">Compact Schedule: ${p.name.replace(/^Dr\. /, '')}</h3>
-      <div style="background: var(--paper); border: 1px solid var(--rule-soft); border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.02);">`;
-
-        let found = 0;
-        for (let i = 0; i < 60; i++) {
-            const d = addDays(today, i);
-            const a = getDayAssignments(d)[pid];
-            if (!a || a.type === 'off' || a.type === 'blank') continue;
-
-            found++;
-            const isPto = a.type === 'pto';
-            const isOffSite = a.type === 'off_site';
-            const svcStr = isPto ? 'PTO'
-                : isOffSite ? a.service.name
-                    : `<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(${a.service.cssVar});margin-right:8px;"></span>${a.service.name}`;
-            const ocBadge = a.onCall ? `<span style="background: var(--accent); color: white; padding: 2px 6px; border-radius: 3px; font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; margin-left: 10px;">On Call</span>` : '';
-            const rowBg = isPto
-                ? 'repeating-linear-gradient(45deg, var(--pto-stripe) 0, var(--pto-stripe) 4px, var(--pto-bg) 4px, var(--pto-bg) 8px)'
-                : (pathBgColor(p.color) || 'var(--bg)');
-            const color = isPto ? 'var(--pto-ink)' : 'var(--ink)';
-            const weight = (isPto || isOffSite) ? '600' : '400';
-
-            html += `
-        <div style="display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--rule-soft); background: ${rowBg}; color: ${color};">
-          <div style="font-weight: 500; font-size: 14px;">${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}</div>
-          <div style="font-size: 13.5px; display: flex; align-items: center; font-weight: ${weight};">
-            ${svcStr} ${ocBadge}
-          </div>
-        </div>`;
-        }
-
-        if (found === 0) {
-            html += `<div style="padding: 20px; text-align: center; color: var(--ink-3); font-style: italic;">No upcoming scheduled shifts in the next 60 days.</div>`;
-        }
-
-        html += `</div></div>`;
-        main.innerHTML = html;
-        return;
-    }
-
-    // All-pathologists mode: day-by-day agenda showing everyone
-    let html = `<div style="max-width: 700px; margin: 0 auto;">
-      <h3 style="font-family: var(--serif); font-size: 26px; margin-bottom: 16px; color: var(--ink);">Compact Schedule: All Pathologists</h3>
-      <div style="background: var(--paper); border: 1px solid var(--rule-soft); border-radius: 8px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.02);">`;
-
-    let foundAny = false;
-    for (let i = 0; i < 60; i++) {
-        const d = addDays(today, i);
-        if (isWeekend(d)) continue;
-        const holiday = getFederalHoliday(d);
-        const dayAssign = getDayAssignments(d);
-
-        // Check if any pathologist has something noteworthy today
-        const hasContent = activePaths.some(p => {
-            const a = dayAssign[p.id];
-            return a && a.type !== 'off' && a.type !== 'blank';
-        });
-        if (!hasContent && !holiday) continue;
-
-        foundAny = true;
-        const isToday = sameDay(d, today);
-        const holidayBadge = holiday
-            ? `<span style="font-size:11px; background: var(--holiday-bg,#fff8e1); color: var(--holiday-ink,#7a5800); border-radius: 3px; padding: 1px 6px; margin-left: 8px;">${holiday}</span>`
-            : '';
-
-        html += `
-        <div style="border-bottom: 1px solid var(--rule-soft);">
-          <div style="padding: 10px 18px 6px; background: ${isToday ? 'var(--today-bg, rgba(0,0,0,0.03))' : 'transparent'}; display: flex; align-items: center; gap: 4px;">
-            <span style="font-weight: 600; font-size: 13.5px; color: ${isToday ? 'var(--accent)' : 'var(--ink-2)'};">${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}</span>
-            ${holidayBadge}
-          </div>`;
-
-        // Lake Forest sendout banner sits above the first pathologist row.
-        if (isLfSendoutDay(d)) {
-            html += `
-          <div style="display: flex; align-items: center; justify-content: center; padding: 5px 18px; background: linear-gradient(90deg, #e8d6c8 0%, #f0e0d4 100%); border-top: 1px solid #c69477; border-bottom: 1px solid #c69477;">
-            <span style="font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: #6b3a1e;">LF sendout</span>
-          </div>`;
-        }
-
-        activePaths.forEach(p => {
-            const a = dayAssign[p.id];
-            if (!a || a.type === 'off' || a.type === 'blank') return;
-
-            const isPto = a.type === 'pto';
-            const isOffSite2 = a.type === 'off_site';
-            const svcStr = isPto
-                ? 'PTO'
-                : isOffSite2
-                    ? a.service.name
-                    : `<span style="display:inline-block;width:7px;height:7px;border-radius:2px;background:var(${a.service.cssVar});margin-right:6px;flex-shrink:0;"></span>${a.service.short}`;
-            const ocBadge = a.onCall
-                ? `<span style="background: var(--accent); color: white; padding: 1px 5px; border-radius: 3px; font-family: var(--mono); font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; margin-left: 8px;">On Call</span>`
-                : '';
-            const rowBg = isPto
-                ? 'repeating-linear-gradient(45deg, var(--pto-stripe) 0, var(--pto-stripe) 4px, var(--pto-bg) 4px, var(--pto-bg) 8px)'
-                : (pathBgColor(p.color) || 'transparent');
-
-            html += `
-          <div style="display: flex; align-items: center; padding: 7px 18px 7px 28px; background: ${rowBg}; gap: 10px;">
-            <span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:${p.color}; flex-shrink:0;"></span>
-            <span style="font-size:12px; font-weight:600; color: var(--ink-2); min-width: 26px;">${p.initials}</span>
-            <span style="font-size: 13px; display: flex; align-items: center; color: ${isPto ? 'var(--pto-ink)' : 'var(--ink)'}; font-weight: ${(isPto || isOffSite2) ? '600' : '400'};">
-              ${svcStr} ${ocBadge}
-            </span>
-          </div>`;
-        });
-
-        html += `</div>`;
-    }
-
-    if (!foundAny) {
-        html += `<div style="padding: 20px; text-align: center; color: var(--ink-3); font-style: italic;">No upcoming scheduled shifts in the next 60 days.</div>`;
-    }
-
-    html += `</div></div>`;
-    main.innerHTML = html;
-}
-
 function renderMain() {
     renderPeriodLabel();
     if (view === 'day') renderDay();
     else if (view === 'week') renderWeek();
     else if (view === 'month') renderMonth();
     else if (view === 'year') renderYear();
-    else if (view === 'agenda') renderAgenda(); // Add this line
 }
 
 function renderAll() {

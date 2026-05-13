@@ -3057,13 +3057,29 @@ main {
         display: block;
     }
 
-    /* Week view: each day as its own card, stacked */
+    /* Week view: each day as its own card, stacked.
+       !important is necessary on grid-template-columns because the
+       schedule's JavaScript sets an inline style on .week-view to set
+       up the 7-column desktop grid. Inline styles beat regular CSS
+       declarations, so without !important the mobile stack rule loses
+       and you get 7 squashed columns on a phone. The other declarations
+       use !important defensively in case JS also sets inline flex/height. */
     .week-view {
-        grid-template-columns: 1fr;
-        min-height: auto;
-        height: auto;
+        grid-template-columns: 1fr !important;
+        grid-auto-rows: auto !important;
+        grid-auto-flow: row !important;
+        min-height: auto !important;
+        height: auto !important;
         gap: 8px;
-        flex: none;   /* cancel desktop flex:1 fill */
+        flex: none !important;   /* cancel desktop flex:1 fill */
+    }
+
+    /* The day cards themselves — kill any inline height/flex that
+       would make each card stretch and waste vertical space. */
+    .week-view .week-day {
+        height: auto !important;
+        min-height: 0 !important;
+        flex: none !important;
     }
 
     /* Hourly grids: revert to natural content height; the page scrolls. */
@@ -3081,7 +3097,7 @@ main {
        the Day tab to see procedures for a specific date. (Month and Year
        views never had hour grids to begin with.) */
     .week-view .wd-hours {
-        display: none;
+        display: none !important;
     }
 
     .week-day {

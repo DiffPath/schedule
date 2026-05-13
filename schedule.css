@@ -661,7 +661,7 @@ main {
    .wd-hours from week view (same classes → same theming, same handlers)
    and just gives the lone card a wider, more readable layout. The Day
    tab is hidden on desktop (see the @media (min-width: 801px) block
-   further down) — desktop users see Week / Month / Year and
+   further down) — desktop users see Week / Month / Year / Compact and
    never need a single-day view.
 */
 .day-view {
@@ -2892,7 +2892,7 @@ main {
 
     /* ── Header: 2 tight rows ──
        Row 1: [☰] [‹] [Period] [›]      ← centered, period tappable=today
-       Row 2: [All|Me]   [Week|Month|Year]
+       Row 2: [All|Me]   [Week|Month|Year|Compact]
     */
     header {
         position: sticky;
@@ -3057,13 +3057,29 @@ main {
         display: block;
     }
 
-    /* Week view: each day as its own card, stacked */
+    /* Week view: each day as its own card, stacked.
+       !important is necessary on grid-template-columns because the
+       schedule's JavaScript sets an inline style on .week-view to set
+       up the 7-column desktop grid. Inline styles beat regular CSS
+       declarations, so without !important the mobile stack rule loses
+       and you get 7 squashed columns on a phone. The other declarations
+       use !important defensively in case JS also sets inline flex/height. */
     .week-view {
-        grid-template-columns: 1fr;
-        min-height: auto;
-        height: auto;
+        grid-template-columns: 1fr !important;
+        grid-auto-rows: auto !important;
+        grid-auto-flow: row !important;
+        min-height: auto !important;
+        height: auto !important;
         gap: 8px;
-        flex: none;   /* cancel desktop flex:1 fill */
+        flex: none !important;   /* cancel desktop flex:1 fill */
+    }
+
+    /* The day cards themselves — kill any inline height/flex that
+       would make each card stretch and waste vertical space. */
+    .week-view .week-day {
+        height: auto !important;
+        min-height: 0 !important;
+        flex: none !important;
     }
 
     /* Hourly grids: revert to natural content height; the page scrolls. */
@@ -3081,7 +3097,7 @@ main {
        the Day tab to see procedures for a specific date. (Month and Year
        views never had hour grids to begin with.) */
     .week-view .wd-hours {
-        display: none;
+        display: none !important;
     }
 
     .week-day {
@@ -4908,6 +4924,89 @@ aside {
    positioning context. */
 .toolbar-right { position: relative; }
 
+/* ── Mobile-only compact toolbar controls ─────────────────────────────
+   These selects replace the .path-tabs / .view-tabs button groups on
+   phone-sized viewports and sit to the right of the date in a single
+   toolbar row. The arrow nav buttons are also hidden on mobile (users
+   swipe instead). Hidden on desktop here; revealed in the ≤800px
+   media query below. The selects mirror state with the desktop tabs
+   so the existing navigation logic still drives renders.
+
+   Visual language: each select reads like a single "active" pill tab —
+   matching the .view-tab.active / .path-tab.active treatment (paper
+   background, subtle elevation, no hard border, same typography). A
+   chevron at the trailing edge signals the menu affordance. */
+.mobile-toolbar-controls {
+    display: none;
+}
+
+.mobile-select-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.mobile-toolbar-select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background: var(--paper);
+    border: none;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    /* Right padding leaves room for the chevron pseudo-element. */
+    padding: 7px 26px 7px 12px;
+    cursor: pointer;
+    line-height: 1;
+    min-width: 0;
+    transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.mobile-toolbar-select:hover {
+    background: var(--paper-2);
+}
+
+.mobile-toolbar-select:focus,
+.mobile-toolbar-select:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--rule);
+}
+
+/* Wrap the chevron in a subtle .bg-2 pill behind the select so the whole
+   group reads like part of the .view-tabs / .path-tabs family — the
+   select sits on top like an active tab, with the wrap providing the
+   soft container tone. This mirrors how the desktop pill-tabs nest on
+   top of a .bg-2 strip. */
+.mobile-select-wrap {
+    background: var(--bg-2);
+    border-radius: 10px;
+    padding: 2px;
+}
+
+/* Custom chevron — inline SVG via background-image so the select still
+   participates in form styling but loses the platform default arrow.
+   Color matches --ink-3 (the muted accent used elsewhere in the toolbar). */
+.mobile-select-wrap::after {
+    content: '';
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    width: 9px;
+    height: 9px;
+    transform: translateY(-50%);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%237a96b0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='4,6 8,10 12,6'/></svg>");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    pointer-events: none;
+}
+
 /* ── On-call callout (re-styled as a horizontal strip above the calendar) ── */
 .oc-callout-wrap {
     flex-shrink: 0;
@@ -5168,16 +5267,20 @@ aside {
         min-height: 0;
     }
 
-    /* Mobile toolbar: compact 2-row layout */
+    /* Mobile toolbar: compact single-row layout.
+       Layout: [hamburger] [date (flex)] [path ▾] [view ▾]
+       Arrow nav buttons and the .path-tabs / .view-tabs button groups
+       are hidden — swipe handles prev/next, and the mobile selects
+       replace the toggles. */
     .schedule-toolbar {
         position: sticky;
         top: 0;
         z-index: 50;
         display: grid;
-        grid-template-columns: auto 1fr auto;
-        grid-template-rows: auto auto;
+        grid-template-columns: auto 1fr auto auto;
+        grid-template-rows: auto;
         column-gap: 8px;
-        row-gap: 8px;
+        row-gap: 0;
         padding: 10px 14px;
         align-items: center;
     }
@@ -5196,48 +5299,44 @@ aside {
         left: auto;
         top: auto;
         transform: none;
-        grid-column: 2 / span 2;
+        grid-column: 2;
         grid-row: 1;
         gap: 6px;
+        min-width: 0;            /* allow date label to truncate inside grid cell */
+        justify-content: flex-start;
     }
 
     .schedule-toolbar .current-period {
         font-size: 17px;
         min-width: 0;
-        flex: 0 1 auto;
-        text-align: center;
+        flex: 1 1 auto;
+        text-align: left;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
         padding: 4px 6px;
     }
 
+    /* Hide the arrow nav buttons on mobile — swipe replaces them. */
     .toolbar-center .nav-btn {
-        width: 40px;
-        height: 40px;
-        font-size: 18px;
+        display: none;
     }
 
-    .toolbar-left {
-        grid-column: 1 / span 2;
-        grid-row: 2;
-        flex: 1 1 auto;
-        min-width: 0;
-    }
-
+    /* Hide the desktop tab groups on mobile — their state is mirrored by
+       the .mobile-toolbar-controls selects below. We keep the buttons in
+       the DOM so existing event handlers and references still work. */
+    .toolbar-left,
     .toolbar-right {
-        grid-column: 3;
-        grid-row: 2;
+        display: none;
+    }
+
+    /* Show the mobile compact controls on the right side of the toolbar. */
+    .mobile-toolbar-controls {
+        display: inline-flex;
+        align-items: center;
         gap: 6px;
-    }
-
-    .toolbar-left .path-tabs {
-        flex: 1 1 auto;
-        margin-right: 0;
-    }
-
-    .toolbar-left .path-tab {
-        flex: 1 1 0;
+        grid-column: 3 / span 2;
+        grid-row: 1;
     }
 
     .menu-btn {
@@ -5288,11 +5387,6 @@ aside {
         padding: 8px 10px;
         column-gap: 6px;
     }
-    .toolbar-center .nav-btn {
-        width: 36px;
-        height: 36px;
-        font-size: 17px;
-    }
     .schedule-toolbar .current-period {
         font-size: 15px;
         padding: 3px 4px;
@@ -5304,6 +5398,23 @@ aside {
     .aside-toggle-btn {
         width: 38px;
         height: 38px;
+    }
+    .mobile-toolbar-controls {
+        gap: 4px;
+    }
+    .mobile-select-wrap {
+        padding: 2px;
+        border-radius: 9px;
+    }
+    .mobile-toolbar-select {
+        font-size: 11px;
+        padding: 6px 22px 6px 9px;
+        letter-spacing: 0.05em;
+    }
+    .mobile-select-wrap::after {
+        right: 8px;
+        width: 8px;
+        height: 8px;
     }
 }
 

@@ -6045,60 +6045,83 @@ if (mobilePathSel) {
     const MAX_DURATION_MS  = 600; // flicks only — long slow drags are probably scrolling
     const ANIM_MS          = 280; // slide-in / slide-out duration
 
-    function mainWidth() { return mainEl.offsetWidth || window.innerWidth; }
+    // (mainWidth helper removed — width computed inline in animateNavigation)
 
     // Animate main off-screen in the swipe direction, then re-render the new
     // period and slide the fresh content in from the opposite side.
-    function animateNavigation(goNext) {
+    // Animate navigation so old and new content slide as one continuous rigid
+    // band. A frozen clone of #main (the leaving panel) is positioned flush
+    // against the new #main (the entering panel); both are then transitioned
+    // the same delta-x at the same speed so they appear perfectly adjacent.
+    //
+    // Geometry example (goNext, finalDx = -80, w = 400):
+    //   snapshot  translateX(-80) → translateX(-400)   Δ = -320 px
+    //   #main     translateX(320) → translateX(0)      Δ = -320 px
+    //   They are always exactly w px apart — one seamless sliding band.
+    function animateNavigation(goNext, finalDx) {
         isAnimating = true;
-        const w   = mainWidth();
-        const exitX  = goNext ? -w :  w;   // where the current content goes
-        const enterX = goNext ?  w : -w;   // where the new content starts
+        const w      = mainEl.offsetWidth || window.innerWidth;
+        const parent = mainEl.offsetParent || mainEl.parentElement;
 
-        // ── Phase 1: slide current content out ──────────────────────────
-        mainEl.style.transition = `transform ${ANIM_MS}ms ease-out`;
-        mainEl.style.transform  = `translateX(${exitX}px)`;
+        // 1. Freeze current content as an absolutely-positioned clone
+        const snapshot = mainEl.cloneNode(true);
+        snapshot.setAttribute('aria-hidden', 'true');
+        snapshot.style.cssText = [
+            'position:absolute',
+            'top:'  + mainEl.offsetTop    + 'px',
+            'left:' + mainEl.offsetLeft   + 'px',
+            'width:'  + w                 + 'px',
+            'height:' + mainEl.offsetHeight + 'px',
+            'transform:translateX(' + finalDx + 'px)',
+            'transition:none',
+            'z-index:5',
+            'pointer-events:none',
+            'overflow:hidden',
+        ].join(';');
+        parent.appendChild(snapshot);
 
-        const onExitDone = () => {
-            mainEl.removeEventListener('transitionend', onExitDone);
+        // 2. Park #main flush against the snapshot's incoming edge.
+        //    enterX = w + finalDx  (goNext)  → new starts at snapshot's right edge
+        //    enterX = finalDx - w  (!goNext) → new starts at snapshot's left edge
+        const enterX = goNext ? (w + finalDx) : (finalDx - w);
+        const exitX  = goNext ? -w : w;
 
-            // ── Phase 2: update cursor + re-render ──────────────────────
-            if (goNext) {
-                if (view === 'day')        cursor = addDays(cursor, 1);
-                else if (view === 'week')  cursor = addDays(cursor, 7);
-                else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-                else                       cursor = new Date(cursor.getFullYear() + 1, cursor.getMonth(), 1);
-            } else {
-                if (view === 'day')        cursor = addDays(cursor, -1);
-                else if (view === 'week')  cursor = addDays(cursor, -7);
-                else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
-                else                       cursor = new Date(cursor.getFullYear() - 1, cursor.getMonth(), 1);
-            }
-            renderMain(); // replaces #main.innerHTML with the new period
+        mainEl.style.transition = 'none';
+        mainEl.style.transform  = 'translateX(' + enterX + 'px)';
 
-            // ── Phase 3: place new content off-screen then slide in ─────
-            // Two rAF calls: the first lets the browser process the new DOM
-            // from renderMain(); the second flushes the style change so the
-            // transition actually fires.
-            mainEl.style.transition = 'none';
-            mainEl.style.transform  = `translateX(${enterX}px)`;
+        // 3. Update cursor & render new period into #main
+        if (goNext) {
+            if (view === 'day')        cursor = addDays(cursor, 1);
+            else if (view === 'week')  cursor = addDays(cursor, 7);
+            else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+            else                       cursor = new Date(cursor.getFullYear() + 1, cursor.getMonth(), 1);
+        } else {
+            if (view === 'day')        cursor = addDays(cursor, -1);
+            else if (view === 'week')  cursor = addDays(cursor, -7);
+            else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+            else                       cursor = new Date(cursor.getFullYear() - 1, cursor.getMonth(), 1);
+        }
+        renderMain();
 
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    mainEl.style.transition = `transform ${ANIM_MS}ms ease-out`;
-                    mainEl.style.transform  = '';
+        // 4. Double-rAF: slide both panels the same Δx simultaneously
+        requestAnimationFrame(function() {
+            requestAnimationFrame(function() {
+                var timing = 'transform ' + ANIM_MS + 'ms ease-out';
+                snapshot.style.transition = timing;
+                snapshot.style.transform  = 'translateX(' + exitX + 'px)';
+                mainEl.style.transition   = timing;
+                mainEl.style.transform    = '';
 
-                    const onEnterDone = () => {
-                        mainEl.removeEventListener('transitionend', onEnterDone);
-                        mainEl.style.transition = '';
-                        isAnimating = false;
-                    };
-                    mainEl.addEventListener('transitionend', onEnterDone);
-                });
+                function onDone(e) {
+                    if (e.propertyName !== 'transform') return;
+                    mainEl.removeEventListener('transitionend', onDone);
+                    snapshot.remove();
+                    mainEl.style.transition = '';
+                    isAnimating = false;
+                }
+                mainEl.addEventListener('transitionend', onDone);
             });
-        };
-
-        mainEl.addEventListener('transitionend', onExitDone);
+        });
     }
 
     // Snap the content back to centre (used when a drag doesn't qualify).
@@ -6171,7 +6194,7 @@ if (mobilePathSel) {
         }
 
         // Valid swipe — commit the navigation with a slide animation.
-        animateNavigation(dx < 0); // swipe left → next; swipe right → prev
+        animateNavigation(dx < 0, dx); // swipe left → next; swipe right → prev
     }, { passive: true });
 
     mainEl.addEventListener('touchcancel', () => {

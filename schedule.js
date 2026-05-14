@@ -6025,12 +6025,14 @@ if (mobilePathSel) {
 
 // ── Swipe navigation (mobile only) ───────────────────────────────────
 // Listens on #main (which persists across re-renders). Tracks horizontal
-// gestures live — the content follows the finger — then on a qualifying
-// swipe, slides the old content out and the new content in with a CSS
-// transition, so the user sees the next/previous period swiping into view.
+// gestures live — the previous/next periods are pre-rendered as snapshots
+// flush to either side of #main, and all three translate together with the
+// finger so the user sees the adjacent period swiping in as they drag.
+// On a qualifying swipe the band continues to its committed position; on
+// an aborted drag everything snaps back.
 //
-// Architecture: #main is transformed as a unit. Its parent .content-area
-// already has overflow:hidden, so the translated #main is naturally clipped.
+// Architecture: #main and its two neighbor snapshots all live as siblings
+// in the same .content-area (which already clips with overflow:hidden).
 // The toolbar sits above #main and is unaffected.
 (function setupSwipeNavigation() {
     const mainEl = document.getElementById('main');
@@ -6040,95 +6042,180 @@ if (mobilePathSel) {
     let tracking = false, dragging = false;
     let isAnimating = false;
 
+    // Neighbor snapshots built on first confirmed horizontal move and
+    // torn down at the end of every gesture (commit or abort).
+    let prevSnap = null, nextSnap = null;
+    let snapWidth = 0;
+
     const MIN_DISTANCE_PX = 60;   // horizontal travel required to count as a swipe
     const MAX_VERTICAL_PX  = 60;  // vertical drift allowed (keeps scroll gestures intact)
     const MAX_DURATION_MS  = 600; // flicks only — long slow drags are probably scrolling
     const ANIM_MS          = 280; // slide-in / slide-out duration
 
-    // (mainWidth helper removed — width computed inline in animateNavigation)
+    // Compute the cursor value for the period `delta` steps from the
+    // current one (+1 = next, -1 = prev). Mirrors the prev/next button
+    // handlers so swipes and buttons stay perfectly aligned.
+    function cursorFor(delta) {
+        if (view === 'day')        return addDays(cursor, delta);
+        else if (view === 'week')  return addDays(cursor, 7 * delta);
+        else if (view === 'month') return new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1);
+        else                       return new Date(cursor.getFullYear() + delta, cursor.getMonth(), 1);
+    }
 
-    // Animate main off-screen in the swipe direction, then re-render the new
-    // period and slide the fresh content in from the opposite side.
-    // Animate navigation so old and new content slide as one continuous rigid
-    // band. A frozen clone of #main (the leaving panel) is positioned flush
-    // against the new #main (the entering panel); both are then transitioned
-    // the same delta-x at the same speed so they appear perfectly adjacent.
-    //
-    // Geometry example (goNext, finalDx = -80, w = 400):
-    //   snapshot  translateX(-80) → translateX(-400)   Δ = -320 px
-    //   #main     translateX(320) → translateX(0)      Δ = -320 px
-    //   They are always exactly w px apart — one seamless sliding band.
-    function animateNavigation(goNext, finalDx) {
-        isAnimating = true;
+    // Render-and-clone helper: temporarily swaps `cursor` to render a
+    // neighbor period into #main, clones the result, then leaves cursor
+    // mutated (caller restores via a final render). Side effects on
+    // elements outside #main (e.g. the period label updated by
+    // renderPeriodLabel) flicker through neighbor values within this
+    // sync block, but the browser doesn't paint until JS yields, so
+    // they're invisible — only the caller's final restore render shows.
+    function snapshotPeriod(periodCursor) {
+        cursor = periodCursor;
+        renderMain();
+        const clone = mainEl.cloneNode(true);
+        clone.setAttribute('aria-hidden', 'true');
+        return clone;
+    }
+
+    // Build prev + next snapshots flush to either side of #main. Called
+    // once per gesture, the moment the drag is confirmed horizontal.
+    // Costs 3 renderMain() calls (prev, next, restore) — fine because
+    // it only runs after the 8px horizontal dead zone is crossed, so
+    // pure taps and vertical scrolls don't pay for it.
+    function buildNeighbors() {
         const w      = mainEl.offsetWidth || window.innerWidth;
         const parent = mainEl.offsetParent || mainEl.parentElement;
+        const top    = mainEl.offsetTop;
+        const left   = mainEl.offsetLeft;
+        const height = mainEl.offsetHeight;
+        snapWidth = w;
 
-        // 1. Freeze current content as an absolutely-positioned clone
-        const snapshot = mainEl.cloneNode(true);
-        snapshot.setAttribute('aria-hidden', 'true');
-        snapshot.style.cssText = [
-            'position:absolute',
-            'top:'  + mainEl.offsetTop    + 'px',
-            'left:' + mainEl.offsetLeft   + 'px',
-            'width:'  + w                 + 'px',
-            'height:' + mainEl.offsetHeight + 'px',
-            'transform:translateX(' + finalDx + 'px)',
-            'transition:none',
-            'z-index:5',
-            'pointer-events:none',
-            'overflow:hidden',
-        ].join(';');
-        parent.appendChild(snapshot);
+        const savedCursor = cursor;
+        prevSnap = snapshotPeriod(cursorFor(-1));
+        nextSnap = snapshotPeriod(cursorFor(+1));
+        cursor = savedCursor;
+        renderMain(); // restore #main to the current period
 
-        // 2. Park #main flush against the snapshot's incoming edge.
-        //    enterX = w + finalDx  (goNext)  → new starts at snapshot's right edge
-        //    enterX = finalDx - w  (!goNext) → new starts at snapshot's left edge
-        const enterX = goNext ? (w + finalDx) : (finalDx - w);
-        const exitX  = goNext ? -w : w;
-
-        mainEl.style.transition = 'none';
-        mainEl.style.transform  = 'translateX(' + enterX + 'px)';
-
-        // 3. Update cursor & render new period into #main
-        if (goNext) {
-            if (view === 'day')        cursor = addDays(cursor, 1);
-            else if (view === 'week')  cursor = addDays(cursor, 7);
-            else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-            else                       cursor = new Date(cursor.getFullYear() + 1, cursor.getMonth(), 1);
-        } else {
-            if (view === 'day')        cursor = addDays(cursor, -1);
-            else if (view === 'week')  cursor = addDays(cursor, -7);
-            else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
-            else                       cursor = new Date(cursor.getFullYear() - 1, cursor.getMonth(), 1);
+        function styleSnap(snap, tx) {
+            snap.style.cssText = [
+                'position:absolute',
+                'top:'    + top    + 'px',
+                'left:'   + left   + 'px',
+                'width:'  + w      + 'px',
+                'height:' + height + 'px',
+                'transform:translateX(' + tx + 'px)',
+                'transition:none',
+                'z-index:5',
+                'pointer-events:none',
+                'overflow:hidden',
+            ].join(';');
         }
-        renderMain();
+        styleSnap(prevSnap, -w);
+        styleSnap(nextSnap,  w);
+        parent.appendChild(prevSnap);
+        parent.appendChild(nextSnap);
+    }
 
-        // 4. Double-rAF: slide both panels the same Δx simultaneously
+    function clearNeighbors() {
+        if (prevSnap) { prevSnap.remove(); prevSnap = null; }
+        if (nextSnap) { nextSnap.remove(); nextSnap = null; }
+    }
+
+    // Translate #main and both neighbors together so the band moves as
+    // one rigid unit — main at dx, prev at -w+dx, next at +w+dx.
+    function moveAll(dx) {
+        mainEl.style.transform = 'translateX(' + dx + 'px)';
+        if (prevSnap) prevSnap.style.transform = 'translateX(' + (-snapWidth + dx) + 'px)';
+        if (nextSnap) nextSnap.style.transform = 'translateX(' + ( snapWidth + dx) + 'px)';
+    }
+
+    function setTransitionAll(t) {
+        mainEl.style.transition = t;
+        if (prevSnap) prevSnap.style.transition = t;
+        if (nextSnap) nextSnap.style.transition = t;
+    }
+
+    // Run `cb` once the current transform transition on #main ends, with
+    // a setTimeout fallback in case transitionend doesn't fire (e.g. the
+    // start and end values turned out identical, or the tab was hidden).
+    function whenTransformDone(durationMs, cb) {
+        let done = false;
+        function finish() {
+            if (done) return;
+            done = true;
+            mainEl.removeEventListener('transitionend', onTransition);
+            cb();
+        }
+        function onTransition(e) {
+            if (e.propertyName !== 'transform') return;
+            finish();
+        }
+        mainEl.addEventListener('transitionend', onTransition);
+        setTimeout(finish, durationMs + 60);
+    }
+
+    // Commit: the relevant neighbor slides into the center, #main slides
+    // off in the swipe direction, the other neighbor slides further off.
+    // When the animation ends, we update `cursor`, re-render #main with
+    // the new period, snap its transform back to 0, and remove both
+    // snapshots. Because snapshots have z-index:5 and #main doesn't,
+    // the now-centered neighbor masks #main during the swap — no flash.
+    function commitAnimation(goNext, finalDx) {
+        isAnimating = true;
+        const w = snapWidth;
+        const targetDx = goNext ? -w : w;
+        const timing = 'transform ' + ANIM_MS + 'ms ease-out';
+
+        // First make sure the pre-transition transform is the live drag
+        // position so the browser interpolates from there, not from 0.
+        moveAll(finalDx);
+
+        // Double-rAF: let the browser commit the starting transform,
+        // then turn on the transition and set the ending transform.
         requestAnimationFrame(function() {
             requestAnimationFrame(function() {
-                var timing = 'transform ' + ANIM_MS + 'ms ease-out';
-                snapshot.style.transition = timing;
-                snapshot.style.transform  = 'translateX(' + exitX + 'px)';
-                mainEl.style.transition   = timing;
-                mainEl.style.transform    = '';
+                setTransitionAll(timing);
+                moveAll(targetDx);
 
-                function onDone(e) {
-                    if (e.propertyName !== 'transform') return;
-                    mainEl.removeEventListener('transitionend', onDone);
-                    snapshot.remove();
+                whenTransformDone(ANIM_MS, function() {
+                    cursor = cursorFor(goNext ? 1 : -1);
+                    renderMain();
+                    // Reset #main without animating back through 0.
+                    mainEl.style.transition = 'none';
+                    mainEl.style.transform  = '';
+                    // Force the no-transition state to commit before the
+                    // next style change so the next gesture starts clean.
+                    void mainEl.offsetHeight;
                     mainEl.style.transition = '';
+                    clearNeighbors();
                     isAnimating = false;
-                }
-                mainEl.addEventListener('transitionend', onDone);
+                });
             });
         });
     }
 
-    // Snap the content back to centre (used when a drag doesn't qualify).
-    function snapBack() {
-        mainEl.style.transition = `transform 0.2s ease`;
-        mainEl.style.transform  = '';
-        dragging = false;
+    // Abort: slide everything back to baseline (#main → 0, neighbors → ±w),
+    // then remove the snapshots.
+    function snapBack(finalDx) {
+        isAnimating = true;
+        const timing = 'transform 200ms ease';
+
+        // Ensure we transition from the live drag position.
+        moveAll(finalDx);
+
+        requestAnimationFrame(function() {
+            requestAnimationFrame(function() {
+                setTransitionAll(timing);
+                moveAll(0);
+
+                whenTransformDone(200, function() {
+                    mainEl.style.transition = '';
+                    mainEl.style.transform  = '';
+                    clearNeighbors();
+                    isAnimating = false;
+                });
+            });
+        });
     }
 
     // ── Touch listeners ──────────────────────────────────────────────────
@@ -6166,11 +6253,16 @@ if (mobilePathSel) {
                 return;
             }
             dragging = true;
+            // Build the neighbor previews now that we know it's a swipe.
+            // Synchronous and costs ~3 renderMain calls — one possible
+            // hitched frame at the very start of the drag, then smooth.
+            buildNeighbors();
         }
 
-        // Confirmed horizontal drag: follow the finger and suppress scroll.
+        // Confirmed horizontal drag: move the whole band with the finger
+        // and suppress native scroll.
         e.preventDefault();
-        mainEl.style.transform = `translateX(${dx}px)`;
+        moveAll(dx);
     }, { passive: false });
 
     mainEl.addEventListener('touchend', (e) => {
@@ -6189,16 +6281,21 @@ if (mobilePathSel) {
             Math.abs(dx) < MIN_DISTANCE_PX ||
             Math.abs(dy) > MAX_VERTICAL_PX
         ) {
-            snapBack();
+            snapBack(dx);
             return;
         }
 
-        // Valid swipe — commit the navigation with a slide animation.
-        animateNavigation(dx < 0, dx); // swipe left → next; swipe right → prev
+        // Valid swipe — commit. swipe left → next; swipe right → prev.
+        commitAnimation(dx < 0, dx);
     }, { passive: true });
 
-    mainEl.addEventListener('touchcancel', () => {
-        if (dragging) snapBack();
+    mainEl.addEventListener('touchcancel', (e) => {
+        if (dragging) {
+            // Use last-known dx if available, else 0.
+            const t = (e.changedTouches && e.changedTouches[0]) || null;
+            const dx = t ? (t.clientX - startX) : 0;
+            snapBack(dx);
+        }
         tracking = false;
         dragging = false;
     }, { passive: true });

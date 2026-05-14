@@ -983,10 +983,10 @@ main {
    week and month views.  Compact, distinct from a pathologist row so it
    reads as a department-wide marker rather than a per-doctor assignment. */
 .wd-row.lf-sendout {
-    background: linear-gradient(90deg, #e8d6c8 0%, #f0e0d4 100%);
-    border: 1px solid #c69477;
-    color: #6b3a1e;
-    padding: 4px 8px;
+    background: #4E2E85;
+    border: 1px solid #4E2E85;
+    color: white;
+    padding: 4px 4px;
     justify-content: center;
 }
 .wd-row.lf-sendout .lf-label {
@@ -995,7 +995,7 @@ main {
     font-weight: 600;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: #6b3a1e;
+    color: white;
     line-height: 1.2;
 }
 .month-view .day .wd-row.lf-sendout {
@@ -5227,7 +5227,12 @@ aside {
         bottom: 0;
         width: 270px;
         max-width: 84vw;
-        height: 100vh;
+        /* height: 100vh is intentionally omitted here. position:fixed with
+           top:0 and bottom:0 already constrains the sidebar to the exact
+           visible viewport height. Keeping height:100vh caused the sidebar
+           to be taller than the screen on mobile browsers (where 100vh
+           includes the browser chrome / address bar), pushing the sign-out
+           button off the bottom of the visible area. */
         z-index: 100;
         transform: translateX(-100%);
         transition: transform 0.22s ease;

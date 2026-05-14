@@ -452,424 +452,6 @@ function callCycleIndex(cycleStart) {
             else if (dow === 2 && getFederalHoliday(addDays(current, -1))) idx++;
         }
     } else {
-        while (current.getTi    { id: 'bigs', name: 'McHenry Bigs', short: 'M Bigs', abbr: 'BIG', cssVar: '--svc-bigs' },
-    { id: 'huntley', name: 'Huntley', short: 'Huntley', abbr: 'HUN', cssVar: '--svc-huntley' },
-    { id: 'wfh', name: 'Breast Bx / WFH', short: 'Breast bx/WFH', abbr: 'WFH', cssVar: '--svc-wfh' },
-];
-
-// Off-site services: shown in service dropdowns and rendered like regular
-// services, but the pathologist is excluded from the McH/Huntley coverage
-// rotation (same effect as PTO on the automated assignment cascade).
-const OFF_SERVICES = [
-    { id: 'off_service', name: 'Off Service', short: 'Off Service', abbr: 'OFF', cssVar: '--svc-off-service' },
-    { id: 'off_service_director', name: 'Off Service – Director Retreat', short: 'Off Service - Dir Retreat', abbr: 'DIR', cssVar: '--svc-off-service-director' },
-    { id: 'off_service_lab', name: 'Off Service – Lab Inspection', short: 'Off Service - Lab Inspect', abbr: 'LAB', cssVar: '--svc-off-service-lab' },
-];
-
-// Returns true when a service id represents an off-site assignment
-// (excluded from coverage rotation but rendered as a service, not as PTO).
-function isOffSiteServiceId(id) {
-    return OFF_SERVICES.some(s => s.id === id);
-}
-
-// Special combined state when only 2 pathologists are working
-const COMBO_SVC = {
-    id: 'cytobigs',
-    name: 'McHenry Cyto / Gross / Bigs',
-    short: 'M Cyto/Gross/Bigs',
-    abbr: 'CGB',
-    cssVar: '--svc-cyto' // reusing cyto's color theme
-};
-
-const SERVICE_BY_ID = Object.fromEntries(SERVICES.map(s => [s.id, s]));
-SERVICE_BY_ID['cytobigs'] = COMBO_SVC; // Register the combo service
-OFF_SERVICES.forEach(s => { SERVICE_BY_ID[s.id] = s; }); // Register off-site services
-
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DOW_MINI = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-
-// Earliest date for which the app shows schedule data. Anything before this
-// date renders as blank (no rotation, no PTO, no on-call shown).
-const EARLIEST_DATE = new Date(2025, 8, 1); // September 1, 2025
-EARLIEST_DATE.setHours(0, 0, 0, 0);
-const isBeforeEarliest = d => d.getTime() < EARLIEST_DATE.getTime();
-
-// ────────────── STATE ──────────────
-let pathologists = [];
-let vacations = [];                  // [{ key, pathologistId, start: Date, end: Date }]
-let onCallOverrides = {};            // { weekKey: pathologistId }
-let onCallDayOverrides = {};         // { dayKey: pathologistId }
-let serviceOverrides = {};           // { weekKey: { pathId: serviceId } }
-
-// Lake Forest sendout flags. When set, an "LF sendout" row is rendered above
-// the first pathologist on the matching day(s).
-//   lfSendoutDays  → { 'YYYY-MM-DD': true }     individual day
-//   lfSendoutWeeks → { 'YYYY-MM-DD': true }     keyed by call-cycle start
-let lfSendoutDays = {};
-let lfSendoutWeeks = {};
-
-// Procedures: an hourly schedule independent of the pathologist rotation.
-// Shape: { 'YYYY-MM-DD': { pushKey: { time: 'HH:MM', type: 'procedure',
-//                                     createdAt: <ms>, createdBy: <pid> } } }
-// `type` is fixed to 'procedure' for now but is stored so future versions can
-// support other procedure types without a data migration.
-let procedures = {};
-
-let pathologistsReady = false;
-let vacationsReady = false;
-let currentPathFilter = 'all';
-
-// ────────────── HOURLY GRID CONFIG ──────────────
-// Half-hour slots from HOURS_START:00 through HOURS_END:30 inclusive.
-// Default: 7 AM start, last slot 4:30 PM (covers 7:00–17:00 in half-hour steps).
-const HOURS_START = 7;   // 7 AM
-const HOURS_END = 16;  // last hour shown (so last slot is HOURS_END:30 = 4:30 PM)
-
-// Available procedure types shown in the "Add procedure" modal. Easy to
-// extend — just add another string. The pill on the schedule renders as
-// "<location> - <name>" (e.g. "HH - CT Random Kidney bx").
-const PROCEDURE_TYPES = [
-    'EUS',
-    'EBUS/ION',
-    'IR Thyroid bx',
-    'IR Thyroid w/ Afirma',
-    'CT Random Kidney bx',
-    'CT Bone Marrow',
-    'Lumpectomy',
-    'Mastectomy',
-    'Excisional bx',
-    'FS Brain',
-    'FS Lung',
-    'FS Parathyroid',   
-];
-
-const PROCEDURE_LOCATIONS = ['HH', 'MH'];
-
-// ────────────── ADMIN / REQUESTS ──────────────
-// The admin user is identified by name (more robust than relying on a
-// numeric id which could change if the seed is regenerated).
-const ADMIN_NAME_RE = /Michael\s+Moravek/i;
-// Special non-pathologist user that can only edit the procedure schedule
-const GROSS_ROOM_ID = 'gross_room';
-// Conference-tracker manager: can view the full schedule and edit the
-// conference tracking page, but cannot manage pathologist assignments or PTO.
-const MANAGER_ID = 'kathleen';
-let requests = {};            // { reqKey: { ...request fields } } from Firebase
-let requestsReady = false;    // becomes true after first snapshot resolves
-let _seenRequestKeys = null;  // for "new request arrived" detection
-let activeRequestsTab = 'pending';  // 'pending' | 'history'
-
-// Returns true if the given pathologist id (defaults to the signed-in user)
-// has admin privileges. Falls back to false if no one is signed in.
-function isAdmin(pathId) {
-    const id = (pathId !== undefined && pathId !== null) ? pathId : loggedInPathId;
-    if (id === null || id === undefined) return false;
-    const p = pathologists.find(x => x.id === id);
-    if (!p) return false;
-    return ADMIN_NAME_RE.test(p.name);
-}
-
-// Returns true when the gross-room account is signed in.
-// Gross room can edit the procedure schedule but not the pathologist schedule.
-function isGrossRoom() {
-    return loggedInPathId === GROSS_ROOM_ID;
-}
-
-// Returns true when the conference-tracker manager (Kathleen) is signed in.
-// She can view the full schedule and edit the conference tracking page.
-function isManager() {
-    return loggedInPathId === MANAGER_ID;
-}
-
-// Update the path-tab toggle to reflect val ('all' or a stringified pathId)
-function setPathFilter(val) {
-    currentPathFilter = val;
-    document.querySelectorAll('.path-tab').forEach(btn => {
-        const wantsAll = btn.dataset.filter === 'all';
-        btn.classList.toggle('active', wantsAll ? val === 'all' : val !== 'all');
-    });
-    // Mirror to the mobile select (single-row toolbar on phone viewports).
-    // The select only has 'all' and 'me' as values; any non-'all' filter is
-    // the user's own id, which the mobile UI represents as 'me'.
-    const mobileSel = document.getElementById('mobilePathSelect');
-    if (mobileSel) mobileSel.value = (val === 'all') ? 'all' : 'me';
-}
-let view;                             // 'day' | 'week' | 'month' | 'year' — assigned after settings load below
-let today;
-let cursor;
-
-// Viewport helper — true when we're on a phone-sized screen. Kept in sync
-// with the @media (max-width: 800px) breakpoint used throughout the CSS.
-// Used by the initial-view selection (mobile gets Day by default) and by
-// the resize handler so the active view stays sensible across rotations.
-const MOBILE_BREAKPOINT_PX = 800;
-function isMobileViewport() {
-    return typeof window !== 'undefined' && window.innerWidth <= MOBILE_BREAKPOINT_PX;
-}
-
-// ────────────── DISPLAY SETTINGS ──────────────
-// Persisted in localStorage so preferences survive page refreshes.
-const SETTINGS_STORAGE_KEY = 'schedDisplaySettings';
-const VALID_DEFAULT_VIEWS = ['day', 'week', 'month', 'year'];
-const VALID_DEFAULT_FILTERS = ['all', 'me'];
-const DEFAULT_SETTINGS = {
-    weekdaysOnly: false,
-    hideSidebar: false,
-    // What view to show when the app opens. 'week' preserves prior behavior.
-    defaultView: 'week',
-    // Which pathologists to show on launch: 'all' or 'me' (your own schedule).
-    // 'me' preserves prior behavior for individual pathologists. Gross-room
-    // is always forced to 'all' regardless of this setting.
-    defaultPathFilter: 'me',
-};
-let settings = (() => {
-    try {
-        const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
-        if (raw) return Object.assign({}, DEFAULT_SETTINGS, JSON.parse(raw));
-    } catch (_) { }
-    return Object.assign({}, DEFAULT_SETTINGS);
-})();
-// Sanitize persisted values in case localStorage was hand-edited or stale.
-if (!VALID_DEFAULT_VIEWS.includes(settings.defaultView)) settings.defaultView = 'week';
-if (!VALID_DEFAULT_FILTERS.includes(settings.defaultPathFilter)) settings.defaultPathFilter = 'me';
-
-// Now that settings is loaded, seed the active view from the user's
-// default-view preference (falls back to 'week' if invalid).
-//
-// Mobile override: on phone-sized viewports we always start in Day view
-// since that's the only mobile view that shows the procedure schedule
-// (week/month/year on mobile are summary-only). Desktop users get their
-// saved preference unchanged. We don't persist this override — switching
-// to a phone for one session shouldn't overwrite a deliberate desktop
-// default. The user can still tap Week / Month / Year on mobile within
-// the session if they want.
-view = settings.defaultView;
-if (isMobileViewport()) view = 'day';
-else if (view === 'day') view = 'week'; // 'day' saved but desktop loaded → fall back
-today = new Date();
-today.setHours(0, 0, 0, 0);
-cursor = new Date(today);
-
-function saveSettings() {
-    try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings)); } catch (_) { }
-}
-
-// Apply current settings to the DOM (sidebar visibility, etc.)
-function applySettings() {
-    const app = document.querySelector('.app');
-    if (app) app.classList.toggle('sidebar-hidden', !!settings.hideSidebar);
-
-    // Sync toggle switches to reflect current state
-    const tw = document.getElementById('toggleWeekdays');
-    const ts = document.getElementById('toggleSidebar');
-    if (tw) tw.setAttribute('aria-checked', settings.weekdaysOnly ? 'true' : 'false');
-    if (ts) ts.setAttribute('aria-checked', settings.hideSidebar ? 'true' : 'false');
-
-    // Sync the view-tab pills to whatever `view` currently is. This keeps the
-    // header in sync after we seed `view` from settings.defaultView at load.
-    document.querySelectorAll('.view-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.view === view);
-    });
-
-    // Sync segmented controls in the settings drawer to reflect saved defaults
-    const dvSeg = document.getElementById('defaultViewSeg');
-    if (dvSeg) {
-        dvSeg.querySelectorAll('.seg-btn').forEach(b => {
-            const isActive = b.dataset.value === settings.defaultView;
-            b.classList.toggle('active', isActive);
-            b.setAttribute('aria-checked', isActive ? 'true' : 'false');
-        });
-    }
-    const dfSeg = document.getElementById('defaultFilterSeg');
-    if (dfSeg) {
-        dfSeg.querySelectorAll('.seg-btn').forEach(b => {
-            const isActive = b.dataset.value === settings.defaultPathFilter;
-            b.classList.toggle('active', isActive);
-            b.setAttribute('aria-checked', isActive ? 'true' : 'false');
-        });
-    }
-    // Gross-room is always forced to "All" regardless of the default-filter
-    // setting, so hide that row to avoid showing a control that has no effect.
-    const dfRow = document.getElementById('defaultFilterRow');
-    if (dfRow) dfRow.style.display = (isGrossRoom() || isManager()) ? 'none' : '';
-
-    // Sync sidebar arrow button aria-label
-    const stb = document.getElementById('sidebarToggleBtn');
-    if (stb) {
-        const label = settings.hideSidebar ? 'Expand sidebar' : 'Collapse sidebar';
-        stb.setAttribute('aria-label', label);
-        stb.setAttribute('title', label);
-    }
-}
-
-// Year view mode: 'pto' shows PTO schedule, 'call' shows on-call schedule
-let yearMode = 'pto';
-
-// ────────────── AUTH STATE ──────────────
-// Authenticated pathologist id (number) or null when nobody is signed in on
-// this device. We persist this in localStorage so users only see the login
-// screen on first use of a given browser.
-const AUTH_STORAGE_KEY = 'schedCurrentPathId';
-let loggedInPathId = (() => {
-    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
-    if (raw === GROSS_ROOM_ID) return GROSS_ROOM_ID;
-    if (raw === MANAGER_ID) return MANAGER_ID;
-    const n = parseInt(raw, 10);
-    return Number.isFinite(n) ? n : null;
-})();
-
-// ────────────── DATE HELPERS ──────────────
-const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-const parseDate = s => { const d = new Date(s + 'T00:00:00'); d.setHours(0, 0, 0, 0); return d; };
-const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-const startOfWeek = d => { const x = new Date(d); x.setDate(x.getDate() - x.getDay()); x.setHours(0, 0, 0, 0); return x; };
-
-// Given a pathologist color value like 'var(--p2)', returns the matching
-// light-tint background CSS variable string for service row highlighting.
-function pathBgColor(colorVar) {
-    const m = colorVar && colorVar.match(/--p(\d+)/);
-    return m ? `var(--p${m[1]}-bg)` : '';
-}
-const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-const daysBetween = (a, b) => Math.round((b - a) / 86400000);
-const isWeekend = d => d.getDay() === 0 || d.getDay() === 6;
-const weekKey = d => fmt(startOfWeek(d));
-
-// Next/previous workday — skips weekends AND federal holidays. Used by
-// hard-rule and soft-rule logic so "the day before" correctly resolves
-// across holiday weekends:
-//   - prevWorkday(Tuesday after Memorial Day) → Friday (skips Sat/Sun/Mon)
-//   - nextWorkday(Friday before July 4 weekend) → Monday after July 4
-// This means Bigs-on-Friday + WFH-on-Tuesday (with a holiday Monday) is
-// correctly detected as a soft-rule conflict, just like Friday + Monday.
-function nextWorkday(date) {
-    let d = addDays(date, 1);
-    while (isWeekend(d) || getFederalHoliday(d)) d = addDays(d, 1);
-    return d;
-}
-function prevWorkday(date) {
-    let d = addDays(date, -1);
-    while (isWeekend(d) || getFederalHoliday(d)) d = addDays(d, -1);
-    return d;
-}
-
-// ────────────── FEDERAL HOLIDAYS ──────────────
-// Calendar-rule holiday: returns the name when the date itself matches a
-// federal holiday by its raw rule, with NO weekend-observation shifting.
-// Used internally by getFederalHoliday() to decide what falls on Sat/Sun.
-function getActualFederalHoliday(date) {
-    const m = date.getMonth();  // 0-indexed
-    const d = date.getDate();
-    const dow = date.getDay();  // 0=Sun … 6=Sat
-    const y = date.getFullYear();
-
-    // New Year's Day — January 1
-    if (m === 0 && d === 1) return "New Year's Day";
-
-    // Memorial Day — last Monday of May
-    if (m === 4 && dow === 1) {
-        const nextWeek = new Date(y, 4, d + 7);
-        if (nextWeek.getMonth() !== 4) return 'Memorial Day';
-    }
-
-    // Independence Day — July 4
-    if (m === 6 && d === 4) return 'Independence Day';
-
-    // Labor Day — first Monday of September
-    if (m === 8 && dow === 1 && d <= 7) return 'Labor Day';
-
-    // Thanksgiving — 4th Thursday of November
-    if (m === 10 && dow === 4 && d >= 22 && d <= 28) return 'Thanksgiving';
-
-    // Christmas Day — December 25
-    if (m === 11 && d === 25) return 'Christmas Day';
-
-    return null;
-}
-
-// Returns the holiday name for the given date, or null if not a federal
-// holiday. Applies federal observation rules: when a holiday lands on a
-// Saturday, the prior Friday is the *true* holiday (everyone off service);
-// when it lands on a Sunday, the following Monday is the true holiday.
-// The actual Sat/Sun still returns its calendar name for display, but
-// it's already a non-working day by virtue of being a weekend, so the
-// behavior change only kicks in on the observed weekday.
-function getFederalHoliday(date) {
-    const dow = date.getDay();
-
-    // Friday: if tomorrow (Saturday) is an actual holiday, today is observed.
-    if (dow === 5) {
-        const sat = addDays(date, 1);
-        const satHol = getActualFederalHoliday(sat);
-        if (satHol) return satHol + ' (observed)';
-    }
-
-    // Monday: if yesterday (Sunday) is an actual holiday, today is observed.
-    if (dow === 1) {
-        const sun = addDays(date, -1);
-        const sunHol = getActualFederalHoliday(sun);
-        if (sunHol) return sunHol + ' (observed)';
-    }
-
-    return getActualFederalHoliday(date);
-}
-
-// ────────────── ROTATION (defaults) ──────────────
-// Weekly on-call anchor: Jan 8 2024 is a normal Monday
-const CALL_ANCHOR = new Date(2024, 0, 8);
-CALL_ANCHOR.setHours(0, 0, 0, 0);
-
-// Daily service rotation anchor (Mondays): Jan 1 2024 = workDay 0
-const WORK_ANCHOR = new Date(2024, 0, 1);
-WORK_ANCHOR.setHours(0, 0, 0, 0);
-
-// Finds the start of the dynamic call block for any given date
-function getCallCycleStart(date) {
-    let d = new Date(date);
-    d.setHours(0, 0, 0, 0);
-    while (true) {
-        let dow = d.getDay();
-        let isHol = getFederalHoliday(d);
-        // Starts on a normal Monday
-        if (dow === 1 && !isHol) return d;
-        // OR starts on a Tuesday if the preceding Monday was a holiday
-        if (dow === 2) {
-            let prev = addDays(d, -1);
-            if (getFederalHoliday(prev)) return d;
-        }
-        d = addDays(d, -1); // Walk backwards until we hit a start
-    }
-}
-
-// Finds the last day of a dynamic call block
-function getCallCycleEnd(cycleStart) {
-    let d = addDays(cycleStart, 1);
-    while (true) {
-        let dow = d.getDay();
-        let isHol = getFederalHoliday(d);
-        if (dow === 1 && !isHol) return addDays(d, -1);
-        if (dow === 2 && getFederalHoliday(addDays(d, -1))) return addDays(d, -1);
-        d = addDays(d, 1);
-    }
-}
-
-// Counts how many call blocks have passed since the anchor to assign the right doctor
-function callCycleIndex(cycleStart) {
-    let current = new Date(CALL_ANCHOR);
-    let idx = 0;
-    let target = cycleStart.getTime();
-
-    if (target >= current.getTime()) {
-        while (current.getTime() < target) {
-            current = addDays(current, 1);
-            let dow = current.getDay();
-            let isHol = getFederalHoliday(current);
-            if (dow === 1 && !isHol) idx++;
-            else if (dow === 2 && getFederalHoliday(addDays(current, -1))) idx++;
-        }
-    } else {
         while (current.getTime() > target) {
             let dow = current.getDay();
             let isHol = getFederalHoliday(current);
@@ -6443,14 +6025,12 @@ if (mobilePathSel) {
 
 // ── Swipe navigation (mobile only) ───────────────────────────────────
 // Listens on #main (which persists across re-renders). Tracks horizontal
-// gestures live — the previous/next periods are pre-rendered as snapshots
-// flush to either side of #main, and all three translate together with the
-// finger so the user sees the adjacent period swiping in as they drag.
-// On a qualifying swipe the band continues to its committed position; on
-// an aborted drag everything snaps back.
+// gestures live — the content follows the finger — then on a qualifying
+// swipe, slides the old content out and the new content in with a CSS
+// transition, so the user sees the next/previous period swiping into view.
 //
-// Architecture: #main and its two neighbor snapshots all live as siblings
-// in the same .content-area (which already clips with overflow:hidden).
+// Architecture: #main is transformed as a unit. Its parent .content-area
+// already has overflow:hidden, so the translated #main is naturally clipped.
 // The toolbar sits above #main and is unaffected.
 (function setupSwipeNavigation() {
     const mainEl = document.getElementById('main');
@@ -6460,180 +6040,95 @@ if (mobilePathSel) {
     let tracking = false, dragging = false;
     let isAnimating = false;
 
-    // Neighbor snapshots built on first confirmed horizontal move and
-    // torn down at the end of every gesture (commit or abort).
-    let prevSnap = null, nextSnap = null;
-    let snapWidth = 0;
-
     const MIN_DISTANCE_PX = 60;   // horizontal travel required to count as a swipe
     const MAX_VERTICAL_PX  = 60;  // vertical drift allowed (keeps scroll gestures intact)
     const MAX_DURATION_MS  = 600; // flicks only — long slow drags are probably scrolling
     const ANIM_MS          = 280; // slide-in / slide-out duration
 
-    // Compute the cursor value for the period `delta` steps from the
-    // current one (+1 = next, -1 = prev). Mirrors the prev/next button
-    // handlers so swipes and buttons stay perfectly aligned.
-    function cursorFor(delta) {
-        if (view === 'day')        return addDays(cursor, delta);
-        else if (view === 'week')  return addDays(cursor, 7 * delta);
-        else if (view === 'month') return new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1);
-        else                       return new Date(cursor.getFullYear() + delta, cursor.getMonth(), 1);
-    }
+    // (mainWidth helper removed — width computed inline in animateNavigation)
 
-    // Render-and-clone helper: temporarily swaps `cursor` to render a
-    // neighbor period into #main, clones the result, then leaves cursor
-    // mutated (caller restores via a final render). Side effects on
-    // elements outside #main (e.g. the period label updated by
-    // renderPeriodLabel) flicker through neighbor values within this
-    // sync block, but the browser doesn't paint until JS yields, so
-    // they're invisible — only the caller's final restore render shows.
-    function snapshotPeriod(periodCursor) {
-        cursor = periodCursor;
-        renderMain();
-        const clone = mainEl.cloneNode(true);
-        clone.setAttribute('aria-hidden', 'true');
-        return clone;
-    }
-
-    // Build prev + next snapshots flush to either side of #main. Called
-    // once per gesture, the moment the drag is confirmed horizontal.
-    // Costs 3 renderMain() calls (prev, next, restore) — fine because
-    // it only runs after the 8px horizontal dead zone is crossed, so
-    // pure taps and vertical scrolls don't pay for it.
-    function buildNeighbors() {
+    // Animate main off-screen in the swipe direction, then re-render the new
+    // period and slide the fresh content in from the opposite side.
+    // Animate navigation so old and new content slide as one continuous rigid
+    // band. A frozen clone of #main (the leaving panel) is positioned flush
+    // against the new #main (the entering panel); both are then transitioned
+    // the same delta-x at the same speed so they appear perfectly adjacent.
+    //
+    // Geometry example (goNext, finalDx = -80, w = 400):
+    //   snapshot  translateX(-80) → translateX(-400)   Δ = -320 px
+    //   #main     translateX(320) → translateX(0)      Δ = -320 px
+    //   They are always exactly w px apart — one seamless sliding band.
+    function animateNavigation(goNext, finalDx) {
+        isAnimating = true;
         const w      = mainEl.offsetWidth || window.innerWidth;
         const parent = mainEl.offsetParent || mainEl.parentElement;
-        const top    = mainEl.offsetTop;
-        const left   = mainEl.offsetLeft;
-        const height = mainEl.offsetHeight;
-        snapWidth = w;
 
-        const savedCursor = cursor;
-        prevSnap = snapshotPeriod(cursorFor(-1));
-        nextSnap = snapshotPeriod(cursorFor(+1));
-        cursor = savedCursor;
-        renderMain(); // restore #main to the current period
+        // 1. Freeze current content as an absolutely-positioned clone
+        const snapshot = mainEl.cloneNode(true);
+        snapshot.setAttribute('aria-hidden', 'true');
+        snapshot.style.cssText = [
+            'position:absolute',
+            'top:'  + mainEl.offsetTop    + 'px',
+            'left:' + mainEl.offsetLeft   + 'px',
+            'width:'  + w                 + 'px',
+            'height:' + mainEl.offsetHeight + 'px',
+            'transform:translateX(' + finalDx + 'px)',
+            'transition:none',
+            'z-index:5',
+            'pointer-events:none',
+            'overflow:hidden',
+        ].join(';');
+        parent.appendChild(snapshot);
 
-        function styleSnap(snap, tx) {
-            snap.style.cssText = [
-                'position:absolute',
-                'top:'    + top    + 'px',
-                'left:'   + left   + 'px',
-                'width:'  + w      + 'px',
-                'height:' + height + 'px',
-                'transform:translateX(' + tx + 'px)',
-                'transition:none',
-                'z-index:5',
-                'pointer-events:none',
-                'overflow:hidden',
-            ].join(';');
+        // 2. Park #main flush against the snapshot's incoming edge.
+        //    enterX = w + finalDx  (goNext)  → new starts at snapshot's right edge
+        //    enterX = finalDx - w  (!goNext) → new starts at snapshot's left edge
+        const enterX = goNext ? (w + finalDx) : (finalDx - w);
+        const exitX  = goNext ? -w : w;
+
+        mainEl.style.transition = 'none';
+        mainEl.style.transform  = 'translateX(' + enterX + 'px)';
+
+        // 3. Update cursor & render new period into #main
+        if (goNext) {
+            if (view === 'day')        cursor = addDays(cursor, 1);
+            else if (view === 'week')  cursor = addDays(cursor, 7);
+            else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+            else                       cursor = new Date(cursor.getFullYear() + 1, cursor.getMonth(), 1);
+        } else {
+            if (view === 'day')        cursor = addDays(cursor, -1);
+            else if (view === 'week')  cursor = addDays(cursor, -7);
+            else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+            else                       cursor = new Date(cursor.getFullYear() - 1, cursor.getMonth(), 1);
         }
-        styleSnap(prevSnap, -w);
-        styleSnap(nextSnap,  w);
-        parent.appendChild(prevSnap);
-        parent.appendChild(nextSnap);
-    }
+        renderMain();
 
-    function clearNeighbors() {
-        if (prevSnap) { prevSnap.remove(); prevSnap = null; }
-        if (nextSnap) { nextSnap.remove(); nextSnap = null; }
-    }
-
-    // Translate #main and both neighbors together so the band moves as
-    // one rigid unit — main at dx, prev at -w+dx, next at +w+dx.
-    function moveAll(dx) {
-        mainEl.style.transform = 'translateX(' + dx + 'px)';
-        if (prevSnap) prevSnap.style.transform = 'translateX(' + (-snapWidth + dx) + 'px)';
-        if (nextSnap) nextSnap.style.transform = 'translateX(' + ( snapWidth + dx) + 'px)';
-    }
-
-    function setTransitionAll(t) {
-        mainEl.style.transition = t;
-        if (prevSnap) prevSnap.style.transition = t;
-        if (nextSnap) nextSnap.style.transition = t;
-    }
-
-    // Run `cb` once the current transform transition on #main ends, with
-    // a setTimeout fallback in case transitionend doesn't fire (e.g. the
-    // start and end values turned out identical, or the tab was hidden).
-    function whenTransformDone(durationMs, cb) {
-        let done = false;
-        function finish() {
-            if (done) return;
-            done = true;
-            mainEl.removeEventListener('transitionend', onTransition);
-            cb();
-        }
-        function onTransition(e) {
-            if (e.propertyName !== 'transform') return;
-            finish();
-        }
-        mainEl.addEventListener('transitionend', onTransition);
-        setTimeout(finish, durationMs + 60);
-    }
-
-    // Commit: the relevant neighbor slides into the center, #main slides
-    // off in the swipe direction, the other neighbor slides further off.
-    // When the animation ends, we update `cursor`, re-render #main with
-    // the new period, snap its transform back to 0, and remove both
-    // snapshots. Because snapshots have z-index:5 and #main doesn't,
-    // the now-centered neighbor masks #main during the swap — no flash.
-    function commitAnimation(goNext, finalDx) {
-        isAnimating = true;
-        const w = snapWidth;
-        const targetDx = goNext ? -w : w;
-        const timing = 'transform ' + ANIM_MS + 'ms ease-out';
-
-        // First make sure the pre-transition transform is the live drag
-        // position so the browser interpolates from there, not from 0.
-        moveAll(finalDx);
-
-        // Double-rAF: let the browser commit the starting transform,
-        // then turn on the transition and set the ending transform.
+        // 4. Double-rAF: slide both panels the same Δx simultaneously
         requestAnimationFrame(function() {
             requestAnimationFrame(function() {
-                setTransitionAll(timing);
-                moveAll(targetDx);
+                var timing = 'transform ' + ANIM_MS + 'ms ease-out';
+                snapshot.style.transition = timing;
+                snapshot.style.transform  = 'translateX(' + exitX + 'px)';
+                mainEl.style.transition   = timing;
+                mainEl.style.transform    = '';
 
-                whenTransformDone(ANIM_MS, function() {
-                    cursor = cursorFor(goNext ? 1 : -1);
-                    renderMain();
-                    // Reset #main without animating back through 0.
-                    mainEl.style.transition = 'none';
-                    mainEl.style.transform  = '';
-                    // Force the no-transition state to commit before the
-                    // next style change so the next gesture starts clean.
-                    void mainEl.offsetHeight;
+                function onDone(e) {
+                    if (e.propertyName !== 'transform') return;
+                    mainEl.removeEventListener('transitionend', onDone);
+                    snapshot.remove();
                     mainEl.style.transition = '';
-                    clearNeighbors();
                     isAnimating = false;
-                });
+                }
+                mainEl.addEventListener('transitionend', onDone);
             });
         });
     }
 
-    // Abort: slide everything back to baseline (#main → 0, neighbors → ±w),
-    // then remove the snapshots.
-    function snapBack(finalDx) {
-        isAnimating = true;
-        const timing = 'transform 200ms ease';
-
-        // Ensure we transition from the live drag position.
-        moveAll(finalDx);
-
-        requestAnimationFrame(function() {
-            requestAnimationFrame(function() {
-                setTransitionAll(timing);
-                moveAll(0);
-
-                whenTransformDone(200, function() {
-                    mainEl.style.transition = '';
-                    mainEl.style.transform  = '';
-                    clearNeighbors();
-                    isAnimating = false;
-                });
-            });
-        });
+    // Snap the content back to centre (used when a drag doesn't qualify).
+    function snapBack() {
+        mainEl.style.transition = `transform 0.2s ease`;
+        mainEl.style.transform  = '';
+        dragging = false;
     }
 
     // ── Touch listeners ──────────────────────────────────────────────────
@@ -6671,16 +6166,11 @@ if (mobilePathSel) {
                 return;
             }
             dragging = true;
-            // Build the neighbor previews now that we know it's a swipe.
-            // Synchronous and costs ~3 renderMain calls — one possible
-            // hitched frame at the very start of the drag, then smooth.
-            buildNeighbors();
         }
 
-        // Confirmed horizontal drag: move the whole band with the finger
-        // and suppress native scroll.
+        // Confirmed horizontal drag: follow the finger and suppress scroll.
         e.preventDefault();
-        moveAll(dx);
+        mainEl.style.transform = `translateX(${dx}px)`;
     }, { passive: false });
 
     mainEl.addEventListener('touchend', (e) => {
@@ -6699,21 +6189,16 @@ if (mobilePathSel) {
             Math.abs(dx) < MIN_DISTANCE_PX ||
             Math.abs(dy) > MAX_VERTICAL_PX
         ) {
-            snapBack(dx);
+            snapBack();
             return;
         }
 
-        // Valid swipe — commit. swipe left → next; swipe right → prev.
-        commitAnimation(dx < 0, dx);
+        // Valid swipe — commit the navigation with a slide animation.
+        animateNavigation(dx < 0, dx); // swipe left → next; swipe right → prev
     }, { passive: true });
 
-    mainEl.addEventListener('touchcancel', (e) => {
-        if (dragging) {
-            // Use last-known dx if available, else 0.
-            const t = (e.changedTouches && e.changedTouches[0]) || null;
-            const dx = t ? (t.clientX - startX) : 0;
-            snapBack(dx);
-        }
+    mainEl.addEventListener('touchcancel', () => {
+        if (dragging) snapBack();
         tracking = false;
         dragging = false;
     }, { passive: true });

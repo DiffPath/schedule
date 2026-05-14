@@ -6024,64 +6024,161 @@ if (mobilePathSel) {
 }
 
 // ── Swipe navigation (mobile only) ───────────────────────────────────
-// Replaces the prev/next arrow buttons on phone viewports. Listens on
-// #main (which persists across re-renders — only its innerHTML is rewritten).
-// We require a predominantly-horizontal gesture so vertical scrolling
-// inside the schedule isn't accidentally interpreted as navigation.
+// Listens on #main (which persists across re-renders). Tracks horizontal
+// gestures live — the content follows the finger — then on a qualifying
+// swipe, slides the old content out and the new content in with a CSS
+// transition, so the user sees the next/previous period swiping into view.
+//
+// Architecture: #main is transformed as a unit. Its parent .content-area
+// already has overflow:hidden, so the translated #main is naturally clipped.
+// The toolbar sits above #main and is unaffected.
 (function setupSwipeNavigation() {
     const mainEl = document.getElementById('main');
     if (!mainEl) return;
 
-    let startX = 0;
-    let startY = 0;
-    let startTime = 0;
-    let tracking = false;
+    let startX = 0, startY = 0, startTime = 0;
+    let tracking = false, dragging = false;
+    let isAnimating = false;
 
-    const MIN_DISTANCE_PX = 60;     // horizontal travel required to count as a swipe
-    const MAX_VERTICAL_PX = 60;     // vertical drift allowed (keeps scroll gestures intact)
-    const MAX_DURATION_MS = 600;    // flicks only — long drags are probably scrolling
+    const MIN_DISTANCE_PX = 60;   // horizontal travel required to count as a swipe
+    const MAX_VERTICAL_PX  = 60;  // vertical drift allowed (keeps scroll gestures intact)
+    const MAX_DURATION_MS  = 600; // flicks only — long slow drags are probably scrolling
+    const ANIM_MS          = 280; // slide-in / slide-out duration
+
+    function mainWidth() { return mainEl.offsetWidth || window.innerWidth; }
+
+    // Animate main off-screen in the swipe direction, then re-render the new
+    // period and slide the fresh content in from the opposite side.
+    function animateNavigation(goNext) {
+        isAnimating = true;
+        const w   = mainWidth();
+        const exitX  = goNext ? -w :  w;   // where the current content goes
+        const enterX = goNext ?  w : -w;   // where the new content starts
+
+        // ── Phase 1: slide current content out ──────────────────────────
+        mainEl.style.transition = `transform ${ANIM_MS}ms ease-out`;
+        mainEl.style.transform  = `translateX(${exitX}px)`;
+
+        const onExitDone = () => {
+            mainEl.removeEventListener('transitionend', onExitDone);
+
+            // ── Phase 2: update cursor + re-render ──────────────────────
+            if (goNext) {
+                if (view === 'day')        cursor = addDays(cursor, 1);
+                else if (view === 'week')  cursor = addDays(cursor, 7);
+                else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+                else                       cursor = new Date(cursor.getFullYear() + 1, cursor.getMonth(), 1);
+            } else {
+                if (view === 'day')        cursor = addDays(cursor, -1);
+                else if (view === 'week')  cursor = addDays(cursor, -7);
+                else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+                else                       cursor = new Date(cursor.getFullYear() - 1, cursor.getMonth(), 1);
+            }
+            renderMain(); // replaces #main.innerHTML with the new period
+
+            // ── Phase 3: place new content off-screen then slide in ─────
+            // Two rAF calls: the first lets the browser process the new DOM
+            // from renderMain(); the second flushes the style change so the
+            // transition actually fires.
+            mainEl.style.transition = 'none';
+            mainEl.style.transform  = `translateX(${enterX}px)`;
+
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    mainEl.style.transition = `transform ${ANIM_MS}ms ease-out`;
+                    mainEl.style.transform  = '';
+
+                    const onEnterDone = () => {
+                        mainEl.removeEventListener('transitionend', onEnterDone);
+                        mainEl.style.transition = '';
+                        isAnimating = false;
+                    };
+                    mainEl.addEventListener('transitionend', onEnterDone);
+                });
+            });
+        };
+
+        mainEl.addEventListener('transitionend', onExitDone);
+    }
+
+    // Snap the content back to centre (used when a drag doesn't qualify).
+    function snapBack() {
+        mainEl.style.transition = `transform 0.2s ease`;
+        mainEl.style.transform  = '';
+        dragging = false;
+    }
+
+    // ── Touch listeners ──────────────────────────────────────────────────
 
     mainEl.addEventListener('touchstart', (e) => {
         if (!isMobileViewport()) return;
+        if (isAnimating) return;
         if (e.touches.length !== 1) { tracking = false; return; }
         const t = e.touches[0];
-        startX = t.clientX;
-        startY = t.clientY;
+        startX    = t.clientX;
+        startY    = t.clientY;
         startTime = Date.now();
-        tracking = true;
+        tracking  = true;
+        dragging  = false;
+        // Kill any residual transition so the live-drag is instant.
+        mainEl.style.transition = 'none';
+        mainEl.style.transform  = '';
     }, { passive: true });
 
+    // passive:false so we can preventDefault() once the gesture is confirmed
+    // horizontal — this keeps native vertical scroll working for vertical-only
+    // gestures while letting us own the horizontal ones.
     mainEl.addEventListener('touchmove', (e) => {
         if (!tracking) return;
-        // Cancel tracking the moment the gesture goes more vertical than
-        // horizontal — that way native vertical scrolling stays smooth and
-        // we don't fire a swipe at the end.
-        const t = e.touches[0];
+        const t  = e.touches[0];
         const dx = t.clientX - startX;
         const dy = t.clientY - startY;
-        if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) {
-            tracking = false;
+
+        if (!dragging) {
+            // Wait until the finger has moved enough to determine intent.
+            if (Math.abs(dx) <= 8 && Math.abs(dy) <= 8) return;
+            if (Math.abs(dy) >= Math.abs(dx)) {
+                // Predominantly vertical — let native scroll handle it.
+                tracking = false;
+                return;
+            }
+            dragging = true;
         }
-    }, { passive: true });
+
+        // Confirmed horizontal drag: follow the finger and suppress scroll.
+        e.preventDefault();
+        mainEl.style.transform = `translateX(${dx}px)`;
+    }, { passive: false });
 
     mainEl.addEventListener('touchend', (e) => {
         if (!tracking) return;
         tracking = false;
-        if (Date.now() - startTime > MAX_DURATION_MS) return;
-        const t = e.changedTouches[0];
+        if (!dragging) return;
+        dragging = false;
+
+        const elapsed = Date.now() - startTime;
+        const t  = e.changedTouches[0];
         const dx = t.clientX - startX;
         const dy = t.clientY - startY;
-        if (Math.abs(dx) < MIN_DISTANCE_PX) return;
-        if (Math.abs(dy) > MAX_VERTICAL_PX) return;
-        if (Math.abs(dx) <= Math.abs(dy)) return;
 
-        // Swipe right → previous period; swipe left → next period.
-        // Delegating to the buttons keeps a single navigation code path.
-        if (dx > 0) document.getElementById('prevBtn').click();
-        else        document.getElementById('nextBtn').click();
+        if (
+            elapsed > MAX_DURATION_MS ||
+            Math.abs(dx) < MIN_DISTANCE_PX ||
+            Math.abs(dy) > MAX_VERTICAL_PX
+        ) {
+            snapBack();
+            return;
+        }
+
+        // Valid swipe — commit the navigation with a slide animation.
+        animateNavigation(dx < 0); // swipe left → next; swipe right → prev
     }, { passive: true });
 
-    mainEl.addEventListener('touchcancel', () => { tracking = false; }, { passive: true });
+    mainEl.addEventListener('touchcancel', () => {
+        if (dragging) snapBack();
+        tracking = false;
+        dragging = false;
+    }, { passive: true });
 })();
 
 // Viewport-aware view fallback: the Day tab is mobile-only (hidden on

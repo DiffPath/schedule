@@ -452,6 +452,424 @@ function callCycleIndex(cycleStart) {
             else if (dow === 2 && getFederalHoliday(addDays(current, -1))) idx++;
         }
     } else {
+        while (current.getTi    { id: 'bigs', name: 'McHenry Bigs', short: 'M Bigs', abbr: 'BIG', cssVar: '--svc-bigs' },
+    { id: 'huntley', name: 'Huntley', short: 'Huntley', abbr: 'HUN', cssVar: '--svc-huntley' },
+    { id: 'wfh', name: 'Breast Bx / WFH', short: 'Breast bx/WFH', abbr: 'WFH', cssVar: '--svc-wfh' },
+];
+
+// Off-site services: shown in service dropdowns and rendered like regular
+// services, but the pathologist is excluded from the McH/Huntley coverage
+// rotation (same effect as PTO on the automated assignment cascade).
+const OFF_SERVICES = [
+    { id: 'off_service', name: 'Off Service', short: 'Off Service', abbr: 'OFF', cssVar: '--svc-off-service' },
+    { id: 'off_service_director', name: 'Off Service – Director Retreat', short: 'Off Service - Dir Retreat', abbr: 'DIR', cssVar: '--svc-off-service-director' },
+    { id: 'off_service_lab', name: 'Off Service – Lab Inspection', short: 'Off Service - Lab Inspect', abbr: 'LAB', cssVar: '--svc-off-service-lab' },
+];
+
+// Returns true when a service id represents an off-site assignment
+// (excluded from coverage rotation but rendered as a service, not as PTO).
+function isOffSiteServiceId(id) {
+    return OFF_SERVICES.some(s => s.id === id);
+}
+
+// Special combined state when only 2 pathologists are working
+const COMBO_SVC = {
+    id: 'cytobigs',
+    name: 'McHenry Cyto / Gross / Bigs',
+    short: 'M Cyto/Gross/Bigs',
+    abbr: 'CGB',
+    cssVar: '--svc-cyto' // reusing cyto's color theme
+};
+
+const SERVICE_BY_ID = Object.fromEntries(SERVICES.map(s => [s.id, s]));
+SERVICE_BY_ID['cytobigs'] = COMBO_SVC; // Register the combo service
+OFF_SERVICES.forEach(s => { SERVICE_BY_ID[s.id] = s; }); // Register off-site services
+
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DOW_MINI = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+// Earliest date for which the app shows schedule data. Anything before this
+// date renders as blank (no rotation, no PTO, no on-call shown).
+const EARLIEST_DATE = new Date(2025, 8, 1); // September 1, 2025
+EARLIEST_DATE.setHours(0, 0, 0, 0);
+const isBeforeEarliest = d => d.getTime() < EARLIEST_DATE.getTime();
+
+// ────────────── STATE ──────────────
+let pathologists = [];
+let vacations = [];                  // [{ key, pathologistId, start: Date, end: Date }]
+let onCallOverrides = {};            // { weekKey: pathologistId }
+let onCallDayOverrides = {};         // { dayKey: pathologistId }
+let serviceOverrides = {};           // { weekKey: { pathId: serviceId } }
+
+// Lake Forest sendout flags. When set, an "LF sendout" row is rendered above
+// the first pathologist on the matching day(s).
+//   lfSendoutDays  → { 'YYYY-MM-DD': true }     individual day
+//   lfSendoutWeeks → { 'YYYY-MM-DD': true }     keyed by call-cycle start
+let lfSendoutDays = {};
+let lfSendoutWeeks = {};
+
+// Procedures: an hourly schedule independent of the pathologist rotation.
+// Shape: { 'YYYY-MM-DD': { pushKey: { time: 'HH:MM', type: 'procedure',
+//                                     createdAt: <ms>, createdBy: <pid> } } }
+// `type` is fixed to 'procedure' for now but is stored so future versions can
+// support other procedure types without a data migration.
+let procedures = {};
+
+let pathologistsReady = false;
+let vacationsReady = false;
+let currentPathFilter = 'all';
+
+// ────────────── HOURLY GRID CONFIG ──────────────
+// Half-hour slots from HOURS_START:00 through HOURS_END:30 inclusive.
+// Default: 7 AM start, last slot 4:30 PM (covers 7:00–17:00 in half-hour steps).
+const HOURS_START = 7;   // 7 AM
+const HOURS_END = 16;  // last hour shown (so last slot is HOURS_END:30 = 4:30 PM)
+
+// Available procedure types shown in the "Add procedure" modal. Easy to
+// extend — just add another string. The pill on the schedule renders as
+// "<location> - <name>" (e.g. "HH - CT Random Kidney bx").
+const PROCEDURE_TYPES = [
+    'EUS',
+    'EBUS/ION',
+    'IR Thyroid bx',
+    'IR Thyroid w/ Afirma',
+    'CT Random Kidney bx',
+    'CT Bone Marrow',
+    'Lumpectomy',
+    'Mastectomy',
+    'Excisional bx',
+    'FS Brain',
+    'FS Lung',
+    'FS Parathyroid',   
+];
+
+const PROCEDURE_LOCATIONS = ['HH', 'MH'];
+
+// ────────────── ADMIN / REQUESTS ──────────────
+// The admin user is identified by name (more robust than relying on a
+// numeric id which could change if the seed is regenerated).
+const ADMIN_NAME_RE = /Michael\s+Moravek/i;
+// Special non-pathologist user that can only edit the procedure schedule
+const GROSS_ROOM_ID = 'gross_room';
+// Conference-tracker manager: can view the full schedule and edit the
+// conference tracking page, but cannot manage pathologist assignments or PTO.
+const MANAGER_ID = 'kathleen';
+let requests = {};            // { reqKey: { ...request fields } } from Firebase
+let requestsReady = false;    // becomes true after first snapshot resolves
+let _seenRequestKeys = null;  // for "new request arrived" detection
+let activeRequestsTab = 'pending';  // 'pending' | 'history'
+
+// Returns true if the given pathologist id (defaults to the signed-in user)
+// has admin privileges. Falls back to false if no one is signed in.
+function isAdmin(pathId) {
+    const id = (pathId !== undefined && pathId !== null) ? pathId : loggedInPathId;
+    if (id === null || id === undefined) return false;
+    const p = pathologists.find(x => x.id === id);
+    if (!p) return false;
+    return ADMIN_NAME_RE.test(p.name);
+}
+
+// Returns true when the gross-room account is signed in.
+// Gross room can edit the procedure schedule but not the pathologist schedule.
+function isGrossRoom() {
+    return loggedInPathId === GROSS_ROOM_ID;
+}
+
+// Returns true when the conference-tracker manager (Kathleen) is signed in.
+// She can view the full schedule and edit the conference tracking page.
+function isManager() {
+    return loggedInPathId === MANAGER_ID;
+}
+
+// Update the path-tab toggle to reflect val ('all' or a stringified pathId)
+function setPathFilter(val) {
+    currentPathFilter = val;
+    document.querySelectorAll('.path-tab').forEach(btn => {
+        const wantsAll = btn.dataset.filter === 'all';
+        btn.classList.toggle('active', wantsAll ? val === 'all' : val !== 'all');
+    });
+    // Mirror to the mobile select (single-row toolbar on phone viewports).
+    // The select only has 'all' and 'me' as values; any non-'all' filter is
+    // the user's own id, which the mobile UI represents as 'me'.
+    const mobileSel = document.getElementById('mobilePathSelect');
+    if (mobileSel) mobileSel.value = (val === 'all') ? 'all' : 'me';
+}
+let view;                             // 'day' | 'week' | 'month' | 'year' — assigned after settings load below
+let today;
+let cursor;
+
+// Viewport helper — true when we're on a phone-sized screen. Kept in sync
+// with the @media (max-width: 800px) breakpoint used throughout the CSS.
+// Used by the initial-view selection (mobile gets Day by default) and by
+// the resize handler so the active view stays sensible across rotations.
+const MOBILE_BREAKPOINT_PX = 800;
+function isMobileViewport() {
+    return typeof window !== 'undefined' && window.innerWidth <= MOBILE_BREAKPOINT_PX;
+}
+
+// ────────────── DISPLAY SETTINGS ──────────────
+// Persisted in localStorage so preferences survive page refreshes.
+const SETTINGS_STORAGE_KEY = 'schedDisplaySettings';
+const VALID_DEFAULT_VIEWS = ['day', 'week', 'month', 'year'];
+const VALID_DEFAULT_FILTERS = ['all', 'me'];
+const DEFAULT_SETTINGS = {
+    weekdaysOnly: false,
+    hideSidebar: false,
+    // What view to show when the app opens. 'week' preserves prior behavior.
+    defaultView: 'week',
+    // Which pathologists to show on launch: 'all' or 'me' (your own schedule).
+    // 'me' preserves prior behavior for individual pathologists. Gross-room
+    // is always forced to 'all' regardless of this setting.
+    defaultPathFilter: 'me',
+};
+let settings = (() => {
+    try {
+        const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+        if (raw) return Object.assign({}, DEFAULT_SETTINGS, JSON.parse(raw));
+    } catch (_) { }
+    return Object.assign({}, DEFAULT_SETTINGS);
+})();
+// Sanitize persisted values in case localStorage was hand-edited or stale.
+if (!VALID_DEFAULT_VIEWS.includes(settings.defaultView)) settings.defaultView = 'week';
+if (!VALID_DEFAULT_FILTERS.includes(settings.defaultPathFilter)) settings.defaultPathFilter = 'me';
+
+// Now that settings is loaded, seed the active view from the user's
+// default-view preference (falls back to 'week' if invalid).
+//
+// Mobile override: on phone-sized viewports we always start in Day view
+// since that's the only mobile view that shows the procedure schedule
+// (week/month/year on mobile are summary-only). Desktop users get their
+// saved preference unchanged. We don't persist this override — switching
+// to a phone for one session shouldn't overwrite a deliberate desktop
+// default. The user can still tap Week / Month / Year on mobile within
+// the session if they want.
+view = settings.defaultView;
+if (isMobileViewport()) view = 'day';
+else if (view === 'day') view = 'week'; // 'day' saved but desktop loaded → fall back
+today = new Date();
+today.setHours(0, 0, 0, 0);
+cursor = new Date(today);
+
+function saveSettings() {
+    try { localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings)); } catch (_) { }
+}
+
+// Apply current settings to the DOM (sidebar visibility, etc.)
+function applySettings() {
+    const app = document.querySelector('.app');
+    if (app) app.classList.toggle('sidebar-hidden', !!settings.hideSidebar);
+
+    // Sync toggle switches to reflect current state
+    const tw = document.getElementById('toggleWeekdays');
+    const ts = document.getElementById('toggleSidebar');
+    if (tw) tw.setAttribute('aria-checked', settings.weekdaysOnly ? 'true' : 'false');
+    if (ts) ts.setAttribute('aria-checked', settings.hideSidebar ? 'true' : 'false');
+
+    // Sync the view-tab pills to whatever `view` currently is. This keeps the
+    // header in sync after we seed `view` from settings.defaultView at load.
+    document.querySelectorAll('.view-tab').forEach(t => {
+        t.classList.toggle('active', t.dataset.view === view);
+    });
+
+    // Sync segmented controls in the settings drawer to reflect saved defaults
+    const dvSeg = document.getElementById('defaultViewSeg');
+    if (dvSeg) {
+        dvSeg.querySelectorAll('.seg-btn').forEach(b => {
+            const isActive = b.dataset.value === settings.defaultView;
+            b.classList.toggle('active', isActive);
+            b.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        });
+    }
+    const dfSeg = document.getElementById('defaultFilterSeg');
+    if (dfSeg) {
+        dfSeg.querySelectorAll('.seg-btn').forEach(b => {
+            const isActive = b.dataset.value === settings.defaultPathFilter;
+            b.classList.toggle('active', isActive);
+            b.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        });
+    }
+    // Gross-room is always forced to "All" regardless of the default-filter
+    // setting, so hide that row to avoid showing a control that has no effect.
+    const dfRow = document.getElementById('defaultFilterRow');
+    if (dfRow) dfRow.style.display = (isGrossRoom() || isManager()) ? 'none' : '';
+
+    // Sync sidebar arrow button aria-label
+    const stb = document.getElementById('sidebarToggleBtn');
+    if (stb) {
+        const label = settings.hideSidebar ? 'Expand sidebar' : 'Collapse sidebar';
+        stb.setAttribute('aria-label', label);
+        stb.setAttribute('title', label);
+    }
+}
+
+// Year view mode: 'pto' shows PTO schedule, 'call' shows on-call schedule
+let yearMode = 'pto';
+
+// ────────────── AUTH STATE ──────────────
+// Authenticated pathologist id (number) or null when nobody is signed in on
+// this device. We persist this in localStorage so users only see the login
+// screen on first use of a given browser.
+const AUTH_STORAGE_KEY = 'schedCurrentPathId';
+let loggedInPathId = (() => {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (raw === GROSS_ROOM_ID) return GROSS_ROOM_ID;
+    if (raw === MANAGER_ID) return MANAGER_ID;
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : null;
+})();
+
+// ────────────── DATE HELPERS ──────────────
+const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const parseDate = s => { const d = new Date(s + 'T00:00:00'); d.setHours(0, 0, 0, 0); return d; };
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+const startOfWeek = d => { const x = new Date(d); x.setDate(x.getDate() - x.getDay()); x.setHours(0, 0, 0, 0); return x; };
+
+// Given a pathologist color value like 'var(--p2)', returns the matching
+// light-tint background CSS variable string for service row highlighting.
+function pathBgColor(colorVar) {
+    const m = colorVar && colorVar.match(/--p(\d+)/);
+    return m ? `var(--p${m[1]}-bg)` : '';
+}
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const daysBetween = (a, b) => Math.round((b - a) / 86400000);
+const isWeekend = d => d.getDay() === 0 || d.getDay() === 6;
+const weekKey = d => fmt(startOfWeek(d));
+
+// Next/previous workday — skips weekends AND federal holidays. Used by
+// hard-rule and soft-rule logic so "the day before" correctly resolves
+// across holiday weekends:
+//   - prevWorkday(Tuesday after Memorial Day) → Friday (skips Sat/Sun/Mon)
+//   - nextWorkday(Friday before July 4 weekend) → Monday after July 4
+// This means Bigs-on-Friday + WFH-on-Tuesday (with a holiday Monday) is
+// correctly detected as a soft-rule conflict, just like Friday + Monday.
+function nextWorkday(date) {
+    let d = addDays(date, 1);
+    while (isWeekend(d) || getFederalHoliday(d)) d = addDays(d, 1);
+    return d;
+}
+function prevWorkday(date) {
+    let d = addDays(date, -1);
+    while (isWeekend(d) || getFederalHoliday(d)) d = addDays(d, -1);
+    return d;
+}
+
+// ────────────── FEDERAL HOLIDAYS ──────────────
+// Calendar-rule holiday: returns the name when the date itself matches a
+// federal holiday by its raw rule, with NO weekend-observation shifting.
+// Used internally by getFederalHoliday() to decide what falls on Sat/Sun.
+function getActualFederalHoliday(date) {
+    const m = date.getMonth();  // 0-indexed
+    const d = date.getDate();
+    const dow = date.getDay();  // 0=Sun … 6=Sat
+    const y = date.getFullYear();
+
+    // New Year's Day — January 1
+    if (m === 0 && d === 1) return "New Year's Day";
+
+    // Memorial Day — last Monday of May
+    if (m === 4 && dow === 1) {
+        const nextWeek = new Date(y, 4, d + 7);
+        if (nextWeek.getMonth() !== 4) return 'Memorial Day';
+    }
+
+    // Independence Day — July 4
+    if (m === 6 && d === 4) return 'Independence Day';
+
+    // Labor Day — first Monday of September
+    if (m === 8 && dow === 1 && d <= 7) return 'Labor Day';
+
+    // Thanksgiving — 4th Thursday of November
+    if (m === 10 && dow === 4 && d >= 22 && d <= 28) return 'Thanksgiving';
+
+    // Christmas Day — December 25
+    if (m === 11 && d === 25) return 'Christmas Day';
+
+    return null;
+}
+
+// Returns the holiday name for the given date, or null if not a federal
+// holiday. Applies federal observation rules: when a holiday lands on a
+// Saturday, the prior Friday is the *true* holiday (everyone off service);
+// when it lands on a Sunday, the following Monday is the true holiday.
+// The actual Sat/Sun still returns its calendar name for display, but
+// it's already a non-working day by virtue of being a weekend, so the
+// behavior change only kicks in on the observed weekday.
+function getFederalHoliday(date) {
+    const dow = date.getDay();
+
+    // Friday: if tomorrow (Saturday) is an actual holiday, today is observed.
+    if (dow === 5) {
+        const sat = addDays(date, 1);
+        const satHol = getActualFederalHoliday(sat);
+        if (satHol) return satHol + ' (observed)';
+    }
+
+    // Monday: if yesterday (Sunday) is an actual holiday, today is observed.
+    if (dow === 1) {
+        const sun = addDays(date, -1);
+        const sunHol = getActualFederalHoliday(sun);
+        if (sunHol) return sunHol + ' (observed)';
+    }
+
+    return getActualFederalHoliday(date);
+}
+
+// ────────────── ROTATION (defaults) ──────────────
+// Weekly on-call anchor: Jan 8 2024 is a normal Monday
+const CALL_ANCHOR = new Date(2024, 0, 8);
+CALL_ANCHOR.setHours(0, 0, 0, 0);
+
+// Daily service rotation anchor (Mondays): Jan 1 2024 = workDay 0
+const WORK_ANCHOR = new Date(2024, 0, 1);
+WORK_ANCHOR.setHours(0, 0, 0, 0);
+
+// Finds the start of the dynamic call block for any given date
+function getCallCycleStart(date) {
+    let d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    while (true) {
+        let dow = d.getDay();
+        let isHol = getFederalHoliday(d);
+        // Starts on a normal Monday
+        if (dow === 1 && !isHol) return d;
+        // OR starts on a Tuesday if the preceding Monday was a holiday
+        if (dow === 2) {
+            let prev = addDays(d, -1);
+            if (getFederalHoliday(prev)) return d;
+        }
+        d = addDays(d, -1); // Walk backwards until we hit a start
+    }
+}
+
+// Finds the last day of a dynamic call block
+function getCallCycleEnd(cycleStart) {
+    let d = addDays(cycleStart, 1);
+    while (true) {
+        let dow = d.getDay();
+        let isHol = getFederalHoliday(d);
+        if (dow === 1 && !isHol) return addDays(d, -1);
+        if (dow === 2 && getFederalHoliday(addDays(d, -1))) return addDays(d, -1);
+        d = addDays(d, 1);
+    }
+}
+
+// Counts how many call blocks have passed since the anchor to assign the right doctor
+function callCycleIndex(cycleStart) {
+    let current = new Date(CALL_ANCHOR);
+    let idx = 0;
+    let target = cycleStart.getTime();
+
+    if (target >= current.getTime()) {
+        while (current.getTime() < target) {
+            current = addDays(current, 1);
+            let dow = current.getDay();
+            let isHol = getFederalHoliday(current);
+            if (dow === 1 && !isHol) idx++;
+            else if (dow === 2 && getFederalHoliday(addDays(current, -1))) idx++;
+        }
+    } else {
         while (current.getTime() > target) {
             let dow = current.getDay();
             let isHol = getFederalHoliday(current);

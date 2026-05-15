@@ -1089,6 +1089,9 @@ async function attemptLogin() {
         if (!isGrossRoomLogin && !isManagerLogin) {
             setPathFilter(settings.defaultPathFilter === 'all' ? 'all' : String(pid));
         }
+        // Reset Changes page scope to its default ('mine') for the new
+        // session so one user's toggle to "All" doesn't carry over.
+        activeChangesScope = 'mine';
         renderAll();
     } catch (err) {
         errEl.textContent = 'Login failed: ' + (err.message || 'unknown error');
@@ -2459,25 +2462,204 @@ async function logChange(entry) {
 
 // ── Renderer ─────────────────────────────────────────────────────────────
 
+// ── Scope filter (Mine vs All) ───────────────────────────────────────────
+// The Changes page defaults to showing only entries that affect the signed-
+// in user, rephrased in personal language. The user can toggle to "All
+// changes" to see the full team-wide log.
+
+let activeChangesScope = 'mine'; // 'mine' | 'all'
+
+// Does change entry `c` affect the user with pathId `pid`?
+// Conservative: when we can't tell from the entry alone (e.g. service_reset
+// has no per-user breakdown), we treat it as not personally affecting them
+// so it only appears in the "All changes" view.
+function _chgAffectsUser(c, pid) {
+    if (pid === null || pid === undefined) return false;
+    if (!c) return false;
+
+    // Direct affected-user marker covers PTO, oncall_set, single-target
+    // service_set/service_reset from request flow, and conferences.
+    if (c.forPathId === pid) return true;
+
+    // Bulk service edit: assignments is { pathId: serviceId }, cleared is
+    // an array of pathIds.
+    if (c.kind === 'service' && c.type === 'service_set') {
+        const a = c.assignments;
+        if (a && Object.prototype.hasOwnProperty.call(a, pid)) return true;
+        if (a && Object.prototype.hasOwnProperty.call(a, String(pid))) return true;
+        if (Array.isArray(c.cleared)) {
+            if (c.cleared.includes(pid) || c.cleared.includes(String(pid))) return true;
+        }
+    }
+
+    // Recompute: by nature touches everybody's future schedule, so it's
+    // relevant to every pathologist.
+    if (c.kind === 'recompute') return true;
+
+    return false;
+}
+
+// Format a date or date range from a change entry for personal phrasing.
+function _chgWhenText(c) {
+    // Prefer date range if present; fall back to single date / call-week scope.
+    if (c.startDate && c.endDate) return _chgFmtRange(c.startDate, c.endDate);
+    if (c.date) {
+        if (c.scope === 'week') return `the call week of ${_chgFmtCallWeek(c.date)}`;
+        return _chgFmtDate(c.date);
+    }
+    return '';
+}
+
+// Return a user-centric description of how change `c` affects user `pid`.
+// Falls back to the original summary if we don't have a tailored phrasing.
+function _chgDescribeForUser(c, pid) {
+    if (!c) return { summary: '', details: '' };
+    const orig = { summary: c.summary || '', details: c.details || '' };
+    const when = _chgWhenText(c);
+    const sourceTail = c.source === 'request_approved'
+        ? ' (your request was approved)'
+        : c.source === 'request_revoked'
+            ? ' (a prior approval was revoked)'
+            : '';
+
+    // PTO
+    if (c.kind === 'pto') {
+        if (c.forPathId !== pid) return orig;
+        const range = (c.startDate && c.endDate) ? _chgFmtRange(c.startDate, c.endDate) : when;
+        if (c.type === 'pto_add') {
+            return { summary: `PTO added to your schedule for ${range}${sourceTail}.`, details: '' };
+        }
+        if (c.type === 'pto_remove') {
+            return { summary: `PTO removed from your schedule for ${range}${sourceTail}.`, details: '' };
+        }
+        if (c.type === 'pto_edit') {
+            return { summary: `Your PTO dates were updated.`, details: c.details || '' };
+        }
+    }
+
+    // On-call
+    if (c.kind === 'oncall') {
+        if (c.type === 'oncall_set' && c.forPathId === pid) {
+            return { summary: `You were placed on call for ${when}${sourceTail}.`, details: '' };
+        }
+        // oncall_clear doesn't carry the old assignee, so we can't personalize
+        // it; fall through to the team summary.
+    }
+
+    // Service overrides
+    if (c.kind === 'service') {
+        if (c.type === 'service_set') {
+            // Single-target (e.g. approved request)
+            if (c.forPathId === pid && c.serviceId !== undefined) {
+                const svc = _chgServiceName(c.serviceId);
+                if (c.serviceId) {
+                    return { summary: `Your service was set to ${svc} for ${when}${sourceTail}.`, details: '' };
+                }
+                return { summary: `Your service override was cleared for ${when}${sourceTail}.`, details: '' };
+            }
+            // Bulk edit: check assignments / cleared for this user
+            const a = c.assignments || {};
+            const has = (k) => Object.prototype.hasOwnProperty.call(a, k);
+            const cleared = Array.isArray(c.cleared) ? c.cleared : [];
+            const isCleared = cleared.includes(pid) || cleared.includes(String(pid));
+            const newSid = has(pid) ? a[pid] : (has(String(pid)) ? a[String(pid)] : undefined);
+            if (newSid !== undefined) {
+                return { summary: `Your service was set to ${_chgServiceName(newSid)} for ${when}.`, details: '' };
+            }
+            if (isCleared) {
+                return { summary: `Your service override was cleared for ${when}.`, details: '' };
+            }
+        }
+        if (c.type === 'service_reset' && c.forPathId === pid) {
+            return { summary: `Your service override was cleared for ${when}${sourceTail}.`, details: '' };
+        }
+    }
+
+    // Conferences
+    if (c.kind === 'conference' && c.forPathId === pid) {
+        // Original summary is like "Logged Tumor Board on Jan 5, 2026 for Dr. Smith"
+        // Rewrite the trailing "for <name>" to "for you" so it reads personally.
+        const me = _pathName(pid);
+        const meShort = me.replace(/^Dr\. /, '');
+        let s = orig.summary
+            .replace(new RegExp(' for ' + me.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), ' for you')
+            .replace(new RegExp(' for ' + meShort.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'), ' for you');
+        return { summary: s, details: '' };
+    }
+
+    // Recompute: applies to everyone — leave the team-wide summary as-is.
+    return orig;
+}
+
 function renderChangesPage() {
     const pg = document.getElementById('changesPage');
     if (!pg) return;
 
     const listEl = document.getElementById('changesList');
     const totalEl = document.getElementById('changesSummaryTotal');
+    const labelEl = document.getElementById('changesSummaryLabel');
+    const subEl = document.getElementById('changesPageSubtitle');
+    const countMineEl = document.getElementById('changesTabCountMine');
+    const countAllEl = document.getElementById('changesTabCountAll');
     if (!listEl) return;
 
-    const entries = Object.entries(changes || {})
+    // Non-pathologist accounts (gross room, manager) can't be the target of
+    // PTO / on-call / service / conference changes, so the "mine" view is
+    // structurally empty for them. Quietly default them to "all".
+    const meIsPath = (typeof loggedInPathId === 'number');
+    if (!meIsPath && activeChangesScope === 'mine') {
+        activeChangesScope = 'all';
+    }
+
+    const allEntries = Object.entries(changes || {})
         .filter(([, c]) => !!c)
         .sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
 
+    const mineEntries = meIsPath
+        ? allEntries.filter(([, c]) => _chgAffectsUser(c, loggedInPathId))
+        : [];
+
+    // Keep the tab badges in sync regardless of which view is active
+    if (countMineEl) countMineEl.textContent = String(mineEntries.length);
+    if (countAllEl) countAllEl.textContent = String(allEntries.length);
+
+    // Reflect the active scope in the tab UI
+    const tabs = document.querySelectorAll('#changesPageTabs .req-tab');
+    tabs.forEach(btn => {
+        const isActive = btn.getAttribute('data-ctab') === activeChangesScope;
+        btn.classList.toggle('active', isActive);
+    });
+
+    // Disable the "Affecting me" tab for non-pathologist accounts
+    const mineTab = document.querySelector('#changesPageTabs .req-tab[data-ctab="mine"]');
+    if (mineTab) {
+        mineTab.disabled = !meIsPath;
+        mineTab.style.opacity = meIsPath ? '' : '0.5';
+        mineTab.style.cursor = meIsPath ? '' : 'not-allowed';
+        mineTab.title = meIsPath ? '' : 'Sign in as a pathologist to see your personal changes';
+    }
+
+    const showMine = (activeChangesScope === 'mine' && meIsPath);
+    const entries = showMine ? mineEntries : allEntries;
+
+    // Subtitle + summary stat reflect the active scope
+    if (subEl) {
+        subEl.textContent = showMine
+            ? 'Recent updates that affect your schedule, newest first.'
+            : 'Every recent update to the schedule, newest first.';
+    }
+    if (labelEl) labelEl.textContent = showMine ? 'Affecting you' : 'Logged';
     if (totalEl) totalEl.textContent = String(entries.length);
 
     if (entries.length === 0) {
+        const emptyHeadline = showMine ? 'Nothing for you yet.' : 'Nothing yet.';
+        const emptyBody = showMine
+            ? 'Changes that affect your schedule will appear here. Switch to <strong>All changes</strong> to see team-wide updates.'
+            : 'Schedule changes will appear here as they happen.';
         listEl.innerHTML = `
             <div class="empty">
-                <span class="empty-headline">Nothing yet.</span>
-                Schedule changes will appear here as they happen.
+                <span class="empty-headline">${emptyHeadline}</span>
+                ${emptyBody}
             </div>`;
         return;
     }
@@ -2488,6 +2670,7 @@ function renderChangesPage() {
         service:    'SERVICE',
         recompute:  'RECOMPUTE',
         lf_sendout: 'LF SENDOUT',
+        conference: 'CONFERENCE',
     };
     const SOURCE_LABEL = {
         direct:           '',
@@ -2508,8 +2691,14 @@ function renderChangesPage() {
         const by = c.byName ? c.byName.replace(/^Dr\. /, '') : '';
         const sourceLabel = SOURCE_LABEL[c.source || 'direct'] || '';
 
-        const detailLine = c.details
-            ? `<div class="chg-details">${escapeHtml(c.details)}</div>`
+        // For the "Mine" view we use personalized phrasing; for "All" we
+        // keep the original neutral team-wide summary.
+        const display = showMine
+            ? _chgDescribeForUser(c, loggedInPathId)
+            : { summary: c.summary || '', details: c.details || '' };
+
+        const detailLine = display.details
+            ? `<div class="chg-details">${escapeHtml(display.details)}</div>`
             : '';
 
         const metaParts = [];
@@ -2523,7 +2712,7 @@ function renderChangesPage() {
         return `
             <div class="chg-card kind-${escapeHtml(kind)}">
                 <div class="chg-card-head">
-                    <div class="chg-summary">${escapeHtml(c.summary || '')}</div>
+                    <div class="chg-summary">${escapeHtml(display.summary)}</div>
                     <span class="chg-kind">${escapeHtml(kindLabel)}</span>
                 </div>
                 ${detailLine}
@@ -2534,6 +2723,18 @@ function renderChangesPage() {
 
 // Expose so other code (e.g. login flow) can refresh the page on demand
 window.__renderChangesPage = renderChangesPage;
+
+// Wire up the scope tabs (Affecting me / All changes)
+document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+        if (btn.disabled) return;
+        const scope = btn.getAttribute('data-ctab');
+        if (scope !== 'mine' && scope !== 'all') return;
+        if (scope === activeChangesScope) return;
+        activeChangesScope = scope;
+        renderChangesPage();
+    });
+});
 
 // Re-render the page when the user clicks the Changes nav item, just like
 // the requests page does (defer a tick so setPage un-hides the shell first)
@@ -3169,7 +3370,7 @@ async function saveConferenceEntry() {
             const p = pathologists.find(x => x.id === pathId);
             const summary = _confChangeSummary('Updated', type, date, p, payload);
             try {
-                await logChange({ kind: 'conference', summary, source: 'direct' });
+                await logChange({ kind: 'conference', summary, source: 'direct', forPathId: pathId });
             } catch (_) {}
         } else {
             const full = Object.assign({}, payload, {
@@ -3180,7 +3381,7 @@ async function saveConferenceEntry() {
             const p = pathologists.find(x => x.id === pathId);
             const summary = _confChangeSummary('Logged', type, date, p, payload);
             try {
-                await logChange({ kind: 'conference', summary, source: 'direct' });
+                await logChange({ kind: 'conference', summary, source: 'direct', forPathId: pathId });
             } catch (_) {}
         }
         closeConferenceModal();
@@ -3205,7 +3406,7 @@ async function deleteConferenceEntry() {
             const p = pathologists.find(x => x.id === existing.pathologistId);
             const summary = _confChangeSummary('Removed', existing.type, existing.date, p, existing);
             try {
-                await logChange({ kind: 'conference', summary, source: 'direct' });
+                await logChange({ kind: 'conference', summary, source: 'direct', forPathId: existing.pathologistId });
             } catch (_) {}
         }
         closeConferenceModal();
@@ -6025,12 +6226,14 @@ if (mobilePathSel) {
 
 // ── Swipe navigation (mobile only) ───────────────────────────────────
 // Listens on #main (which persists across re-renders). Tracks horizontal
-// gestures live — the content follows the finger — then on a qualifying
-// swipe, slides the old content out and the new content in with a CSS
-// transition, so the user sees the next/previous period swiping into view.
+// gestures live — the previous/next periods are pre-rendered as snapshots
+// flush to either side of #main, and all three translate together with the
+// finger so the user sees the adjacent period swiping in as they drag.
+// On a qualifying swipe the band continues to its committed position; on
+// an aborted drag everything snaps back.
 //
-// Architecture: #main is transformed as a unit. Its parent .content-area
-// already has overflow:hidden, so the translated #main is naturally clipped.
+// Architecture: #main and its two neighbor snapshots all live as siblings
+// in the same .content-area (which already clips with overflow:hidden).
 // The toolbar sits above #main and is unaffected.
 (function setupSwipeNavigation() {
     const mainEl = document.getElementById('main');
@@ -6040,95 +6243,199 @@ if (mobilePathSel) {
     let tracking = false, dragging = false;
     let isAnimating = false;
 
+    // Neighbor snapshots built on first confirmed horizontal move and
+    // torn down at the end of every gesture (commit or abort).
+    let prevSnap = null, nextSnap = null;
+    let snapWidth = 0;
+
     const MIN_DISTANCE_PX = 60;   // horizontal travel required to count as a swipe
     const MAX_VERTICAL_PX  = 60;  // vertical drift allowed (keeps scroll gestures intact)
     const MAX_DURATION_MS  = 600; // flicks only — long slow drags are probably scrolling
     const ANIM_MS          = 280; // slide-in / slide-out duration
 
-    // (mainWidth helper removed — width computed inline in animateNavigation)
+    // Compute the cursor value for the period `delta` steps from the
+    // current one (+1 = next, -1 = prev). Mirrors the prev/next button
+    // handlers so swipes and buttons stay perfectly aligned.
+    function cursorFor(delta) {
+        if (view === 'day')        return addDays(cursor, delta);
+        else if (view === 'week')  return addDays(cursor, 7 * delta);
+        else if (view === 'month') return new Date(cursor.getFullYear(), cursor.getMonth() + delta, 1);
+        else                       return new Date(cursor.getFullYear() + delta, cursor.getMonth(), 1);
+    }
 
-    // Animate main off-screen in the swipe direction, then re-render the new
-    // period and slide the fresh content in from the opposite side.
-    // Animate navigation so old and new content slide as one continuous rigid
-    // band. A frozen clone of #main (the leaving panel) is positioned flush
-    // against the new #main (the entering panel); both are then transitioned
-    // the same delta-x at the same speed so they appear perfectly adjacent.
-    //
-    // Geometry example (goNext, finalDx = -80, w = 400):
-    //   snapshot  translateX(-80) → translateX(-400)   Δ = -320 px
-    //   #main     translateX(320) → translateX(0)      Δ = -320 px
-    //   They are always exactly w px apart — one seamless sliding band.
-    function animateNavigation(goNext, finalDx) {
-        isAnimating = true;
+    // Render the neighbor period into a *temporary detached element*
+    // rather than into the real #main. Renaming the temp's id to "main"
+    // (and the real #main's id to something else) for the duration of
+    // the render redirects renderMain()'s internal getElementById('main')
+    // call to the temp container. This matters because renderMain()
+    // does `main.innerHTML = …` — if we let it write to the real #main
+    // mid-gesture, every child of #main (including the element the
+    // touch started on) is destroyed, and mobile browsers (notably iOS
+    // Safari) then stop dispatching touchmove/touchend for the rest of
+    // the gesture. Symptom: the swipe moves a few pixels then freezes.
+    function snapshotPeriod(periodCursor) {
+        cursor = periodCursor;
+
+        const temp = document.createElement('div');
+        // Off-screen + hidden so the in-progress render never paints.
+        temp.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden';
+        mainEl.id = '__main_swipe_real';
+        temp.id  = 'main';
+        document.body.appendChild(temp);
+        try {
+            renderMain();
+        } finally {
+            temp.id  = '';
+            mainEl.id = 'main';
+            document.body.removeChild(temp);
+        }
+        temp.setAttribute('aria-hidden', 'true');
+        return temp;
+    }
+
+    // Build prev + next snapshots flush to either side of #main. Called
+    // once per gesture, the moment the drag is confirmed horizontal.
+    // Costs 3 renderMain() calls (prev, next, restore) — fine because
+    // it only runs after the 8px horizontal dead zone is crossed, so
+    // pure taps and vertical scrolls don't pay for it.
+    function buildNeighbors() {
         const w      = mainEl.offsetWidth || window.innerWidth;
         const parent = mainEl.offsetParent || mainEl.parentElement;
+        const top    = mainEl.offsetTop;
+        const left   = mainEl.offsetLeft;
+        const height = mainEl.offsetHeight;
+        snapWidth = w;
 
-        // 1. Freeze current content as an absolutely-positioned clone
-        const snapshot = mainEl.cloneNode(true);
-        snapshot.setAttribute('aria-hidden', 'true');
-        snapshot.style.cssText = [
-            'position:absolute',
-            'top:'  + mainEl.offsetTop    + 'px',
-            'left:' + mainEl.offsetLeft   + 'px',
-            'width:'  + w                 + 'px',
-            'height:' + mainEl.offsetHeight + 'px',
-            'transform:translateX(' + finalDx + 'px)',
-            'transition:none',
-            'z-index:5',
-            'pointer-events:none',
-            'overflow:hidden',
-        ].join(';');
-        parent.appendChild(snapshot);
+        const savedCursor = cursor;
+        prevSnap = snapshotPeriod(cursorFor(-1));
+        nextSnap = snapshotPeriod(cursorFor(+1));
+        cursor = savedCursor;
+        // #main wasn't modified (snapshots rendered into a detached temp
+        // element), so no restore render is needed. The period label
+        // lives outside #main though — renderMain() writes to it each
+        // time via renderPeriodLabel() — so we have to put it back.
+        renderPeriodLabel();
 
-        // 2. Park #main flush against the snapshot's incoming edge.
-        //    enterX = w + finalDx  (goNext)  → new starts at snapshot's right edge
-        //    enterX = finalDx - w  (!goNext) → new starts at snapshot's left edge
-        const enterX = goNext ? (w + finalDx) : (finalDx - w);
-        const exitX  = goNext ? -w : w;
-
-        mainEl.style.transition = 'none';
-        mainEl.style.transform  = 'translateX(' + enterX + 'px)';
-
-        // 3. Update cursor & render new period into #main
-        if (goNext) {
-            if (view === 'day')        cursor = addDays(cursor, 1);
-            else if (view === 'week')  cursor = addDays(cursor, 7);
-            else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
-            else                       cursor = new Date(cursor.getFullYear() + 1, cursor.getMonth(), 1);
-        } else {
-            if (view === 'day')        cursor = addDays(cursor, -1);
-            else if (view === 'week')  cursor = addDays(cursor, -7);
-            else if (view === 'month') cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
-            else                       cursor = new Date(cursor.getFullYear() - 1, cursor.getMonth(), 1);
+        function styleSnap(snap, tx) {
+            snap.style.cssText = [
+                'position:absolute',
+                'top:'    + top    + 'px',
+                'left:'   + left   + 'px',
+                'width:'  + w      + 'px',
+                'height:' + height + 'px',
+                'transform:translateX(' + tx + 'px)',
+                'transition:none',
+                'z-index:5',
+                'pointer-events:none',
+                'overflow:hidden',
+            ].join(';');
         }
-        renderMain();
+        styleSnap(prevSnap, -w);
+        styleSnap(nextSnap,  w);
+        parent.appendChild(prevSnap);
+        parent.appendChild(nextSnap);
+    }
 
-        // 4. Double-rAF: slide both panels the same Δx simultaneously
+    function clearNeighbors() {
+        if (prevSnap) { prevSnap.remove(); prevSnap = null; }
+        if (nextSnap) { nextSnap.remove(); nextSnap = null; }
+    }
+
+    // Translate #main and both neighbors together so the band moves as
+    // one rigid unit — main at dx, prev at -w+dx, next at +w+dx.
+    function moveAll(dx) {
+        mainEl.style.transform = 'translateX(' + dx + 'px)';
+        if (prevSnap) prevSnap.style.transform = 'translateX(' + (-snapWidth + dx) + 'px)';
+        if (nextSnap) nextSnap.style.transform = 'translateX(' + ( snapWidth + dx) + 'px)';
+    }
+
+    function setTransitionAll(t) {
+        mainEl.style.transition = t;
+        if (prevSnap) prevSnap.style.transition = t;
+        if (nextSnap) nextSnap.style.transition = t;
+    }
+
+    // Run `cb` once the current transform transition on #main ends, with
+    // a setTimeout fallback in case transitionend doesn't fire (e.g. the
+    // start and end values turned out identical, or the tab was hidden).
+    function whenTransformDone(durationMs, cb) {
+        let done = false;
+        function finish() {
+            if (done) return;
+            done = true;
+            mainEl.removeEventListener('transitionend', onTransition);
+            cb();
+        }
+        function onTransition(e) {
+            if (e.propertyName !== 'transform') return;
+            finish();
+        }
+        mainEl.addEventListener('transitionend', onTransition);
+        setTimeout(finish, durationMs + 60);
+    }
+
+    // Commit: the relevant neighbor slides into the center, #main slides
+    // off in the swipe direction, the other neighbor slides further off.
+    // When the animation ends, we update `cursor`, re-render #main with
+    // the new period, snap its transform back to 0, and remove both
+    // snapshots. Because snapshots have z-index:5 and #main doesn't,
+    // the now-centered neighbor masks #main during the swap — no flash.
+    function commitAnimation(goNext, finalDx) {
+        isAnimating = true;
+        const w = snapWidth;
+        const targetDx = goNext ? -w : w;
+        const timing = 'transform ' + ANIM_MS + 'ms ease-out';
+
+        // First make sure the pre-transition transform is the live drag
+        // position so the browser interpolates from there, not from 0.
+        moveAll(finalDx);
+
+        // Double-rAF: let the browser commit the starting transform,
+        // then turn on the transition and set the ending transform.
         requestAnimationFrame(function() {
             requestAnimationFrame(function() {
-                var timing = 'transform ' + ANIM_MS + 'ms ease-out';
-                snapshot.style.transition = timing;
-                snapshot.style.transform  = 'translateX(' + exitX + 'px)';
-                mainEl.style.transition   = timing;
-                mainEl.style.transform    = '';
+                setTransitionAll(timing);
+                moveAll(targetDx);
 
-                function onDone(e) {
-                    if (e.propertyName !== 'transform') return;
-                    mainEl.removeEventListener('transitionend', onDone);
-                    snapshot.remove();
+                whenTransformDone(ANIM_MS, function() {
+                    cursor = cursorFor(goNext ? 1 : -1);
+                    renderMain();
+                    // Reset #main without animating back through 0.
+                    mainEl.style.transition = 'none';
+                    mainEl.style.transform  = '';
+                    // Force the no-transition state to commit before the
+                    // next style change so the next gesture starts clean.
+                    void mainEl.offsetHeight;
                     mainEl.style.transition = '';
+                    clearNeighbors();
                     isAnimating = false;
-                }
-                mainEl.addEventListener('transitionend', onDone);
+                });
             });
         });
     }
 
-    // Snap the content back to centre (used when a drag doesn't qualify).
-    function snapBack() {
-        mainEl.style.transition = `transform 0.2s ease`;
-        mainEl.style.transform  = '';
-        dragging = false;
+    // Abort: slide everything back to baseline (#main → 0, neighbors → ±w),
+    // then remove the snapshots.
+    function snapBack(finalDx) {
+        isAnimating = true;
+        const timing = 'transform 200ms ease';
+
+        // Ensure we transition from the live drag position.
+        moveAll(finalDx);
+
+        requestAnimationFrame(function() {
+            requestAnimationFrame(function() {
+                setTransitionAll(timing);
+                moveAll(0);
+
+                whenTransformDone(200, function() {
+                    mainEl.style.transition = '';
+                    mainEl.style.transform  = '';
+                    clearNeighbors();
+                    isAnimating = false;
+                });
+            });
+        });
     }
 
     // ── Touch listeners ──────────────────────────────────────────────────
@@ -6166,11 +6473,16 @@ if (mobilePathSel) {
                 return;
             }
             dragging = true;
+            // Build the neighbor previews now that we know it's a swipe.
+            // Synchronous and costs ~3 renderMain calls — one possible
+            // hitched frame at the very start of the drag, then smooth.
+            buildNeighbors();
         }
 
-        // Confirmed horizontal drag: follow the finger and suppress scroll.
+        // Confirmed horizontal drag: move the whole band with the finger
+        // and suppress native scroll.
         e.preventDefault();
-        mainEl.style.transform = `translateX(${dx}px)`;
+        moveAll(dx);
     }, { passive: false });
 
     mainEl.addEventListener('touchend', (e) => {
@@ -6189,16 +6501,21 @@ if (mobilePathSel) {
             Math.abs(dx) < MIN_DISTANCE_PX ||
             Math.abs(dy) > MAX_VERTICAL_PX
         ) {
-            snapBack();
+            snapBack(dx);
             return;
         }
 
-        // Valid swipe — commit the navigation with a slide animation.
-        animateNavigation(dx < 0, dx); // swipe left → next; swipe right → prev
+        // Valid swipe — commit. swipe left → next; swipe right → prev.
+        commitAnimation(dx < 0, dx);
     }, { passive: true });
 
-    mainEl.addEventListener('touchcancel', () => {
-        if (dragging) snapBack();
+    mainEl.addEventListener('touchcancel', (e) => {
+        if (dragging) {
+            // Use last-known dx if available, else 0.
+            const t = (e.changedTouches && e.changedTouches[0]) || null;
+            const dx = t ? (t.clientX - startX) : 0;
+            snapBack(dx);
+        }
         tracking = false;
         dragging = false;
     }, { passive: true });

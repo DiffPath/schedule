@@ -7160,11 +7160,40 @@ document.getElementById('exportDownload').addEventListener('click', () => {
     const asideToggleBtn = document.getElementById('asideToggleBtn');
     const sidebarBackdrop = document.getElementById('sidebarBackdrop');
 
+    // Scroll-lock state. We save window.scrollY when the drawer opens and
+    // pin the body in place with position:fixed (via the CSS class), then
+    // restore the scroll offset when it closes. position:fixed is the only
+    // reliable way to stop iOS Safari from scrolling the page behind the
+    // drawer; plain overflow:hidden on body isn't enough there.
+    let sidebarSavedScrollY = 0;
+
+    function lockBodyScrollForSidebar() {
+        sidebarSavedScrollY = window.scrollY || window.pageYOffset || 0;
+        // Apply the saved offset as a negative top so the visible page
+        // doesn't jump back to 0 when position:fixed engages.
+        document.body.style.top = `-${sidebarSavedScrollY}px`;
+        document.body.classList.add('sidebar-scroll-locked');
+    }
+
+    function unlockBodyScrollForSidebar() {
+        if (!document.body.classList.contains('sidebar-scroll-locked')) return;
+        document.body.classList.remove('sidebar-scroll-locked');
+        document.body.style.top = '';
+        // Restore scroll position (skip the smooth-scroll behavior).
+        window.scrollTo(0, sidebarSavedScrollY);
+    }
+
     function openMobileSidebar() {
-        if (app) app.classList.add('sidebar-open');
+        if (!app) return;
+        if (app.classList.contains('sidebar-open')) return;
+        app.classList.add('sidebar-open');
+        lockBodyScrollForSidebar();
     }
     function closeMobileSidebar() {
-        if (app) app.classList.remove('sidebar-open');
+        if (!app) return;
+        if (!app.classList.contains('sidebar-open')) return;
+        app.classList.remove('sidebar-open');
+        unlockBodyScrollForSidebar();
     }
 
     if (asideToggleBtn) {
@@ -7180,6 +7209,9 @@ document.getElementById('exportDownload').addEventListener('click', () => {
 
     if (sidebarBackdrop) {
         sidebarBackdrop.addEventListener('click', closeMobileSidebar);
+        // Swallow touch-drag gestures on the backdrop so they can't be
+        // interpreted as scroll on the (now position:fixed) page behind it.
+        sidebarBackdrop.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
     }
 
     // Esc closes mobile sidebar

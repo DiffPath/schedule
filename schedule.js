@@ -6273,7 +6273,16 @@ if (mobilePathSel) {
     // touch started on) is destroyed, and mobile browsers (notably iOS
     // Safari) then stop dispatching touchmove/touchend for the rest of
     // the gesture. Symptom: the swipe moves a few pixels then freezes.
+    //
+    // We also save and restore the global `cursor` (and re-run
+    // renderPeriodLabel) inside this function so it has no side effects
+    // on outer state. Otherwise the second call sees `cursor` mutated by
+    // the first, and cursorFor(+1) ends up returning today (yesterday+1)
+    // instead of tomorrow — making the next snapshot show today's
+    // content. Symptom: incoming and outgoing panels show the same date
+    // during the swipe.
     function snapshotPeriod(periodCursor) {
+        const savedCursor = cursor;
         cursor = periodCursor;
 
         const temp = document.createElement('div');
@@ -6288,6 +6297,12 @@ if (mobilePathSel) {
             temp.id  = '';
             mainEl.id = 'main';
             document.body.removeChild(temp);
+            // Restore the bits renderMain mutated outside the temp:
+            // the global cursor, and the period label (which lives in
+            // #currentPeriod, not in #main, so renderMain wrote to the
+            // real one each time).
+            cursor = savedCursor;
+            renderPeriodLabel();
         }
         temp.setAttribute('aria-hidden', 'true');
         return temp;
@@ -6306,15 +6321,11 @@ if (mobilePathSel) {
         const height = mainEl.offsetHeight;
         snapWidth = w;
 
-        const savedCursor = cursor;
+        // snapshotPeriod restores `cursor` and the period label itself,
+        // so callers can invoke it freely without worrying about side
+        // effects on outer state.
         prevSnap = snapshotPeriod(cursorFor(-1));
         nextSnap = snapshotPeriod(cursorFor(+1));
-        cursor = savedCursor;
-        // #main wasn't modified (snapshots rendered into a detached temp
-        // element), so no restore render is needed. The period label
-        // lives outside #main though — renderMain() writes to it each
-        // time via renderPeriodLabel() — so we have to put it back.
-        renderPeriodLabel();
 
         function styleSnap(snap, tx) {
             snap.style.cssText = [

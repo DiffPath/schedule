@@ -255,15 +255,26 @@
                     <header class="changes-page-header">
                         <div class="changes-page-heading">
                             <h2 class="changes-page-title">Changes</h2>
-                            <p class="changes-page-subtitle">Every recent update to the schedule, newest first.</p>
+                            <p class="changes-page-subtitle" id="changesPageSubtitle">Recent updates that affect your schedule, newest first.</p>
                         </div>
                         <div class="changes-page-summary" id="changesPageSummary">
                             <div class="changes-summary-stat">
                                 <span class="changes-summary-num" id="changesSummaryTotal">0</span>
-                                <span class="changes-summary-label">Logged</span>
+                                <span class="changes-summary-label" id="changesSummaryLabel">Affecting you</span>
                             </div>
                         </div>
                     </header>
+
+                    <div class="req-tabs changes-page-tabs" id="changesPageTabs">
+                        <button class="req-tab active" data-ctab="mine">
+                            <span>Affecting me</span>
+                            <span class="req-tab-count" id="changesTabCountMine">0</span>
+                        </button>
+                        <button class="req-tab" data-ctab="all">
+                            <span>All changes</span>
+                            <span class="req-tab-count" id="changesTabCountAll">0</span>
+                        </button>
+                    </div>
 
                     <div class="chg-list" id="changesList"></div>
                 </div>

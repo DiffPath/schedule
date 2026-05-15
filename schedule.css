@@ -3176,37 +3176,112 @@ main {
     }
 
     /* ── Day view: mobile-optimized single-day card ──
-       Wider header, full-width card, slightly chunkier hour-grid rows
-       for finger-friendly taps. The .wd-hours block-level layout from
-       the rule above already gives us natural content height. */
+       The whole point of day view on a phone is "I want to see the
+       entire day's procedure schedule at a glance" — so we collapse
+       the layout to exactly the visible viewport and let the hour
+       grid claim all remaining vertical space, distributing the 30-min
+       rows evenly among themselves. No page scroll required. The
+       :has() selector targets only when day view is actually rendered
+       so week / month / year continue to scroll normally on mobile. */
+
+    /* Lock the schedule page to the visible viewport when day view is
+       showing. content-area becomes a flex column: toolbar at top
+       (natural height), <main> fills the rest. */
+    .content-area:has(> main > .day-view) {
+        height: 100vh;
+        height: 100dvh;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .content-area > main:has(> .day-view) {
+        flex: 1 1 0;
+        min-height: 0;
+        overflow: hidden;
+        display: flex;
+        flex-direction: column;
+        /* Tighter padding than the generic mobile main padding above —
+           every pixel counts when we're fitting the whole schedule. */
+        padding: 8px 10px 10px;
+    }
+
     .day-view {
-        flex: none;             /* cancel desktop flex:1 fill */
-        display: block;
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
     }
 
     .day-view .day-view-card {
         max-width: none;        /* no width cap on phones */
         margin: 0;
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
     }
 
+    /* Header is content-sized (won't shrink), but tightened to leave
+       maximum room for the hour grid below. */
     .day-view .day-view-head {
-        padding: 12px 14px 10px;
+        padding: 8px 14px 6px;
+        flex-shrink: 0;
     }
 
     .day-view .day-view-head .num {
-        font-size: 26px;
+        font-size: 22px;
     }
 
-    /* Slightly taller hour-grid rows in Day view so 30-min slots are
-       comfortable touch targets on a phone (the user's primary use case
-       for this view). */
+    /* Pathologist assignment rows: compact but still readable.
+       flex-shrink: 0 keeps them sized to content so they don't get
+       squeezed when the hour grid needs height. */
+    .day-view .wd-rows {
+        padding: 5px 6px;
+        gap: 3px;
+        flex-shrink: 0;
+    }
+
+    .day-view .wd-row {
+        padding: 4px 8px;
+        font-size: 12px;
+        line-height: 1.2;
+    }
+
+    /* The hour grid: re-enable flex layout (the generic mobile rule
+       above sets display:block + overflow:visible for week view; day
+       view needs to fill height and distribute rows). overflow:hidden
+       keeps any pill-driven overflow from triggering page scroll;
+       individual slots can still wrap their pills internally. */
+    .day-view .wd-hours {
+        flex: 1 1 0;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+
+    .day-view .wd-hours-head {
+        flex-shrink: 0;
+    }
+
+    /* Distribute the 20 half-hour rows evenly across whatever height
+       remains in the card. min-height: 0 lets them shrink below the
+       desktop default; flex: 1 1 0 makes every row claim an equal
+       share of the available space. */
     .day-view .wd-hours .hour-row {
-        min-height: 32px;
+        flex: 1 1 0;
+        min-height: 0;
     }
 
     .day-view .wd-hours .hour-slot {
-        min-height: 32px;
-        padding: 4px 8px;
+        min-height: 0;
+        padding: 2px 6px;
+    }
+
+    .day-view .wd-hours .hour-label {
+        padding: 2px 6px 0 6px;
     }
 
     /* Hourly grid: a bit taller per row on touch so taps register
@@ -5213,6 +5288,23 @@ aside {
 .sidebar-backdrop.open {
     opacity: 1;
     pointer-events: auto;
+}
+
+/* ── Body scroll lock while the mobile sidebar is open ──
+   Applied by openMobileSidebar() in schedule.js. position:fixed is
+   the only reliable way to stop iOS Safari from rubber-band scrolling
+   the background page behind the drawer; the saved scroll offset is
+   reapplied via inline `top: -<scrollY>px` so the page doesn't visually
+   jump to the top when the lock engages, and closeMobileSidebar()
+   restores window.scrollTo(0, savedScrollY) before clearing the class. */
+body.sidebar-scroll-locked {
+    position: fixed;
+    left: 0;
+    right: 0;
+    width: 100%;
+    overflow: hidden;
+    /* Belt-and-braces: also prevent overscroll chaining on iOS. */
+    overscroll-behavior: none;
 }
 
 /* ════════════════════════════════════════════════════════════════════════

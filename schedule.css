@@ -5257,12 +5257,16 @@ aside {
         bottom: 0;
         width: 270px;
         max-width: 84vw;
-        /* height: 100vh is intentionally omitted here. position:fixed with
-           top:0 and bottom:0 already constrains the sidebar to the exact
-           visible viewport height. Keeping height:100vh caused the sidebar
-           to be taller than the screen on mobile browsers (where 100vh
-           includes the browser chrome / address bar), pushing the sign-out
-           button off the bottom of the visible area. */
+        /* Explicitly clear the desktop rule's height: 100vh. On mobile
+           browsers 100vh includes the address bar / browser chrome, which
+           makes the sidebar taller than the visible area and pushes the
+           sign-out button off the bottom. Using height: auto lets the
+           top:0 / bottom:0 constraints define the actual height — and the
+           small-viewport units (dvh fallback) match the *visible* viewport
+           as the URL bar shows/hides. */
+        height: auto;
+        max-height: 100vh;
+        max-height: 100dvh;
         z-index: 100;
         transform: translateX(-100%);
         transition: transform 0.22s ease;
@@ -5280,8 +5284,14 @@ aside {
         transform: translateX(0);
     }
 
+    /* When the sidebar is open, the backdrop must be visible AND
+       interactive. The base .sidebar-backdrop rule sets pointer-events:none
+       so it doesn't block clicks while hidden — we need to re-enable them
+       here, otherwise tapping outside the drawer does nothing. */
     .app.sidebar-open .sidebar-backdrop {
         display: block;
+        opacity: 1;
+        pointer-events: auto;
     }
 
     .sidebar-backdrop {

@@ -6285,7 +6285,15 @@ if (mobilePathSel) {
         const savedCursor = cursor;
         cursor = periodCursor;
 
-        const temp = document.createElement('div');
+        // Use <main> (not <div>) so element-targeted CSS rules like
+        // `main { padding: … }` and `.content-area > main { … }` apply
+        // to the snapshot just like they do to the real #main. Otherwise
+        // the snapshot's content sits 14px higher / 12px further left
+        // than the real one on mobile (the universal `* { padding: 0 }`
+        // reset wins on a <div>, and the `main { padding: … }` override
+        // never matches). Symptom: the incoming panel appears raised
+        // during the swipe, then snaps down on commit.
+        const temp = document.createElement('main');
         // Off-screen + hidden so the in-progress render never paints.
         temp.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden';
         mainEl.id = '__main_swipe_real';

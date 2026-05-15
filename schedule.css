@@ -4193,6 +4193,26 @@ main {
     color: var(--ink-3);
 }
 
+/* Tabs on the page: same DNA as the requests-page tabs, with a count chip.
+   "Affecting me" is the default — defaults the audience of the log to the
+   signed-in user's own changes so it isn't drowned in unrelated updates. */
+.changes-page-tabs {
+    margin: 0 0 18px;
+}
+
+.changes-page-tabs .req-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    font-size: 12.5px;
+}
+
+.changes-page-tabs .req-tab.active .req-tab-count {
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
 /* List container: stacked cards, separated by a subtle gap */
 .chg-list {
     display: flex;
@@ -4327,6 +4347,16 @@ main {
 
     .chg-list .empty .empty-headline {
         font-size: 19px;
+    }
+
+    /* Let the scope tabs span full width and split evenly on narrow screens */
+    .changes-page-tabs {
+        width: 100%;
+    }
+
+    .changes-page-tabs .req-tab {
+        flex: 1;
+        justify-content: center;
     }
 }
 

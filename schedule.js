@@ -196,6 +196,7 @@ function isMobileViewport() {
 const SETTINGS_STORAGE_KEY = 'schedDisplaySettings';
 const VALID_DEFAULT_VIEWS = ['day', 'week', 'month', 'year'];
 const VALID_DEFAULT_FILTERS = ['all', 'me'];
+const VALID_DEFAULT_PAGES = ['schedule', 'requests', 'changes', 'tracking'];
 const DEFAULT_SETTINGS = {
     weekdaysOnly: false,
     hideSidebar: false,
@@ -205,6 +206,8 @@ const DEFAULT_SETTINGS = {
     // 'me' preserves prior behavior for individual pathologists. Gross-room
     // is always forced to 'all' regardless of this setting.
     defaultPathFilter: 'me',
+    // Which page to land on when the app opens. 'schedule' preserves prior behavior.
+    defaultPage: 'schedule',
 };
 let settings = (() => {
     try {
@@ -216,6 +219,7 @@ let settings = (() => {
 // Sanitize persisted values in case localStorage was hand-edited or stale.
 if (!VALID_DEFAULT_VIEWS.includes(settings.defaultView)) settings.defaultView = 'week';
 if (!VALID_DEFAULT_FILTERS.includes(settings.defaultPathFilter)) settings.defaultPathFilter = 'me';
+if (!VALID_DEFAULT_PAGES.includes(settings.defaultPage)) settings.defaultPage = 'schedule';
 
 // Now that settings is loaded, seed the active view from the user's
 // default-view preference (falls back to 'week' if invalid).
@@ -256,6 +260,14 @@ function applySettings() {
     });
 
     // Sync segmented controls in the settings drawer to reflect saved defaults
+    const dpSeg = document.getElementById('defaultPageSeg');
+    if (dpSeg) {
+        dpSeg.querySelectorAll('.seg-btn').forEach(b => {
+            const isActive = b.dataset.value === settings.defaultPage;
+            b.classList.toggle('active', isActive);
+            b.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        });
+    }
     const dvSeg = document.getElementById('defaultViewSeg');
     if (dvSeg) {
         dvSeg.querySelectorAll('.seg-btn').forEach(b => {
@@ -2248,6 +2260,45 @@ function renderRequestsPage() {
             : 'Track the status of changes you have requested.';
     }
 
+    // Inject (once) a "New Request" button so non-admins can start a request
+    // directly from this page. It opens the PTO modal — the same flow the
+    // sidebar/kebab uses — which auto-detects non-admin and renders as
+    // "Request PTO". Admins don't make requests, so it's hidden for them.
+    let newBtn = document.getElementById('requestsPageNewBtn');
+    if (!newBtn) {
+        newBtn = document.createElement('button');
+        newBtn.id = 'requestsPageNewBtn';
+        newBtn.type = 'button';
+        newBtn.className = 'req-new-btn';
+        newBtn.innerHTML = '<span aria-hidden="true" style="margin-right:6px;font-weight:700;">+</span>New PTO Request';
+        newBtn.style.cssText = [
+            'margin: 0 0 12px',
+            'padding: 8px 14px',
+            'border-radius: 8px',
+            'border: 1px solid var(--accent-soft, #2a2a2a)',
+            'background: var(--accent-soft, #2a2a2a)',
+            'color: var(--ink-2, #ddd)',
+            'font: inherit',
+            'font-weight: 600',
+            'cursor: pointer',
+            'display: inline-flex',
+            'align-items: center',
+        ].join(';');
+        newBtn.addEventListener('click', () => {
+            const addBtn = document.getElementById('addPtoBtn');
+            if (addBtn) addBtn.click();
+        });
+        // Place it directly above the tab bar so it's prominent without
+        // overlapping the page header/summary.
+        const tabsEl = document.getElementById('requestsPageTabs');
+        if (tabsEl && tabsEl.parentNode) {
+            tabsEl.parentNode.insertBefore(newBtn, tabsEl);
+        } else {
+            pg.appendChild(newBtn);
+        }
+    }
+    newBtn.style.display = admin ? 'none' : 'inline-flex';
+
     // Compute counts visible to this user (admin = all, else own only)
     let visible = Object.entries(requests || {}).filter(([, r]) => !!r);
     if (!admin) {
@@ -3243,6 +3294,110 @@ function getBigsPathForDate(date) {
 // Track which entry is being edited (null when adding a new one)
 let _editingConferenceKey = null;
 
+// Renders the "Schedule for this day" panel inside the conference modal.
+// Reads the current value of #confDate and #confPathologist, then paints
+// one row per pathologist showing their service (or PTO/Off/Off-Site/On
+// Call decorations) for that date. The currently-selected presenter row
+// is highlighted; clicking any row selects that pathologist.
+// Handles weekend, federal holiday, and pre-cutoff dates gracefully.
+function renderConferenceDaySchedule() {
+    const panel = document.getElementById('confDaySchedule');
+    const dateInput = document.getElementById('confDate');
+    const pathSel = document.getElementById('confPathologist');
+    if (!panel || !dateInput) return;
+
+    const dateStr = dateInput.value;
+    if (!dateStr) {
+        panel.innerHTML = `<div class="conf-day-schedule-empty">Pick a date to see who's on which service.</div>`;
+        return;
+    }
+
+    let date;
+    try { date = parseDate(dateStr); } catch (_) { date = null; }
+    if (!date || isNaN(date.getTime())) {
+        panel.innerHTML = `<div class="conf-day-schedule-empty">Pick a date to see who's on which service.</div>`;
+        return;
+    }
+
+    const selectedPathId = pathSel ? parseInt(pathSel.value, 10) : NaN;
+    const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+    const monthShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.getMonth()];
+    const dateLabel = `${dow}, ${monthShort} ${date.getDate()}`;
+
+    // Pre-cutoff date: nothing to show, all assignments are blank.
+    if (isBeforeEarliest(date)) {
+        panel.innerHTML = `
+            <div class="conf-day-schedule-head">
+                <span class="conf-day-schedule-title">Schedule for this day</span>
+                <span class="conf-day-schedule-date">${dateLabel}</span>
+            </div>
+            <div class="conf-day-schedule-empty">This date is before the scheduling start.</div>
+        `;
+        return;
+    }
+
+    const holiday = getFederalHoliday(date);
+    const we = isWeekend(date);
+    let badgeHtml = '';
+    if (holiday) badgeHtml = ` <span class="conf-day-badge" title="${escapeHtml(holiday)}">${escapeHtml(holiday)}</span>`;
+    else if (we) badgeHtml = ` <span class="conf-day-badge">Weekend</span>`;
+
+    const assignments = getDayAssignments(date);
+
+    const rows = pathologists.map(p => {
+        const a = assignments[p.id] || { type: 'off', service: null, onCall: false };
+        const isSelected = p.id === selectedPathId;
+        const oc = a.onCall ? '<span class="conf-day-oc">On Call</span>' : '';
+
+        let svcHtml;
+        if (a.type === 'service' && a.service) {
+            svcHtml = `<span class="conf-day-svc" style="--sc:var(${a.service.cssVar})"><span class="swatch"></span>${escapeHtml(a.service.short)}${oc}</span>`;
+        } else if (a.type === 'off_site' && a.service) {
+            svcHtml = `<span class="conf-day-svc off-site" style="--sc:var(${a.service.cssVar})"><span class="swatch"></span>${escapeHtml(a.service.short)}${oc}</span>`;
+        } else if (a.type === 'pto') {
+            svcHtml = `<span class="conf-day-svc pto">PTO${oc}</span>`;
+        } else if (a.type === 'off') {
+            svcHtml = `<span class="conf-day-svc off">${(we || holiday) ? 'Off' : 'Unstaffed'}${oc}</span>`;
+        } else {
+            svcHtml = `<span class="conf-day-svc off">—${oc}</span>`;
+        }
+
+        // Last word of name, with "Dr." prefix stripped, gives a clean label.
+        const cleanedName = (p.name || '').replace(/^Dr\.\s*/, '');
+        const lastName = cleanedName.split(/\s+/).slice(-1)[0] || p.initials || '';
+        const cbg = pathBgColor(p.color);
+        const rowStyle = `--c:${p.color}${cbg ? `; --c-bg:${cbg}` : ''}`;
+
+        return `<div class="conf-day-schedule-row${isSelected ? ' selected' : ''}" data-pid="${p.id}" style="${rowStyle}">
+            <span class="conf-day-pid">${escapeHtml(p.initials || '')}</span>
+            <span class="conf-day-name">${escapeHtml(lastName)}</span>
+            ${svcHtml}
+        </div>`;
+    }).join('');
+
+    panel.innerHTML = `
+        <div class="conf-day-schedule-head">
+            <span class="conf-day-schedule-title">Schedule for this day</span>
+            <span class="conf-day-schedule-date">${dateLabel}${badgeHtml}</span>
+        </div>
+        <div class="conf-day-schedule-list">${rows}</div>
+    `;
+
+    // Click a row to set that pathologist as the presenter. Dispatching the
+    // 'change' event lets the existing change listener re-paint the panel
+    // with the new highlight.
+    panel.querySelectorAll('.conf-day-schedule-row').forEach(row => {
+        row.addEventListener('click', () => {
+            const pid = row.getAttribute('data-pid');
+            if (!pid || !pathSel) return;
+            if (pathologists.some(p => String(p.id) === pid)) {
+                pathSel.value = pid;
+                pathSel.dispatchEvent(new Event('change'));
+            }
+        });
+    });
+}
+
 function openConferenceModal(editKey) {
     if (!canEditConferences()) return;
 
@@ -3314,6 +3469,7 @@ function openConferenceModal(editKey) {
     }
 
     syncConferenceTypeFields();
+    renderConferenceDaySchedule();
     back.classList.add('open');
     // Focus first relevant field
     setTimeout(() => { try { typeSel.focus(); } catch (_) {} }, 30);
@@ -3484,11 +3640,28 @@ function _confChangeSummary(verb, type, dateKey, pathObj, payload) {
     if (cancelBtn) cancelBtn.addEventListener('click', closeConferenceModal);
     if (saveBtn) saveBtn.addEventListener('click', saveConferenceEntry);
     if (deleteBtn) deleteBtn.addEventListener('click', deleteConferenceEntry);
+
+    // Live-update the "Schedule for this day" panel as the user changes the
+    // date or the selected presenter. Listeners attach once at startup;
+    // openConferenceModal() handles the initial paint.
+    const confDateEl = document.getElementById('confDate');
+    const confPathEl = document.getElementById('confPathologist');
+    if (confDateEl) {
+        confDateEl.addEventListener('change', renderConferenceDaySchedule);
+        confDateEl.addEventListener('input', renderConferenceDaySchedule);
+    }
+    if (confPathEl) confPathEl.addEventListener('change', renderConferenceDaySchedule);
+
     if (typeSel) typeSel.addEventListener('change', () => {
         syncConferenceTypeFields();
         // For new entries only, re-autofill date and pathologist to match the
         // newly selected conference type.
-        if (_editingConferenceKey) return;
+        if (_editingConferenceKey) {
+            // Even on an edit, the schedule panel should still reflect the
+            // current date — nothing else changed but call once to be safe.
+            renderConferenceDaySchedule();
+            return;
+        }
         const dateInput = document.getElementById('confDate');
         const pathSel = document.getElementById('confPathologist');
         if (!dateInput || !pathSel) return;
@@ -3499,6 +3672,8 @@ function _confChangeSummary(verb, type, dateKey, pathObj, payload) {
         if (bigsId !== null && pathologists.some(p => p.id === bigsId)) {
             pathSel.value = String(bigsId);
         }
+        // Programmatic value changes don't fire 'change', so repaint manually.
+        renderConferenceDaySchedule();
     });
 
     // Click outside the modal card closes
@@ -4786,9 +4961,12 @@ function renderMonth() {
 
         // Lake Forest sendout banner sits above the first pathologist row.
         // Only shown for in-month days so out-of-month padding cells stay clean.
+        // Two labels are emitted (full + abbr); CSS picks which to show based
+        // on viewport — same pattern as .svc-full / .svc-abbr.
         if (inMonth && isLfSendoutDay(date)) {
             rows += `<div class="wd-row lf-sendout" title="Lake Forest sendout">
-            <span class="lf-label">Lake Forest sendout</span>
+            <span class="lf-label lf-label-full">Lake Forest sendout</span>
+            <span class="lf-label lf-label-abbr">LF sendout</span>
           </div>`;
         }
 
@@ -5190,6 +5368,17 @@ function attachPathRowHandlers(date) {
 
                 panel.innerHTML = `<div class="pqp-label">PTO — ${path.name}</div>${ptoInfo}`;
 
+                // Auto-advance end date when start is moved past it
+                panel.querySelectorAll('input[id^="pqpStart_"]').forEach(startInput => {
+                    const key = startInput.id.replace('pqpStart_', '');
+                    startInput.addEventListener('change', () => {
+                        const endInput = panel.querySelector(`#pqpEnd_${key}`);
+                        if (endInput && startInput.value && endInput.value && startInput.value > endInput.value) {
+                            endInput.value = startInput.value;
+                        }
+                    });
+                });
+
                 // Save (update date range)
                 panel.querySelectorAll('button[id^="pqpSave_"]').forEach(btn => {
                     btn.addEventListener('click', async () => {
@@ -5585,6 +5774,16 @@ function renderPtoList() {
 }
 
 document.getElementById('addPtoBtn').addEventListener('click', () => openPtoModal(null));
+
+// Auto-advance end date when start is moved past it
+document.getElementById('ptoStart').addEventListener('change', () => {
+    const startEl = document.getElementById('ptoStart');
+    const endEl   = document.getElementById('ptoEnd');
+    if (startEl.value && endEl.value && startEl.value > endEl.value) {
+        endEl.value = startEl.value;
+    }
+});
+
 document.getElementById('ptoCancel').addEventListener('click', () => {
     document.getElementById('ptoModalBack').classList.remove('open');
 });
@@ -6952,6 +7151,15 @@ document.getElementById('exportModalBack').addEventListener('click', e => {
     if (e.target.id === 'exportModalBack') e.target.classList.remove('open');
 });
 
+// Auto-advance end date when start is moved past it
+document.getElementById('exportStart').addEventListener('change', () => {
+    const startEl = document.getElementById('exportStart');
+    const endEl   = document.getElementById('exportEnd');
+    if (startEl.value && endEl.value && startEl.value > endEl.value) {
+        endEl.value = startEl.value;
+    }
+});
+
 // (recompute code moved to recompute.js)
 
 document.getElementById('exportDownload').addEventListener('click', () => {
@@ -7052,6 +7260,21 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         tsBtn.addEventListener('click', e => {
             e.preventDefault();
             settings.hideSidebar = !settings.hideSidebar;
+            saveSettings();
+            applySettings();
+        });
+    }
+
+    // Default-page segmented control. Sets which page opens on launch.
+    const defaultPageSeg = document.getElementById('defaultPageSeg');
+    if (defaultPageSeg) {
+        defaultPageSeg.addEventListener('click', e => {
+            const b = e.target.closest('.seg-btn');
+            if (!b) return;
+            const v = b.dataset.value;
+            if (!VALID_DEFAULT_PAGES.includes(v)) return;
+            if (settings.defaultPage === v) return;
+            settings.defaultPage = v;
             saveSettings();
             applySettings();
         });
@@ -7206,8 +7429,10 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         btn.addEventListener('click', () => setPage(targetPage));
     });
 
-    // Initial page = schedule
-    if (app) app.setAttribute('data-page', 'schedule');
+    // Initial page — use the user's saved default (falls back to 'schedule')
+    const initialPage = VALID_DEFAULT_PAGES.includes(settings.defaultPage)
+        ? settings.defaultPage : 'schedule';
+    setPage(initialPage);
 
     // ── Mobile sidebar (slide-out drawer) ─────────────────────────────
     const asideToggleBtn = document.getElementById('asideToggleBtn');

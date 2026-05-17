@@ -926,6 +926,13 @@ main {
     vertical-align: -1px;
 }
 
+/* The month view emits both a long-form (.svc-full) and 3-letter (.svc-abbr)
+   service label inside .svc. Hide the abbr by default — only the mobile
+   month view swaps to it (see the @media (max-width: 800px) block). */
+.svc-abbr {
+    display: none;
+}
+
 .wd-row.pto {
     background: repeating-linear-gradient(45deg,
             var(--pto-stripe) 0, var(--pto-stripe) 3px,
@@ -3340,11 +3347,36 @@ main {
         width: auto;
     }
 
-    /* Hide the service-name text in month cells; the colored swatch
-       in the pid + the on-call mark still convey the info, and the
-       full detail is one tap away in the day modal. */
+    /* Show the service each pathologist is on in mobile month cells.
+       The renderer emits both a long short-form and a 3-letter abbr in
+       .svc; the long form would overflow narrow cells, so we hide it and
+       show the abbr (CYT, BIG, HUN, WFH, …). Full detail is still one tap
+       away in the day modal. */
     .month-view .day .wd-row .svc {
+        font-size: 9px;
+        min-width: 0;
+    }
+
+    .month-view .day .wd-row .svc-full {
         display: none;
+    }
+
+    .month-view .day .wd-row .svc-abbr {
+        display: inline;
+        font-family: var(--mono);
+        font-weight: 600;
+        letter-spacing: 0.03em;
+    }
+
+    .month-view .day .wd-row .svc .swatch {
+        width: 6px;
+        height: 6px;
+        margin-right: 3px;
+    }
+
+    .month-view .day .wd-row.pto .svc,
+    .month-view .day .wd-row.off .svc {
+        font-size: 8.5px;
     }
 
     .month-view .day .wd-row .oc-mark {
@@ -6110,6 +6142,14 @@ table.tracking-summary tbody td.t-sum-total {
         gap: 14px;
         padding-bottom: 16px;
         margin-bottom: 16px;
+    }
+
+    /* In column flex, the desktop `flex: 1 1 280px` would be read as a
+       min-height of 280px and create a huge empty gap below the title.
+       Reset to auto so the heading just fits its content. */
+    .tracking-page-heading {
+        flex: 0 0 auto;
+        width: 100%;
     }
 
     .tracking-page-title {

@@ -49,8 +49,7 @@
         <aside id="aside">
             <div class="aside-brand">
                 <img class="aside-brand-icon" src="icon.png" alt="Pathology Schedule" />
-                <h1><em>Pathology</em></h1>
-                <div class="tag">Schedule</div>
+                <h1><em>Pathologist Schedule</em></h1>
             </div>
 
             <nav class="page-nav" id="pageNav">
@@ -435,6 +434,18 @@
                         <h3 class="settings-section-title">Defaults when you open the app</h3>
                         <div class="settings-row settings-row-stack">
                             <span class="settings-row-label">
+                                <span class="settings-row-name">Default page</span>
+                                <span class="settings-row-desc">Which page to land on when the app opens.</span>
+                            </span>
+                            <div class="settings-segmented" id="defaultPageSeg" role="radiogroup" aria-label="Default page">
+                                <button class="seg-btn" type="button" role="radio" data-value="schedule">Schedule</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="tracking">Tracking</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="requests">Requests</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="changes">Changes</button>
+                            </div>
+                        </div>
+                        <div class="settings-row settings-row-stack">
+                            <span class="settings-row-label">
                                 <span class="settings-row-name">Default view</span>
                                 <span class="settings-row-desc">Time range shown on launch.</span>
                             </span>
@@ -763,6 +774,11 @@
 
             <label>Date</label>
             <input type="date" id="confDate" />
+
+            <!-- Live schedule panel: shows who is on which service for the
+                 selected date. Rendered by renderConferenceDaySchedule() in
+                 schedule.js; clicking a row selects that presenter. -->
+            <div class="conf-day-schedule" id="confDaySchedule"></div>
 
             <label>Presenter</label>
             <select id="confPathologist"></select>

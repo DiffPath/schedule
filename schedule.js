@@ -1656,6 +1656,42 @@ function describeRequest(req) {
     }
 }
 
+// When PTO is added (request approved, admin direct save, or PTO range
+// extended), strip any pre-existing REGULAR service override for that
+// pathologist on the affected days.  Without this, the natural-assignment
+// rule "regular service override beats PTO" (see getNaturalDayAssignments)
+// would silently keep the pathologist on duty, defeating the just-added
+// PTO entry — the symptom is "I approved his PTO but he's still showing
+// as working that week."
+//
+// Off-site overrides (Director Retreat, Lab Inspection, Off Service) are
+// left alone: they already keep s.onPto true, so they don't conflict with
+// the PTO state; only the rendered label differs.
+async function clearConflictingServiceOverridesForPto(pathId, startDateStr, endDateStr) {
+    const start = parseDate(startDateStr);
+    const end = parseDate(endDateStr);
+    if (!start || !end || isNaN(start) || isNaN(end)) return;
+
+    const writes = {};
+    for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
+        const k = fmt(d);
+        const dayOv = serviceOverrides[k];
+        if (!dayOv) continue;
+        const ovId = dayOv[pathId];
+        if (!ovId) continue;
+        // Off-site overrides don't conflict with PTO — leave them.
+        if (isOffSiteServiceId(ovId)) continue;
+
+        const updated = Object.assign({}, dayOv);
+        delete updated[pathId];
+        writes['scheduler/serviceOverrides/' + k] =
+            Object.keys(updated).length === 0 ? null : updated;
+    }
+    if (Object.keys(writes).length > 0) {
+        await db.ref().update(writes);
+    }
+}
+
 // ────────────── ADMIN ACTIONS: APPROVE / DENY ──────────────
 async function approveRequest(reqKey) {
     if (!isAdmin()) { showToast('Only the admin can approve.', { type: 'error' }); return; }
@@ -1676,6 +1712,11 @@ async function approveRequest(reqKey) {
                 start: req.payload.start,
                 end: req.payload.end,
             });
+            // Strip any stale regular service overrides for the requester
+            // on these days, so the new PTO actually takes effect instead
+            // of being silently overridden.
+            await clearConflictingServiceOverridesForPto(
+                req.requesterId, req.payload.start, req.payload.end);
             rcFromDate = parseDate(req.payload.start);
             rcDayBeforeFix = true;
             rcMessage = 'PTO request approved. Recompute the future schedule for everyone using the rotation rules?';
@@ -4765,7 +4806,7 @@ function renderMonth() {
                 const cbg = pathBgColor(p.color);
                 rows += `<div class="wd-row off-site" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}">
             <span class="pid">${p.initials}</span>
-            <span class="svc"><span class="swatch"></span>${a.service.short}</span>
+            <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
             ${oc}
           </div>`;
             } else if (a.type === 'off') {
@@ -4778,7 +4819,7 @@ function renderMonth() {
                 const cbg = pathBgColor(p.color);
                 rows += `<div class="wd-row" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}">
             <span class="pid">${p.initials}</span>
-            <span class="svc"><span class="swatch"></span>${a.service.short}</span>
+            <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
             ${oc}
           </div>`;
             }
@@ -5166,6 +5207,14 @@ function attachPathRowHandlers(date) {
                             ? newStartDate
                             : (oldVac ? oldVac.start : newStartDate);
                         await db.ref('scheduler/vacations/' + key).update({ start: newStart, end: newEnd });
+                        // Strip any stale regular service overrides for this
+                        // pathologist on the (possibly extended) range, so the
+                        // updated PTO actually takes effect on any newly-added
+                        // days instead of being silently overridden.
+                        if (oldVac) {
+                            await clearConflictingServiceOverridesForPto(
+                                oldVac.pathologistId, newStart, newEnd);
+                        }
                         // ── Change log ──
                         if (oldVac) {
                             logChange(Object.assign({
@@ -5561,6 +5610,10 @@ document.getElementById('ptoSave').addEventListener('click', async () => {
             start: fmt(s),
             end: fmt(e),
         });
+        // Strip any stale regular service overrides for this pathologist
+        // on these days, so the new PTO actually takes effect instead of
+        // being silently overridden.
+        await clearConflictingServiceOverridesForPto(pid, fmt(s), fmt(e));
         // ── Change log ──
         logChange(Object.assign({
             kind: 'pto',

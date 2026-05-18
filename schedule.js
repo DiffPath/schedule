@@ -119,8 +119,10 @@ const PROCEDURE_TYPES = [
     'IR Thyroid w/ Afirma',
     'CT Random Kidney bx',
     'CT Bone Marrow',
+    'Lymph Node bx',
     'Lumpectomy',
     'Mastectomy',
+    'Bilateral Mastectomy',
     'Excisional bx',
     'FS Brain',
     'FS Lung',
@@ -138,6 +140,10 @@ const GROSS_ROOM_ID = 'gross_room';
 // Conference-tracker manager: can view the full schedule and edit the
 // conference tracking page, but cannot manage pathologist assignments or PTO.
 const MANAGER_ID = 'kathleen';
+// Read-only guest account for the histology team. Can view the full schedule
+// but has no edit privileges anywhere (no PTO, no on-call changes, no
+// procedure edits, no conference edits). No password is required to sign in.
+const HISTOLOGY_ID = 'histology';
 let requests = {};            // { reqKey: { ...request fields } } from Firebase
 let requestsReady = false;    // becomes true after first snapshot resolves
 let _seenRequestKeys = null;  // for "new request arrived" detection
@@ -163,6 +169,13 @@ function isGrossRoom() {
 // She can view the full schedule and edit the conference tracking page.
 function isManager() {
     return loggedInPathId === MANAGER_ID;
+}
+
+// Returns true when the histology guest account is signed in. Histology is
+// strictly read-only — every editing affordance in the app must be hidden
+// or short-circuited when this returns true.
+function isHistology() {
+    return loggedInPathId === HISTOLOGY_ID;
 }
 
 // Update the path-tab toggle to reflect val ('all' or a stringified pathId)
@@ -284,10 +297,11 @@ function applySettings() {
             b.setAttribute('aria-checked', isActive ? 'true' : 'false');
         });
     }
-    // Gross-room is always forced to "All" regardless of the default-filter
-    // setting, so hide that row to avoid showing a control that has no effect.
+    // Gross-room / manager / histology are always forced to "All" regardless
+    // of the default-filter setting, so hide that row to avoid showing a
+    // control that has no effect.
     const dfRow = document.getElementById('defaultFilterRow');
-    if (dfRow) dfRow.style.display = (isGrossRoom() || isManager()) ? 'none' : '';
+    if (dfRow) dfRow.style.display = (isGrossRoom() || isManager() || isHistology()) ? 'none' : '';
 
     // Sync sidebar arrow button aria-label
     const stb = document.getElementById('sidebarToggleBtn');
@@ -310,6 +324,7 @@ let loggedInPathId = (() => {
     const raw = localStorage.getItem(AUTH_STORAGE_KEY);
     if (raw === GROSS_ROOM_ID) return GROSS_ROOM_ID;
     if (raw === MANAGER_ID) return MANAGER_ID;
+    if (raw === HISTOLOGY_ID) return HISTOLOGY_ID;
     const n = parseInt(raw, 10);
     return Number.isFinite(n) ? n : null;
 })();
@@ -970,7 +985,7 @@ function checkReady() {
         // Once data is loaded, decide whether to show the login screen.
         // If a returning user is already signed in on this device, we just
         // verify their stored id still corresponds to a real pathologist.
-        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && !pathologists.find(p => p.id === loggedInPathId)) {
+        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && loggedInPathId !== HISTOLOGY_ID && !pathologists.find(p => p.id === loggedInPathId)) {
             // Stored id no longer matches anyone — clear it and force re-login
             localStorage.removeItem(AUTH_STORAGE_KEY);
             loggedInPathId = null;
@@ -979,10 +994,10 @@ function checkReady() {
             showLoginOverlay();
         } else {
             // Default the filter based on who is signed in and their saved
-            // preference. Gross room is always forced to all pathologists.
-            // Otherwise, honor the user's defaultPathFilter setting ('all'
-            // or 'me').
-            if (isGrossRoom() || isManager()) {
+            // preference. Gross room / manager / histology are always forced
+            // to all pathologists. Otherwise, honor the user's
+            // defaultPathFilter setting ('all' or 'me').
+            if (isGrossRoom() || isManager() || isHistology()) {
                 setPathFilter('all');
             } else if (settings.defaultPathFilter === 'all') {
                 setPathFilter('all');
@@ -1009,8 +1024,8 @@ function populatePathFilter() {
     const mobileWrap = document.getElementById('mobilePathSelectWrap');
     const mobileMeOpt = mobileSel ? mobileSel.querySelector('option[value="me"]') : null;
 
-    // Gross room / manager: always show all pathologists with no option to switch
-    if (isGrossRoom() || isManager()) {
+    // Gross room / manager / histology: always show all pathologists with no option to switch
+    if (isGrossRoom() || isManager() || isHistology()) {
         meTab.style.display = 'none';
         if (mobileMeOpt) mobileMeOpt.hidden = true;
         if (mobileWrap) mobileWrap.style.display = 'none';
@@ -1048,12 +1063,31 @@ function showLoginOverlay() {
         pathologists.map(p => `<option value="${p.id}">${p.name}</option>`).join('') +
         '<option value="" disabled>──────────────</option>' +
         `<option value="${GROSS_ROOM_ID}">Gross Room</option>` +
-        `<option value="${MANAGER_ID}">Kathleen</option>`;
+        `<option value="${MANAGER_ID}">Kathleen</option>` +
+        `<option value="${HISTOLOGY_ID}">Histology</option>`;
     pwInput.value = '';
     errEl.textContent = '';
     overlay.style.display = 'flex';
+    // Histology is a passwordless guest account: hide the password field
+    // entirely when it's selected, and restore it for any other choice.
+    updateLoginPasswordVisibility();
     // Focus the name dropdown so the user can start tabbing right away
     setTimeout(() => sel.focus(), 50);
+}
+
+// Show or hide the login password input based on the currently-selected
+// account. Histology has no password; every other account requires one.
+function updateLoginPasswordVisibility() {
+    const sel = document.getElementById('loginPath');
+    const pwInput = document.getElementById('loginPassword');
+    if (!sel || !pwInput) return;
+    const pwLabel = pwInput.previousElementSibling; // the <label>Password</label>
+    const isHisto = sel.value === HISTOLOGY_ID;
+    pwInput.style.display = isHisto ? 'none' : '';
+    if (pwLabel && pwLabel.tagName === 'LABEL') {
+        pwLabel.style.display = isHisto ? 'none' : '';
+    }
+    if (isHisto) pwInput.value = '';
 }
 
 function hideLoginOverlay() {
@@ -1072,33 +1106,48 @@ async function attemptLogin() {
     errEl.textContent = '';
 
     if (!pidRaw) { errEl.textContent = 'Please select your name.'; return; }
-    if (!pwAttempt) { errEl.textContent = 'Please enter your password.'; return; }
 
     const isGrossRoomLogin = pidRaw === GROSS_ROOM_ID;
     const isManagerLogin = pidRaw === MANAGER_ID;
-    const pid = isGrossRoomLogin ? GROSS_ROOM_ID : (isManagerLogin ? MANAGER_ID : parseInt(pidRaw, 10));
+    const isHistologyLogin = pidRaw === HISTOLOGY_ID;
+
+    // Histology is a passwordless guest account. Every other account
+    // requires a password.
+    if (!isHistologyLogin && !pwAttempt) {
+        errEl.textContent = 'Please enter your password.';
+        return;
+    }
+
+    const pid = isGrossRoomLogin ? GROSS_ROOM_ID
+        : isManagerLogin ? MANAGER_ID
+        : isHistologyLogin ? HISTOLOGY_ID
+        : parseInt(pidRaw, 10);
     btn.disabled = true;
     btn.textContent = 'Signing in…';
     try {
-        const snap = await db.ref('scheduler/passwords/' + pid).once('value');
-        const expected = snap.val();
-        if (!expected) {
-            errEl.textContent = 'No password on file for this user. Contact admin.';
-            return;
-        }
-        if (pwAttempt.toLowerCase() !== expected.toLowerCase()) {
-            errEl.textContent = 'Incorrect password.';
-            pwInput.select();
-            return;
+        // Skip password verification entirely for the histology guest account.
+        if (!isHistologyLogin) {
+            const snap = await db.ref('scheduler/passwords/' + pid).once('value');
+            const expected = snap.val();
+            if (!expected) {
+                errEl.textContent = 'No password on file for this user. Contact admin.';
+                return;
+            }
+            if (pwAttempt.toLowerCase() !== expected.toLowerCase()) {
+                errEl.textContent = 'Incorrect password.';
+                pwInput.select();
+                return;
+            }
         }
         // Success — persist and proceed
         loggedInPathId = pid;
         localStorage.setItem(AUTH_STORAGE_KEY, String(pid));
         hideLoginOverlay();
-        // Refresh the filter tabs. Gross room always shows all; individual
-        // pathologists honor their defaultPathFilter setting ('all' or 'me').
+        // Refresh the filter tabs. Gross room / manager / histology always
+        // show all; individual pathologists honor their defaultPathFilter
+        // setting ('all' or 'me').
         populatePathFilter();
-        if (!isGrossRoomLogin && !isManagerLogin) {
+        if (!isGrossRoomLogin && !isManagerLogin && !isHistologyLogin) {
             setPathFilter(settings.defaultPathFilter === 'all' ? 'all' : String(pid));
         }
         // Reset Changes page scope to its default ('mine') for the new
@@ -1122,6 +1171,8 @@ document.getElementById('loginPassword').addEventListener('keydown', e => {
 document.getElementById('loginPath').addEventListener('keydown', e => {
     if (e.key === 'Enter') attemptLogin();
 });
+// Hide the password field when Histology (passwordless guest) is selected.
+document.getElementById('loginPath').addEventListener('change', updateLoginPasswordVisibility);
 
 // ────────────── FIREBASE LISTENERS ──────────────
 db.ref('scheduler/pathologists').on('value', async snap => {
@@ -1270,9 +1321,9 @@ function renderSidebar() {
     const rcBtn = document.getElementById('recomputeBtn');
     if (rcBtn) rcBtn.style.display = admin ? '' : 'none';
 
-    // Gross room / manager cannot manage PTO or view requests at all — hide those buttons
+    // Gross room / manager / histology cannot manage PTO or view requests at all — hide those buttons
     const addPtoBtnEl = document.getElementById('addPtoBtn');
-    if (addPtoBtnEl) addPtoBtnEl.style.display = (grossRoom || isManager()) ? 'none' : '';
+    if (addPtoBtnEl) addPtoBtnEl.style.display = (grossRoom || isManager() || isHistology()) ? 'none' : '';
 
     // The "Manage PTO" label changes to "Request PTO" for non-admins (not gross room)
     const ptoBtnLabel = document.getElementById('addPtoBtnLabel');
@@ -1317,6 +1368,9 @@ function renderSidebar() {
             sInfo.style.display = 'flex';
         } else if (isManager()) {
             sWho.textContent = 'Signed in · Kathleen';
+            sInfo.style.display = 'flex';
+        } else if (isHistology()) {
+            sWho.textContent = 'Signed in · Histology (read-only)';
             sInfo.style.display = 'flex';
         } else if (loggedInPathId !== null) {
             const me = pathologists.find(p => p.id === loggedInPathId);
@@ -1444,16 +1498,16 @@ function updateRequestsBadge() {
     // shared menu-dropdown click handler below)
     const menuRcItem = document.getElementById('menuRecomputeItem');
 
-    // Hide entirely if not signed in OR if gross room / manager (who cannot manage requests or PTO)
-    if (loggedInPathId === null || isGrossRoom() || isManager()) {
+    // Hide entirely if not signed in OR if gross room / manager / histology (who cannot manage requests or PTO)
+    if (loggedInPathId === null || isGrossRoom() || isManager() || isHistology()) {
         if (btn) btn.style.display = 'none';
         if (menuBtn) menuBtn.classList.remove('has-alert');
         if (menuReqItem) menuReqItem.style.display = 'none';
         if (menuExportItem) menuExportItem.style.display = 'none';
         if (menuRcItem) menuRcItem.style.display = 'none';
-        // Also hide the PTO menu item for gross room / manager
+        // Also hide the PTO menu item for gross room / manager / histology
         const menuPtoItem = document.querySelector('.menu-item[data-action="pto"]');
-        if (menuPtoItem) menuPtoItem.style.display = (isGrossRoom() || isManager()) ? 'none' : '';
+        if (menuPtoItem) menuPtoItem.style.display = (isGrossRoom() || isManager() || isHistology()) ? 'none' : '';
         return;
     }
 
@@ -1520,7 +1574,7 @@ function updateNavRequestsIndicator() {
     const dot = document.getElementById('navRequestsBadge');
     if (!dot) return;
 
-    if (!loggedInPathId || isGrossRoom() || isManager()) {
+    if (!loggedInPathId || isGrossRoom() || isManager() || isHistology()) {
         dot.style.display = 'none';
         return;
     }
@@ -2917,6 +2971,7 @@ function canEditConferences(pathId) {
     const id = (pathId !== undefined && pathId !== null) ? pathId : loggedInPathId;
     if (id === null || id === undefined) return false;
     if (id === GROSS_ROOM_ID) return false;
+    if (id === HISTOLOGY_ID) return false;
     if (id === MANAGER_ID) return true;
     if (isAdmin(id)) return true;
     return !!(conferencePresenters && conferencePresenters[id]);
@@ -4478,6 +4533,8 @@ function attachHourGridHandlers() {
 
     document.querySelectorAll('.hour-row').forEach(row => {
         row.addEventListener('dblclick', e => {
+            // Read-only guests (histology) can't add procedures.
+            if (isHistology()) return;
             // If the dblclick landed on an existing pill, the pill's own
             // handler opens the edit modal — don't open the add modal.
             if (e.target.closest('.proc-item')) return;
@@ -4495,9 +4552,11 @@ function attachHourGridHandlers() {
             selectProcedure(item.dataset.day, item.dataset.key);
         });
         // Double click → edit the procedure. Reuses the add-procedure modal
-        // in edit mode (location + procedure type prefilled).
+        // in edit mode (location + procedure type prefilled). Disabled for
+        // read-only guests (histology).
         item.addEventListener('dblclick', e => {
             e.stopPropagation();
+            if (isHistology()) return;
             const dayKey = item.dataset.day;
             const procKey = item.dataset.key;
             if (!dayKey || !procKey) return;
@@ -4508,6 +4567,8 @@ function attachHourGridHandlers() {
 
         // ── Drag-and-drop: move procedure to a different time slot ──
         item.addEventListener('dragstart', e => {
+            // Read-only guests (histology) cannot move procedures.
+            if (isHistology()) { e.preventDefault(); return; }
             e.stopPropagation();
             // Store the source info in dataTransfer so the drop handler knows
             // which procedure is being moved, even across grid columns.
@@ -4611,10 +4672,11 @@ document.addEventListener('click', e => {
 
 // Delete / Backspace removes the currently-selected procedure.
 // Skips text-entry contexts and any open modal so we don't delete while
-// the user is typing or navigating a dialog.
+// the user is typing or navigating a dialog. Disabled for read-only guests.
 document.addEventListener('keydown', async e => {
     if (e.key !== 'Delete' && e.key !== 'Backspace') return;
     if (!_selectedProc) return;
+    if (isHistology()) return;
     const ae = document.activeElement;
     if (ae && (
         ae.tagName === 'INPUT' ||
@@ -4851,7 +4913,6 @@ async function saveProcedure() {
   <div class="proc-section-label">Time</div>
   <div class="proc-time-row">
     <input type="time" id="procTimeInput" class="proc-time-input" step="60">
-    <span class="proc-time-hint">You can override the default slot.</span>
   </div>
 
   <div class="proc-section-label">Location</div>
@@ -5276,19 +5337,21 @@ function openDayDetail(date) {
 
     // Adjust day-modal action button labels based on viewer role.
     // Gross room cannot make any pathologist-schedule changes at all.
+    // Histology is a read-only guest — it gets no edit buttons either.
     const grossRoom = isGrossRoom();
+    const readOnlyGuest = grossRoom || isHistology();
     const ptoBtn = document.getElementById('dayAddPto');
     const ocBtn = document.getElementById('dayChangeOnCall');
     if (ptoBtn) {
-        ptoBtn.style.display = grossRoom ? 'none' : '';
-        if (!grossRoom) ptoBtn.textContent = admin ? 'Add PTO for this day' : '+ Request PTO for this day';
+        ptoBtn.style.display = readOnlyGuest ? 'none' : '';
+        if (!readOnlyGuest) ptoBtn.textContent = admin ? 'Add PTO for this day' : '+ Request PTO for this day';
     }
     if (ocBtn) {
-        ocBtn.style.display = grossRoom ? 'none' : '';
-        if (!grossRoom) ocBtn.textContent = admin ? "Change who's on call" : "Request on-call change";
+        ocBtn.style.display = readOnlyGuest ? 'none' : '';
+        if (!readOnlyGuest) ocBtn.textContent = admin ? "Change who's on call" : "Request on-call change";
     }
     if (svcBtn && !(isWk || holiday)) {
-        if (grossRoom) {
+        if (readOnlyGuest) {
             svcBtn.style.display = 'none';
         } else {
             svcBtn.style.display = '';

@@ -1228,6 +1228,12 @@ main {
     box-shadow:
         0 24px 60px rgba(17, 24, 39, 0.22),
         0 4px 12px rgba(17, 24, 39, 0.08);
+    /* Flex column lets the 4px gradient strip stay pinned at the top
+       while .modal-inner takes the remaining height and scrolls when
+       the procedure list is taller than the viewport allows. */
+    display: flex;
+    flex-direction: column;
+    max-height: 90vh;
 }
 
 /* Vivid top-accent strip */
@@ -1238,9 +1244,14 @@ main {
     background: linear-gradient(90deg, var(--accent) 0%, #2e86c1 60%, #5dade2 100%);
 }
 
-/* Inner wrapper restores padding the .modal override removed */
+/* Inner wrapper restores padding the .modal override removed.
+   Flex item that grows to fill the modal and scrolls internally so
+   the Cancel / Add Procedure buttons never get clipped. */
 #procModalBack .modal-inner {
     padding: 20px 24px 22px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 /* Header block: icon + title + subtitle */
@@ -1295,7 +1306,7 @@ main {
     text-transform: uppercase;
     letter-spacing: 0.18em;
     color: var(--ink-3);
-    margin: 18px 0 10px;
+    margin: 10px 0 10px;
 }
 
 #procModalBack .proc-section-label::before {
@@ -1368,7 +1379,7 @@ main {
 .proc-loc-toggle {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 8px;
+    gap: 6px;
     margin: 0;
     padding: 0;
     background: none;
@@ -1382,13 +1393,13 @@ main {
     align-items: center;
     justify-content: center;
     gap: 4px;
-    padding: 14px 10px 12px;
+    padding: 8px;
     border-radius: 9px;
     background: var(--bg);
     border: 1.5px solid var(--rule-soft);
     color: var(--ink-3);
     cursor: pointer;
-    transition: all 0.18s ease;
+    transition: all 0s ease;
     user-select: none;
     margin: 0;
     text-transform: none;
@@ -1420,6 +1431,13 @@ main {
     color: var(--ink-4);
     line-height: 1.2;
     transition: color 0.18s ease;
+}
+
+/* Higher specificity than .modal label (0-1-1) so the margin: 12px 0 5px
+   from that rule doesn't bleed onto these <label> cards and create extra
+   space below the "Location" section heading. */
+.proc-loc-toggle .proc-loc-opt {
+    margin: 0;
 }
 
 .proc-loc-opt input[type="radio"] {

@@ -2064,18 +2064,18 @@ main {
 
 .year-month .mini-grid .md .md-label {
     font-family: var(--mono);
-    font-size: 6.5px;
+    font-size: 9px;
     line-height: 1;
     letter-spacing: -0.02em;
 }
 
 .year-month .mini-grid .md.has-data.multi .md-label {
-    font-size: 5.5px;
+    font-size: 9px;
     letter-spacing: 0;
 }
 
 .year-month .mini-grid .md.has-data.count .md-label {
-    font-size: 7px;
+    font-size: 9px;
     letter-spacing: 0;
 }
 
@@ -2175,6 +2175,70 @@ main {
     font-style: italic;
     color: var(--ink-3);
     font-size: 11px;
+}
+
+/* ── Year view PTO day chips (alongside PTO/Call toggle) ── */
+.year-pto-summary {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-wrap: wrap;
+}
+
+.year-pto-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 7px 3px 5px;
+    border-radius: 10px;
+    background: var(--bg);
+    border: 1px solid var(--rule-soft);
+    font-family: var(--sans);
+    font-size: 11px;
+    color: var(--ink-2);
+    white-space: nowrap;
+    cursor: default;
+    transition: border-color 0.15s;
+}
+
+.year-pto-chip.is-over {
+    border-color: #d4896a;
+    background: #fdf3ef;
+}
+
+.year-pto-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--c);
+    flex-shrink: 0;
+}
+
+.year-pto-initials {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--ink-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.year-pto-count {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    font-size: 11.5px;
+    color: var(--ink);
+}
+
+.year-pto-chip.is-over .year-pto-count {
+    color: #b94e2a;
+}
+
+.year-pto-allot {
+    font-weight: 400;
+    font-size: 10.5px;
+    color: var(--ink-3);
 }
 
 /* ─────────────────── LOADING ─────────────────── */
@@ -4933,6 +4997,12 @@ aside {
     flex-direction: column;
 }
 
+/* Year view needs to scroll vertically — override main's overflow:hidden
+   (which exists for the week view's internal hourly-grid scroll). */
+.content-area:has(> main > .year-view) > main {
+    overflow-y: auto;
+}
+
 /* Page shells (Requests / Changes / Tracking / Settings) scroll themselves. */
 .content-area > .page-shell {
     flex: 1 1 auto;
@@ -5343,6 +5413,132 @@ aside {
 
 .settings-page-content .settings-segmented {
     max-width: 460px;
+}
+
+/* ── PTO allotment section (admin only) ────────────────────────────
+   One row per pathologist with a small number input bound to the
+   `vacationAllotted` field. Changes auto-save on commit. Visual
+   style matches the rest of the settings page. */
+
+.settings-section-desc {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--ink-3);
+    line-height: 1.5;
+    margin: 0 0 14px;
+}
+
+.pto-allot-list {
+    display: flex;
+    flex-direction: column;
+}
+
+.pto-allot-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 4px;
+}
+
+.pto-allot-row + .pto-allot-row {
+    border-top: 1px solid var(--rule-soft);
+}
+
+.pto-allot-who {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+}
+
+.pto-allot-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--c, var(--ink-3));
+    flex-shrink: 0;
+}
+
+.pto-allot-name {
+    font-family: var(--sans);
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--ink);
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pto-allot-initials {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--ink-3);
+    letter-spacing: 0.06em;
+}
+
+.pto-allot-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.pto-allot-input {
+    width: 64px;
+    padding: 6px 8px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    background: var(--paper);
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    text-align: center;
+}
+
+.pto-allot-input::-webkit-outer-spin-button,
+.pto-allot-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.pto-allot-input:focus {
+    outline: none;
+    border-color: var(--ink-2);
+    box-shadow: 0 0 0 2px rgba(15, 30, 45, 0.06);
+}
+
+.pto-allot-input.is-saving {
+    border-color: var(--ink-3);
+    opacity: 0.75;
+}
+
+.pto-allot-input.is-saved {
+    border-color: #2e7e7a;
+}
+
+.pto-allot-unit {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+    text-transform: uppercase;
+}
+
+@media (max-width: 720px) {
+    .pto-allot-row {
+        padding: 12px 4px;
+    }
+    .pto-allot-name {
+        font-size: 13px;
+    }
+    .pto-allot-input {
+        font-size: 14px;
+        padding: 7px 8px;
+    }
 }
 
 /* ── Sidebar backdrop (mobile only — appears behind open sidebar) ─── */
@@ -6425,29 +6621,31 @@ table.tracking-summary tbody td.t-sum-total {
     margin: 0 0 12px;
 }
 
-/* ── Left column — quick-add buttons ─────────────────────────────── */
+/* ── Left column — quick-add buttons ───────────────────────────────
+   Compact on desktop so the PTO tracker fits below without pushing
+   the presentation-counts table off the fold. */
 
 .tracking-conf-add {
-    margin-bottom: 32px;
+    margin-bottom: 24px;
 }
 
 .tracking-conf-btn-stack {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 5px;
 }
 
 .tracking-conf-btn {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     width: 100%;
-    padding: 13px 16px;
+    padding: 7px 12px;
     background: var(--paper);
     border: 1px solid var(--rule-soft);
-    border-radius: 7px;
+    border-radius: 6px;
     font-family: var(--sans);
-    font-size: 13.5px;
+    font-size: 12.5px;
     font-weight: 500;
     color: var(--ink);
     text-align: left;
@@ -6458,7 +6656,7 @@ table.tracking-summary tbody td.t-sum-total {
 .tracking-conf-btn:hover {
     background: var(--paper-2);
     border-color: var(--ink-4);
-    transform: translateX(2px);
+    transform: translateY(-1px);
 }
 
 .tracking-conf-btn:focus-visible {
@@ -6467,12 +6665,12 @@ table.tracking-summary tbody td.t-sum-total {
 }
 
 .tracking-conf-btn:active {
-    transform: translateX(2px) scale(0.995);
+    transform: translateY(-1px) scale(0.995);
 }
 
 .tracking-conf-btn .tcb-dot {
-    width: 10px;
-    height: 10px;
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
     background: var(--c, var(--ink-3));
     flex-shrink: 0;
@@ -6486,7 +6684,7 @@ table.tracking-summary tbody td.t-sum-total {
 
 .tracking-conf-btn .tcb-plus {
     font-family: var(--mono);
-    font-size: 17px;
+    font-size: 15px;
     font-weight: 300;
     color: var(--ink-3);
     line-height: 1;
@@ -6506,6 +6704,117 @@ table.tracking-summary tbody td.t-sum-total {
 .tracking-conf-btn[data-conf="cdh"]      { --c: #c08840; }
 .tracking-conf-btn[data-conf="other"]    { --c: #6a7d92; }
 
+/* ── PTO tracker (left column, between conf-add and counts) ────────
+   Per-pathologist working-days-of-PTO used in the selected fiscal
+   year (Sept 1 – Aug 31), vs. the allotted amount. Visual style
+   mirrors the surrounding tracking-page sections: clinical, low-
+   chroma, sans-serif name, mono numerals, thin progress bar. */
+
+.tracking-pto-section {
+    margin-bottom: 24px;
+}
+
+.tracking-pto-section .tracking-section-label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.tracking-pto-period {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: var(--ink-4);
+    text-transform: none;
+    font-weight: 400;
+}
+
+.tracking-pto-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 7px;
+    padding: 10px 12px;
+}
+
+.tracking-pto-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 4px;
+    padding: 6px 0;
+}
+
+.tracking-pto-row + .tracking-pto-row {
+    border-top: 1px solid var(--rule-soft);
+}
+
+.tracking-pto-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--c, var(--ink-3));
+}
+
+.tracking-pto-name {
+    font-family: var(--sans);
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--ink);
+    line-height: 1.2;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tracking-pto-numbers {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-2);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.tracking-pto-numbers .tracking-pto-allot {
+    color: var(--ink-3);
+}
+
+.tracking-pto-numbers.is-over {
+    color: #b94e2a;
+}
+
+.tracking-pto-bar {
+    grid-column: 1 / -1;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--rule-soft);
+    overflow: hidden;
+    margin-top: 2px;
+}
+
+.tracking-pto-bar-fill {
+    height: 100%;
+    background: var(--c, var(--ink-3));
+    border-radius: 2px;
+    transition: width 0.25s ease;
+}
+
+.tracking-pto-bar-fill.is-over {
+    background: #b94e2a;
+}
+
+.tracking-pto-empty {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--ink-3);
+    padding: 6px 2px;
+}
+
 /* ── Stack collapse ──────────────────────────────────────────────────
    When the viewport is narrow enough that the sidebar eats into the
    content area (the app sidebar is ~240px wide at viewports >800px),
@@ -6519,16 +6828,32 @@ table.tracking-summary tbody td.t-sum-total {
 }
 
 @media (max-width: 720px) {
+    /* Restore touch-friendly sizing on mobile — the compressed desktop
+       sizing is too tight for tapping. */
     .tracking-conf-add {
         margin-bottom: 24px;
+    }
+    .tracking-conf-btn-stack {
+        grid-template-columns: 1fr;
+        gap: 8px;
     }
     .tracking-conf-btn {
         padding: 12px 14px;
         font-size: 13px;
         gap: 10px;
     }
+    .tracking-conf-btn .tcb-dot {
+        width: 10px;
+        height: 10px;
+    }
     .tracking-conf-btn .tcb-plus {
         font-size: 16px;
+    }
+    .tracking-pto-list {
+        padding: 8px 10px;
+    }
+    .tracking-pto-name {
+        font-size: 13px;
     }
 }
 

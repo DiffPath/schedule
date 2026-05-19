@@ -310,7 +310,157 @@ function applySettings() {
         stb.setAttribute('aria-label', label);
         stb.setAttribute('title', label);
     }
+
+    // Render the admin-only PTO allotment editor (hides itself for non-admins).
+    if (typeof renderPtoAllotmentSettings === 'function') {
+        try { renderPtoAllotmentSettings(); } catch (_) { /* ignore */ }
+    }
 }
+
+// ── PTO allotments (Settings page, admin-only) ──────────────────────────
+// Renders one row per pathologist with a number input bound to their
+// `vacationAllotted` field. Edits save to Firebase on commit (change/blur),
+// then propagate back to all clients via the pathologists listener (which
+// triggers renderAll → renderPtoAllotmentSettings for any non-focused row).
+function renderPtoAllotmentSettings() {
+    const section = document.getElementById('ptoAllotmentSection');
+    const list = document.getElementById('ptoAllotList');
+    if (!section || !list) return;
+
+    // Admin-only. For everyone else the section stays hidden.
+    if (!isAdmin()) {
+        section.style.display = 'none';
+        return;
+    }
+    // Pathologists may not have loaded yet on first paint — bail until they do.
+    if (!pathologists || pathologists.length === 0) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = '';
+
+    // If the admin is currently editing an input in this section, skip the
+    // re-render so we don't yank focus mid-type. The next change/blur will
+    // commit and a subsequent listener tick will refresh the list.
+    const active = document.activeElement;
+    if (active && active.classList && active.classList.contains('pto-allot-input')
+        && list.contains(active)) {
+        return;
+    }
+
+    list.innerHTML = pathologists.map(p => {
+        const allot = Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0;
+        const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
+        return `
+            <div class="pto-allot-row" data-path-id="${p.id}">
+                <div class="pto-allot-who">
+                    <span class="pto-allot-dot" style="--c:${p.color};" aria-hidden="true"></span>
+                    <span class="pto-allot-name">Dr. ${escapeHtml(lastName)}</span>
+                    <span class="pto-allot-initials">${escapeHtml(p.initials || '')}</span>
+                </div>
+                <div class="pto-allot-controls">
+                    <input
+                        type="number"
+                        class="pto-allot-input"
+                        data-path-id="${p.id}"
+                        min="0"
+                        max="365"
+                        step="1"
+                        inputmode="numeric"
+                        value="${allot}"
+                        aria-label="PTO days allotted for Dr. ${escapeHtml(lastName)}" />
+                    <span class="pto-allot-unit">days</span>
+                </div>
+            </div>`;
+    }).join('');
+}
+
+// Wire input handlers via delegation once on first opportunity. We attach
+// to the list container (created at DOM-parse time, before any data loads),
+// so this runs harmlessly even when the section is hidden.
+(function wirePtoAllotmentInputs() {
+    const list = document.getElementById('ptoAllotList');
+    if (!list) return;
+
+    // Commit a value to Firebase, validating + clamping first. Returns the
+    // sanitized value that was saved, or null if validation failed.
+    function commitAllotment(input) {
+        const pathId = parseInt(input.dataset.pathId, 10);
+        if (!Number.isFinite(pathId)) return null;
+        const p = pathologists.find(x => x.id === pathId);
+        if (!p) return null;
+
+        // Parse + clamp. Empty string and non-numeric reset to the current
+        // server value (don't silently save 0).
+        let v = parseInt(input.value, 10);
+        if (!Number.isFinite(v)) {
+            input.value = String(Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0);
+            return null;
+        }
+        if (v < 0) v = 0;
+        if (v > 365) v = 365;
+        input.value = String(v);
+
+        // Skip the round-trip if nothing actually changed.
+        if (v === p.vacationAllotted) return v;
+
+        // Only admins can save (defence in depth — UI is already gated).
+        if (!isAdmin()) return null;
+
+        input.classList.remove('is-saved');
+        input.classList.add('is-saving');
+        db.ref('scheduler/pathologists/' + pathId + '/vacationAllotted').set(v)
+            .then(() => {
+                input.classList.remove('is-saving');
+                input.classList.add('is-saved');
+                // Brief visual confirmation, then fade back to default.
+                setTimeout(() => {
+                    input.classList.remove('is-saved');
+                }, 1200);
+                // Update the local cache immediately so the tracking-page
+                // PTO tracker reflects the change before Firebase echoes
+                // back (avoids a flicker if both pages are open).
+                p.vacationAllotted = v;
+            })
+            .catch(err => {
+                input.classList.remove('is-saving');
+                console.error('Failed to save PTO allotment:', err);
+                if (typeof showToast === 'function') {
+                    showToast('Could not save PTO allotment — please try again.', { type: 'error' });
+                }
+            });
+        return v;
+    }
+
+    list.addEventListener('change', e => {
+        const input = e.target.closest('.pto-allot-input');
+        if (!input) return;
+        commitAllotment(input);
+    });
+
+    // Enter commits + blurs (so the value visibly settles). Escape reverts.
+    list.addEventListener('keydown', e => {
+        const input = e.target.closest('.pto-allot-input');
+        if (!input) return;
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            input.blur();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            const pathId = parseInt(input.dataset.pathId, 10);
+            const p = pathologists.find(x => x.id === pathId);
+            if (p) input.value = String(Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0);
+            input.blur();
+        }
+    });
+
+    // Select-all on focus so admins can quickly overtype the value.
+    list.addEventListener('focusin', e => {
+        const input = e.target.closest('.pto-allot-input');
+        if (!input) return;
+        input.select();
+    });
+})();
 
 // Year view mode: 'pto' shows PTO schedule, 'call' shows on-call schedule
 let yearMode = 'pto';
@@ -931,13 +1081,21 @@ function clearDayCache() {
 
 // (recompute code moved to recompute.js)
 
-function ptoDaysScheduled(pathId) {
+function ptoDaysScheduled(pathId, opts) {
+    // Optional range to scope the count to (e.g. a fiscal year). Defaults
+    // clamp at EARLIEST_DATE (no schedule data exists before that) and
+    // leave the upper end unbounded (count everything onwards). Callers
+    // pass { start, end } as Date objects to limit the window.
+    const rangeStart = (opts && opts.start instanceof Date) ? opts.start : EARLIEST_DATE;
+    const rangeEnd = (opts && opts.end instanceof Date) ? opts.end : null;
+
     // Collect and clamp all ranges for this pathologist.
     const ranges = [];
     vacations.filter(v => v.pathologistId === pathId).forEach(v => {
-        const effStart = v.start.getTime() < EARLIEST_DATE.getTime() ? EARLIEST_DATE : v.start;
-        if (v.end.getTime() < effStart.getTime()) return;
-        ranges.push({ start: new Date(effStart), end: new Date(v.end) });
+        const effStart = v.start.getTime() < rangeStart.getTime() ? rangeStart : v.start;
+        const effEnd = (rangeEnd && v.end.getTime() > rangeEnd.getTime()) ? rangeEnd : v.end;
+        if (effEnd.getTime() < effStart.getTime()) return;
+        ranges.push({ start: new Date(effStart), end: new Date(effEnd) });
     });
 
     if (ranges.length === 0) return 0;
@@ -965,6 +1123,18 @@ function ptoDaysScheduled(pathId) {
         }
     });
     return count;
+}
+
+// Helper: returns { start, end } Date objects for the fiscal year that
+// begins on Sept 1 of `startYear` and ends on Aug 31 of the next year.
+// Matches the academic-year convention used throughout the tracking
+// page (see getAcademicYearOfDate).
+function getFiscalYearRange(startYear) {
+    const start = new Date(startYear, 8, 1);   // Sept 1 (month is 0-indexed)
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(startYear + 1, 7, 31); // Aug 31
+    end.setHours(23, 59, 59, 999);
+    return { start, end };
 }
 
 // ────────────── LOADING ──────────────
@@ -3055,6 +3225,76 @@ function populateTrackingYearSelect() {
     }
 }
 
+// ── PTO usage tracker (left column, between conf-add and counts) ─────────
+// Renders a small per-pathologist list of working-days-of-PTO used in the
+// selected fiscal year (Sept 1 – Aug 31) vs. their allotted amount.
+// Honors the period dropdown: a year like '2025' scopes to that fiscal year;
+// 'all' shows lifetime usage with no allotment denominator (since allotments
+// are per-year, the ratio doesn't make sense across "all time").
+function renderTrackingPto() {
+    const listEl = document.getElementById('trackingPtoList');
+    const periodLabelEl = document.getElementById('trackingPtoPeriod');
+    if (!listEl) return;
+
+    if (!pathologists || pathologists.length === 0) {
+        listEl.innerHTML = '<div class="tracking-pto-empty">No pathologists loaded.</div>';
+        if (periodLabelEl) periodLabelEl.textContent = '';
+        return;
+    }
+
+    // Determine the range to count over from the active period filter.
+    // For 'all', leave the range unbounded and skip the allotted denominator.
+    let range = null;
+    let periodLabel = '';
+    let showAllotted = true;
+    if (trackingPeriod === 'all') {
+        showAllotted = false;
+        periodLabel = 'All time';
+    } else {
+        const yr = parseInt(trackingPeriod, 10);
+        if (Number.isFinite(yr)) {
+            range = getFiscalYearRange(yr);
+            periodLabel = 'Sep ' + yr + ' – Aug ' + (yr + 1);
+        }
+    }
+    if (periodLabelEl) periodLabelEl.textContent = periodLabel;
+
+    listEl.innerHTML = pathologists.map(p => {
+        const used = ptoDaysScheduled(p.id, range ? { start: range.start, end: range.end } : undefined);
+        const allot = Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0;
+        const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
+
+        let pctRaw = (showAllotted && allot > 0) ? (used / allot) : 0;
+        if (!Number.isFinite(pctRaw)) pctRaw = 0;
+        const pct = Math.max(0, Math.min(1, pctRaw));
+        const isOver = showAllotted && allot > 0 && used > allot;
+
+        const numbersHtml = showAllotted
+            ? `<span class="tracking-pto-numbers${isOver ? ' is-over' : ''}">
+                   <span class="tracking-pto-used">${used}</span>
+                   <span class="tracking-pto-allot"> / ${allot} days</span>
+               </span>`
+            : `<span class="tracking-pto-numbers">
+                   <span class="tracking-pto-used">${used}</span>
+                   <span class="tracking-pto-allot"> days</span>
+               </span>`;
+
+        const barHtml = showAllotted
+            ? `<div class="tracking-pto-bar" aria-hidden="true">
+                   <div class="tracking-pto-bar-fill${isOver ? ' is-over' : ''}" style="width:${(pct * 100).toFixed(1)}%;"></div>
+               </div>`
+            : '';
+
+        return `
+            <div class="tracking-pto-row" style="--c:${p.color};" title="Dr. ${escapeHtml(lastName)} — ${used}${showAllotted ? ' of ' + allot : ''} working days of PTO">
+                <span class="tracking-pto-dot" aria-hidden="true"></span>
+                <span class="tracking-pto-name">Dr. ${escapeHtml(lastName)}</span>
+                ${numbersHtml}
+                ${barHtml}
+            </div>`;
+    }).join('');
+}
+
 // ── Summary count grid ───────────────────────────────────────────────────
 function renderTrackingSummary(filteredEntries) {
     const body = document.getElementById('trackingSummaryBody');
@@ -3218,6 +3458,7 @@ function renderTrackingPage() {
     renderTrackingSummary(filtered);
     renderTrackingTabCounts(filtered);
     renderTrackingEntries(filtered);
+    renderTrackingPto();
 }
 
 // Expose for any caller that needs to refresh the page (e.g. after sign-in)
@@ -4111,7 +4352,7 @@ function periodContainsToday() {
         return cursor.getFullYear() === today.getFullYear() &&
             cursor.getMonth() === today.getMonth();
     } else { // year
-        return cursor.getFullYear() === today.getFullYear();
+        return getAcademicYearOfDate(cursor) === getAcademicYearOfDate(today);
     }
 }
 
@@ -4134,7 +4375,8 @@ function renderPeriodLabel() {
     } else if (view === 'month') {
         el.innerHTML = `${MONTHS[cursor.getMonth()]} <span class="year">${cursor.getFullYear()}</span>`;
     } else {
-        el.innerHTML = `<span class="year">${cursor.getFullYear()}</span>`;
+        const ayStart = getAcademicYearOfDate(cursor);
+        el.innerHTML = `<span class="year">${ayStart}–${ayStart + 1}</span>`;
     }
     // Show the small "•" affordance + tap-to-today cursor when not viewing today
     el.classList.toggle('off-today', !periodContainsToday());
@@ -5156,14 +5398,35 @@ function cellContent(date) {
 
 function renderYear() {
     const main = document.getElementById('main');
-    const y = cursor.getFullYear();
+    const ayStart = getAcademicYearOfDate(cursor); // e.g. 2025 for 2025–2026
+
+    // PTO day chips — shown alongside the mode toggle when in PTO mode.
+    // Computes used/allotted days per pathologist for the displayed fiscal year.
+    let ptoDaysSummaryHtml = '';
+    if (yearMode === 'pto' && pathologists && pathologists.length > 0) {
+        const fyRange = getFiscalYearRange(ayStart);
+        ptoDaysSummaryHtml = `<div class="year-pto-summary">` +
+            pathologists.map(p => {
+                const used = ptoDaysScheduled(p.id, { start: fyRange.start, end: fyRange.end });
+                const allot = Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0;
+                const isOver = allot > 0 && used > allot;
+                const label = escapeHtml(p.name) + ' — ' + used + (allot > 0 ? ' of ' + allot : '') + ' PTO days';
+                return `<span class="year-pto-chip${isOver ? ' is-over' : ''}" style="--c:${p.color};" title="${label}">` +
+                    `<span class="year-pto-dot" aria-hidden="true"></span>` +
+                    `<span class="year-pto-initials">${escapeHtml(p.initials)}</span>` +
+                    `<span class="year-pto-count">${used}<span class="year-pto-allot">${allot > 0 ? '/' + allot : ''}</span></span>` +
+                    `</span>`;
+            }).join('') +
+            `</div>`;
+    }
 
     // Mode tabs + pathologist key
     const modeTabsHtml = `
       <div class="mode-tabs" role="tablist">
         <button class="${yearMode === 'pto' ? 'active' : ''}" data-mode="pto">PTO</button>
         <button class="${yearMode === 'call' ? 'active' : ''}" data-mode="call">Call</button>
-      </div>`;
+      </div>
+      ${ptoDaysSummaryHtml}`;
 
     const keyHtml = `
       <div class="key">
@@ -5178,7 +5441,10 @@ function renderYear() {
         ${keyHtml}
       </div>`;
 
-    for (let m = 0; m < 12; m++) {
+    // Render 12 months starting from September (month index 8)
+    for (let i = 0; i < 12; i++) {
+        const m = (8 + i) % 12;                      // Sep=8…Dec=11, Jan=0…Aug=7
+        const y = m >= 8 ? ayStart : ayStart + 1;    // Sep–Dec use start year; Jan–Aug use next year
         const first = new Date(y, m, 1);
         const last = new Date(y, m + 1, 0);
         const gridStart = startOfWeek(first);
@@ -6467,6 +6733,19 @@ function renderAll() {
     applySettings();   // ensure sidebar/weekdays setting is reflected
     renderSidebar();
     renderMain();
+    // If the user is currently on the tracking page, refresh it too so the
+    // PTO tracker reflects the latest vacations and allotment data.
+    const _appEl = document.getElementById('app');
+    if (_appEl && _appEl.getAttribute('data-page') === 'tracking'
+        && typeof renderTrackingPage === 'function') {
+        try { renderTrackingPage(); } catch (_) { /* ignore */ }
+    }
+    // Likewise refresh the PTO allotment list in Settings when visible —
+    // so multi-tab edits propagate without requiring a page switch.
+    if (_appEl && _appEl.getAttribute('data-page') === 'settings'
+        && typeof renderPtoAllotmentSettings === 'function') {
+        try { renderPtoAllotmentSettings(); } catch (_) { /* ignore */ }
+    }
 }
 
 // ────────────── NAV EVENTS ──────────────

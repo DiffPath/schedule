@@ -351,6 +351,18 @@
                                 </div>
                             </section>
 
+                            <!-- PTO tracker — working days of PTO used in the
+                                 selected fiscal year (Sept 1 – Aug 31), per
+                                 pathologist, vs. their allotted total. Mirrors
+                                 the period selector at the top of the page. -->
+                            <section class="tracking-pto-section">
+                                <div class="tracking-section-label">
+                                    <span>PTO this fiscal year</span>
+                                    <span class="tracking-pto-period" id="trackingPtoPeriod" aria-hidden="true"></span>
+                                </div>
+                                <div class="tracking-pto-list" id="trackingPtoList"></div>
+                            </section>
+
                             <!-- Counts table — each pathologist × each conference type. -->
                             <section class="tracking-summary-section">
                                 <div class="tracking-section-label">Presentation counts</div>
@@ -465,6 +477,14 @@
                                 <button class="seg-btn" type="button" role="radio" data-value="me">Individual</button>
                             </div>
                         </div>
+                    </section>
+
+                    <!-- PTO allotments — admin only. Hidden for non-admins
+                         via JS in renderPtoAllotmentSettings(). -->
+                    <section class="settings-section" id="ptoAllotmentSection" style="display:none;">
+                        <h3 class="settings-section-title">PTO allotments</h3>
+                        <p class="settings-section-desc">Set the number of working days of PTO each pathologist is allotted per fiscal year (Sept 1 – Aug 31). Changes save automatically.</p>
+                        <div class="pto-allot-list" id="ptoAllotList"></div>
                     </section>
 
                     <!-- Hidden legacy elements that initSettings() expects to find. -->

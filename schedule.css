@@ -5672,6 +5672,12 @@ body.sidebar-scroll-locked {
     .content-area > .page-shell {
         overflow: visible;
         min-height: 0;
+        /* Without this, main inherits the desktop `flex: 1 1 0` and caps at
+           viewport height, so day cards below the fold get painted off-screen
+           with no scroll. Sizing to content lets the document scroll naturally.
+           The day view re-enables flex via the higher-specificity
+           `.content-area > main:has(> .day-view)` rule, so it's unaffected. */
+        flex: none;
     }
 
     /* Mobile toolbar: compact single-row layout.

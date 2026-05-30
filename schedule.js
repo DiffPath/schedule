@@ -1290,8 +1290,17 @@ function showLoginOverlay() {
     const pwInput = document.getElementById('loginPassword');
     const errEl = document.getElementById('loginError');
 
+    // The login screen renders BEFORE sign-in, but the live `pathologists`
+    // array is only readable AFTER sign-in (reads require auth now). So at
+    // login time it's empty — use the hardcoded SEED_PATHOLOGISTS for the
+    // name list instead. If live data is already loaded (e.g. re-login after
+    // sign-out without a reload), prefer it so any name edits show through.
+    const nameList = (pathologists && pathologists.length)
+        ? pathologists
+        : SEED_PATHOLOGISTS;
+
     sel.innerHTML = '<option value="">— Select your name —</option>' +
-        pathologists.map(p => `<option value="${p.id}">${p.name}</option>`).join('') +
+        nameList.map(p => `<option value="${p.id}">${p.name}</option>`).join('') +
         '<option value="" disabled>──────────────</option>' +
         `<option value="${GROSS_ROOM_ID}">Gross Room</option>` +
         `<option value="${MANAGER_ID}">Kathleen</option>` +

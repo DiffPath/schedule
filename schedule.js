@@ -11,17 +11,85 @@ const firebaseConfig = {
 };
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
+const auth = firebase.auth();
 
-// Ensure the manager account (Kathleen) has her default password set in
-// Firebase. This runs once on first load; subsequent loads are no-ops.
-(function seedManagerPassword() {
-    const ref = db.ref('scheduler/passwords/' + 'kathleen');
-    ref.once('value').then(snap => {
-        if (!snap.exists() || !snap.val()) {
-            ref.set('discover');
-        }
+// ────────────── AUTH MAPPING ──────────────
+// Authentication moved from a homegrown plaintext-password node in the DB
+// to Firebase Authentication. Each account signs in with a "fake" email of
+// the form <local-part>@scheduler.local. These accounts must be created
+// once, by hand, in the Firebase console (Authentication → Users).
+//
+// The local-part is derived from the account id:
+//   • pathologists  → 'p<id>'  e.g. p1@scheduler.local
+//   • gross room    → 'grossroom@scheduler.local'
+//   • Kathleen      → 'kathleen@scheduler.local'
+//   • histology     → 'histology@scheduler.local'
+const AUTH_EMAIL_DOMAIN = '@scheduler.local';
+
+// Histology is the read-only guest. It still needs a real Auth session to
+// satisfy the ".read": "auth != null" rule, so the app holds a fixed
+// credential and signs in behind the scenes (the password field stays
+// hidden; the user never sees or types this). It is NOT a secret — it ships
+// in client code — but histology cannot write, so that's acceptable for this
+// app's threat model.
+const HISTOLOGY_PW = 'histology-guest';
+
+// Map an app account id (number for pathologists, or one of the string ids)
+// to its Firebase Auth email.
+function authEmailForId(id) {
+    if (id === GROSS_ROOM_ID) return 'grossroom' + AUTH_EMAIL_DOMAIN;
+    if (id === MANAGER_ID)    return 'kathleen' + AUTH_EMAIL_DOMAIN;
+    if (id === HISTOLOGY_ID)  return 'histology' + AUTH_EMAIL_DOMAIN;
+    return 'p' + id + AUTH_EMAIL_DOMAIN; // pathologist
+}
+
+// Inverse: map a signed-in Auth email back to the app account id used
+// throughout the rest of the app (loggedInPathId). Returns null if unknown.
+function idForAuthEmail(email) {
+    if (!email) return null;
+    const local = email.slice(0, email.indexOf('@')).toLowerCase();
+    if (local === 'grossroom') return GROSS_ROOM_ID;
+    if (local === 'kathleen')  return MANAGER_ID;
+    if (local === 'histology') return HISTOLOGY_ID;
+    const m = local.match(/^p(\d+)$/);
+    if (m) return parseInt(m[1], 10);
+    return null;
+}
+
+// ────────────── DEFERRED DATA LISTENERS ──────────────
+// Under the new rules, EVERY read requires an authenticated session. The
+// data listeners must therefore NOT attach until after sign-in. We collect
+// each (path, callback, errorCallback) via regListener() at module-load time
+// and only attach them when startDataListeners() runs (called from the auth
+// state handler once a user is signed in).
+const _pendingListeners = [];
+let _listenersStarted = false;
+
+// Drop-in replacement for `db.ref(path).on('value', cb, errCb)` that defers
+// attachment until startDataListeners() is called.
+function regListener(path, cb, errCb) {
+    _pendingListeners.push({ path, cb, errCb });
+}
+
+function startDataListeners() {
+    if (_listenersStarted) return;
+    _listenersStarted = true;
+    _pendingListeners.forEach(({ path, cb, errCb }) => {
+        db.ref(path).on('value', cb, errCb);
     });
-})();
+}
+
+// Detach all data listeners and reset readiness flags. Called on sign-out so
+// a subsequent sign-in (possibly as a different user) starts clean.
+function stopDataListeners() {
+    if (!_listenersStarted) return;
+    _pendingListeners.forEach(({ path }) => {
+        try { db.ref(path).off('value'); } catch (_) {}
+    });
+    _listenersStarted = false;
+    pathologistsReady = false;
+    vacationsReady = false;
+}
 
 // ────────────── SEEDS (only used if Firebase is empty) ──────────────
 const SEED_PATHOLOGISTS = [
@@ -469,15 +537,11 @@ let yearMode = 'pto';
 // Authenticated pathologist id (number) or null when nobody is signed in on
 // this device. We persist this in localStorage so users only see the login
 // screen on first use of a given browser.
-const AUTH_STORAGE_KEY = 'schedCurrentPathId';
-let loggedInPathId = (() => {
-    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
-    if (raw === GROSS_ROOM_ID) return GROSS_ROOM_ID;
-    if (raw === MANAGER_ID) return MANAGER_ID;
-    if (raw === HISTOLOGY_ID) return HISTOLOGY_ID;
-    const n = parseInt(raw, 10);
-    return Number.isFinite(n) ? n : null;
-})();
+// The signed-in account id. Resolved by the onAuthStateChanged handler from
+// the Firebase Auth session (Firebase persists the session itself, so we no
+// longer track it in localStorage). null means signed out.
+const AUTH_STORAGE_KEY = 'schedCurrentPathId'; // retained: legacy cleanup only
+let loggedInPathId = null;
 
 // ────────────── DATE HELPERS ──────────────
 const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -1151,31 +1215,28 @@ function hideLoading() {
 function checkReady() {
     if (pathologistsReady && vacationsReady) {
         hideLoading();
-        renderAll();
-        // Once data is loaded, decide whether to show the login screen.
-        // If a returning user is already signed in on this device, we just
-        // verify their stored id still corresponds to a real pathologist.
+        // Data only loads once a user is authenticated (listeners are not
+        // started until sign-in), so loggedInPathId is already resolved by
+        // the onAuthStateChanged handler before we get here.
+        //
+        // Guard: if somehow the signed-in account maps to a pathologist id
+        // that no longer exists, sign out and force a clean re-login.
         if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && loggedInPathId !== HISTOLOGY_ID && !pathologists.find(p => p.id === loggedInPathId)) {
-            // Stored id no longer matches anyone — clear it and force re-login
-            localStorage.removeItem(AUTH_STORAGE_KEY);
-            loggedInPathId = null;
+            auth.signOut();
+            return;
         }
-        if (loggedInPathId === null) {
-            showLoginOverlay();
+        // Default the filter based on who is signed in and their saved
+        // preference. Gross room / manager / histology are always forced
+        // to all pathologists. Otherwise, honor the user's defaultPathFilter
+        // setting ('all' or 'me').
+        if (isGrossRoom() || isManager() || isHistology()) {
+            setPathFilter('all');
+        } else if (settings.defaultPathFilter === 'all') {
+            setPathFilter('all');
         } else {
-            // Default the filter based on who is signed in and their saved
-            // preference. Gross room / manager / histology are always forced
-            // to all pathologists. Otherwise, honor the user's
-            // defaultPathFilter setting ('all' or 'me').
-            if (isGrossRoom() || isManager() || isHistology()) {
-                setPathFilter('all');
-            } else if (settings.defaultPathFilter === 'all') {
-                setPathFilter('all');
-            } else {
-                setPathFilter(String(loggedInPathId));
-            }
-            renderAll();
+            setPathFilter(String(loggedInPathId));
         }
+        renderAll();
     }
 }
 
@@ -1292,40 +1353,36 @@ async function attemptLogin() {
         : isManagerLogin ? MANAGER_ID
         : isHistologyLogin ? HISTOLOGY_ID
         : parseInt(pidRaw, 10);
+
+    // Histology signs in behind the scenes with a fixed credential the app
+    // holds; every other account uses the password the user typed.
+    const email = authEmailForId(pid);
+    const password = isHistologyLogin ? HISTOLOGY_PW : pwAttempt;
+
     btn.disabled = true;
     btn.textContent = 'Signing in…';
     try {
-        // Skip password verification entirely for the histology guest account.
-        if (!isHistologyLogin) {
-            const snap = await db.ref('scheduler/passwords/' + pid).once('value');
-            const expected = snap.val();
-            if (!expected) {
-                errEl.textContent = 'No password on file for this user. Contact admin.';
-                return;
-            }
-            if (pwAttempt.toLowerCase() !== expected.toLowerCase()) {
-                errEl.textContent = 'Incorrect password.';
-                pwInput.select();
-                return;
-            }
-        }
-        // Success — persist and proceed
-        loggedInPathId = pid;
-        localStorage.setItem(AUTH_STORAGE_KEY, String(pid));
-        hideLoginOverlay();
-        // Refresh the filter tabs. Gross room / manager / histology always
-        // show all; individual pathologists honor their defaultPathFilter
-        // setting ('all' or 'me').
-        populatePathFilter();
-        if (!isGrossRoomLogin && !isManagerLogin && !isHistologyLogin) {
-            setPathFilter(settings.defaultPathFilter === 'all' ? 'all' : String(pid));
-        }
-        // Reset Changes page scope to its default ('mine') for the new
-        // session so one user's toggle to "All" doesn't carry over.
-        activeChangesScope = 'mine';
-        renderAll();
+        // Firebase Auth is the single source of truth now. On success the
+        // onAuthStateChanged handler (see below) does all post-login setup:
+        // resolving loggedInPathId, starting the data listeners, hiding the
+        // overlay, and rendering. We don't touch loggedInPathId here.
+        await auth.signInWithEmailAndPassword(email, password);
+        // Note: do NOT hideLoginOverlay() or renderAll() here — the auth
+        // state handler owns that, and runs for both fresh logins and
+        // session resumes.
     } catch (err) {
-        errEl.textContent = 'Login failed: ' + (err.message || 'unknown error');
+        // Map the common Firebase Auth error codes to friendly messages.
+        const code = err && err.code ? err.code : '';
+        if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+            errEl.textContent = 'Incorrect password.';
+            pwInput.select();
+        } else if (code === 'auth/user-not-found') {
+            errEl.textContent = 'No account on file for this user. Contact admin.';
+        } else if (code === 'auth/too-many-requests') {
+            errEl.textContent = 'Too many attempts. Please wait a moment and try again.';
+        } else {
+            errEl.textContent = 'Login failed: ' + (err.message || 'unknown error');
+        }
     } finally {
         btn.disabled = false;
         btn.textContent = 'Sign in';
@@ -1344,8 +1401,56 @@ document.getElementById('loginPath').addEventListener('keydown', e => {
 // Hide the password field when Histology (passwordless guest) is selected.
 document.getElementById('loginPath').addEventListener('change', updateLoginPasswordVisibility);
 
+// ────────────── AUTH STATE → APP STATE ──────────────
+// Single source of truth for "who is signed in". Fires on:
+//   • initial page load (resuming a persisted Firebase session, or not)
+//   • a successful attemptLogin() sign-in
+//   • sign-out
+// On sign-in it resolves loggedInPathId and starts the data listeners (which
+// in turn drive checkReady → render). On sign-out it tears the listeners
+// down and shows the login overlay.
+auth.onAuthStateChanged(user => {
+    if (user) {
+        const id = idForAuthEmail(user.email);
+        if (id === null) {
+            // Signed in with an account that doesn't map to any known app
+            // user — refuse it and sign back out.
+            auth.signOut();
+            return;
+        }
+        loggedInPathId = id;
+        // One-time cleanup of the legacy localStorage key from the old
+        // homegrown auth (no longer used now that Firebase persists sessions).
+        try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch (_) {}
+        hideLoginOverlay();
+        // Reset Changes page scope to its default for the new session.
+        activeChangesScope = 'mine';
+        // Start the data listeners now that reads are permitted. When data
+        // arrives, checkReady() handles filter defaults + render.
+        startDataListeners();
+        // If data already loaded once this page-life (e.g. re-login after
+        // sign-out without a reload), listeners are cached-warm and may not
+        // re-fire; refresh the filter + view directly.
+        if (pathologistsReady && vacationsReady) {
+            populatePathFilter();
+            if (isGrossRoom() || isManager() || isHistology()) {
+                setPathFilter('all');
+            } else {
+                setPathFilter(settings.defaultPathFilter === 'all' ? 'all' : String(id));
+            }
+            renderAll();
+        }
+    } else {
+        // Signed out (or never signed in).
+        loggedInPathId = null;
+        stopDataListeners();
+        hideLoading();
+        if (typeof showLoginOverlay === 'function') showLoginOverlay();
+    }
+});
+
 // ────────────── FIREBASE LISTENERS ──────────────
-db.ref('scheduler/pathologists').on('value', async snap => {
+regListener('scheduler/pathologists', async snap => {
     if (!snap.exists()) {
         setLoadingStatus('Seeding pathologists…');
         const batch = {};
@@ -1371,7 +1476,7 @@ db.ref('scheduler/pathologists').on('value', async snap => {
     console.error('Firebase pathologists error:', err);
 });
 
-db.ref('scheduler/vacations').on('value', snap => {
+regListener('scheduler/vacations', snap => {
     if (!snap.exists()) {
         vacations = [];
     } else {
@@ -1391,31 +1496,31 @@ db.ref('scheduler/vacations').on('value', snap => {
     console.error('Firebase vacations error:', err);
 });
 
-db.ref('scheduler/onCallOverrides').on('value', snap => {
+regListener('scheduler/onCallOverrides', snap => {
     onCallOverrides = snap.exists() ? snap.val() : {};
     clearDayCache();
     if (pathologistsReady && vacationsReady) renderAll();
 });
 
-db.ref('scheduler/onCallDayOverrides').on('value', snap => {
+regListener('scheduler/onCallDayOverrides', snap => {
     onCallDayOverrides = snap.exists() ? snap.val() : {};
     clearDayCache();
     if (pathologistsReady && vacationsReady) renderAll();
 });
 
-db.ref('scheduler/serviceOverrides').on('value', snap => {
+regListener('scheduler/serviceOverrides', snap => {
     serviceOverrides = snap.exists() ? snap.val() : {};
     clearDayCache();
     if (pathologistsReady && vacationsReady) renderAll();
 });
 
 // Lake Forest sendout flags — see isLfSendoutDay() for how they're consumed.
-db.ref('scheduler/lfSendoutDays').on('value', snap => {
+regListener('scheduler/lfSendoutDays', snap => {
     lfSendoutDays = snap.exists() ? snap.val() : {};
     if (pathologistsReady && vacationsReady) renderAll();
 });
 
-db.ref('scheduler/lfSendoutWeeks').on('value', snap => {
+regListener('scheduler/lfSendoutWeeks', snap => {
     lfSendoutWeeks = snap.exists() ? snap.val() : {};
     if (pathologistsReady && vacationsReady) renderAll();
 });
@@ -1432,7 +1537,7 @@ db.ref('scheduler/lfSendoutWeeks').on('value', snap => {
 // snapshot arrives AFTER pathologists + vacations have already triggered
 // the initial renderAll(); without it, the day/week view paints with an
 // empty `procedures` global and stays blank until the user changes view.
-db.ref('scheduler/procedures').on('value', snap => {
+regListener('scheduler/procedures', snap => {
     procedures = snap.exists() ? snap.val() : {};
     if (pathologistsReady && vacationsReady && (view === 'week' || view === 'day')) renderMain();
 }, err => {
@@ -1443,7 +1548,7 @@ db.ref('scheduler/procedures').on('value', snap => {
 // and is then approved/denied by the admin.  Each request looks like:
 //   { requesterId, type, status, createdAt, payload, note,
 //     decisionAt?, decisionBy?, decisionNote? }
-db.ref('scheduler/requests').on('value', snap => {
+regListener('scheduler/requests', snap => {
     const next = snap.exists() ? snap.val() : {};
 
     // After the first load, detect newly-added pending requests so we can
@@ -2623,7 +2728,7 @@ let changes = {};                  // { pushKey: change-entry } from Firebase
 let changesReady = false;
 
 // Subscribe to the change log so the page stays live
-db.ref('scheduler/changes').on('value', snap => {
+regListener('scheduler/changes', snap => {
     changes = snap.exists() ? snap.val() : {};
     changesReady = true;
 
@@ -3109,7 +3214,7 @@ let activeTrackingTab = 'breast';
 let trackingPeriod = null;            // set on first render
 
 // ── Firebase subscriptions ───────────────────────────────────────────────
-db.ref('scheduler/conferenceLog').on('value', snap => {
+regListener('scheduler/conferenceLog', snap => {
     conferenceLog = snap.exists() ? snap.val() : {};
     conferenceLogReady = true;
     const _appEl = document.getElementById('app');
@@ -3121,7 +3226,7 @@ db.ref('scheduler/conferenceLog').on('value', snap => {
     console.error('Firebase conferenceLog error:', err);
 });
 
-db.ref('scheduler/conferencePresenters').on('value', snap => {
+regListener('scheduler/conferencePresenters', snap => {
     conferencePresenters = snap.exists() ? snap.val() : {};
     // Update Add button visibility / row edit buttons if visible now
     const _appEl = document.getElementById('app');
@@ -4085,7 +4190,7 @@ const HISTORICAL_CONFERENCE_DATA = [
 // Flag indicating the historical import has been run (or explicitly
 // dismissed via Firebase console). When truthy, the banner stays hidden.
 let conferenceLogImported = null;
-db.ref('scheduler/conferenceLogImported').on('value', snap => {
+regListener('scheduler/conferenceLogImported', snap => {
     conferenceLogImported = snap.exists() ? snap.val() : null;
     const _appEl = document.getElementById('app');
     if (_appEl && _appEl.getAttribute('data-page') === 'tracking'
@@ -7660,9 +7765,9 @@ document.getElementById('exportDownload').addEventListener('click', () => {
     if (signOutBtn) {
         signOutBtn.addEventListener('click', () => {
             closeDrawer();
-            localStorage.removeItem(AUTH_STORAGE_KEY);
-            loggedInPathId = null;
-            showLoginOverlay();   // ← populates the dropdown AND shows the overlay
+            // Firebase sign-out; the onAuthStateChanged handler tears down the
+            // data listeners and shows the login overlay.
+            auth.signOut();
         });
     }
 
@@ -7846,11 +7951,10 @@ document.getElementById('exportDownload').addEventListener('click', () => {
     if (sidebarSignOutBtn) {
         sidebarSignOutBtn.addEventListener('click', () => {
             closeMobileSidebar();
-            try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch (_) {}
-            loggedInPathId = null;
-            // Reset to schedule page so re-login lands there
+            // Reset to schedule page so re-login lands there.
             setPage('schedule');
-            if (typeof showLoginOverlay === 'function') showLoginOverlay();
+            // Firebase sign-out; onAuthStateChanged handles teardown + overlay.
+            auth.signOut();
         });
     }
 

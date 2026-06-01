@@ -160,6 +160,14 @@ let serviceOverrides = {};           // { weekKey: { pathId: serviceId } }
 let lfSendoutDays = {};
 let lfSendoutWeeks = {};
 
+// Gross-room PTO flags. When set, a "Natalie PTO" banner row is rendered
+// above the hourly procedure grid on the matching day(s). This is separate
+// from pathologist `vacations` — it does not affect the rotation, coverage
+// cascade, or PTO allotment math; it is a display-only marker on the
+// procedure schedule that the Gross Room (and admin) can manage.
+//   nataliePtoDays → { 'YYYY-MM-DD': true }     individual day
+let nataliePtoDays = {};
+
 // Procedures: an hourly schedule independent of the pathologist rotation.
 // Shape: { 'YYYY-MM-DD': { pushKey: { time: 'HH:MM', type: 'procedure',
 //                                     createdAt: <ms>, createdBy: <pid> } } }
@@ -769,6 +777,15 @@ function isLfSendoutDay(date) {
         if (lfSendoutWeeks[wk]) return true;
     }
     return false;
+}
+
+// Returns true if a "Natalie PTO" banner should be rendered on this date.
+// Pre-cutoff dates always return false. Day/week/range adds all resolve to
+// individual day flags (see saveNataliePto), so a single per-day lookup is
+// all that's needed here.
+function isNataliePtoDay(date) {
+    if (isBeforeEarliest(date)) return false;
+    return !!nataliePtoDays[fmt(date)];
 }
 
 function isOnPto(pathId, date) {
@@ -1553,6 +1570,16 @@ regListener('scheduler/procedures', snap => {
     console.error('Firebase procedures error:', err);
 });
 
+// Gross-room "Natalie PTO" flags — see isNataliePtoDay() for how they're
+// consumed. Display-only, so (like procedures) only the procedure-bearing
+// views need to re-render when this changes.
+regListener('scheduler/natalieptoDays', snap => {
+    nataliePtoDays = snap.exists() ? snap.val() : {};
+    if (pathologistsReady && vacationsReady && (view === 'week' || view === 'day')) renderMain();
+}, err => {
+    console.error('Firebase natalieptoDays error:', err);
+});
+
 // Request queue: every change a non-admin wants to make goes here first
 // and is then approved/denied by the admin.  Each request looks like:
 //   { requesterId, type, status, createdAt, payload, note,
@@ -1612,6 +1639,13 @@ function renderSidebar() {
     // The "Manage PTO" label changes to "Request PTO" for non-admins (not gross room)
     const ptoBtnLabel = document.getElementById('addPtoBtnLabel');
     if (ptoBtnLabel) ptoBtnLabel.textContent = admin ? 'Manage PTO' : 'Request PTO';
+
+    // Natalie PTO (procedure-schedule PTO marker) — Gross Room only.
+    const canNatalie = grossRoom;
+    const npToolbarBtn = document.getElementById('toolbarNataliePtoBtn');
+    if (npToolbarBtn) npToolbarBtn.style.display = canNatalie ? '' : 'none';
+    const npProxyBtn = document.getElementById('addNataliePtoBtn');
+    if (npProxyBtn) npProxyBtn.style.display = canNatalie ? '' : 'none';
 
     // Show/hide & update the Requests button + badge
     updateRequestsBadge();
@@ -4710,10 +4744,44 @@ function renderHourGrid(date) {
             </div>`;
         }
     }
+    // The Natalie PTO banner lives INSIDE the procedure grid (as its first
+    // child) so it is structurally attached to the procedure schedule rather
+    // than floating in the pathologist-schedule div above it.
     return `<div class="wd-hours">
+      ${nataliePtoBannerHtml(date)}
       <div class="wd-hours-head"></div>
       ${rowsHtml}
     </div>`;
+}
+
+// Renders the "Natalie PTO" banner row shown directly above the hourly
+// procedure grid on flagged days, or an empty string otherwise. Sits
+// between the pathologist assignment rows and the hour grid in both the
+// week and day views. For Gross Room / admin the banner carries an inline
+// "×" control so a flagged day can be removed in one click without opening
+// the modal (handlers wired in attachHourGridHandlers).
+function nataliePtoBannerHtml(date) {
+    if (!isNataliePtoDay(date)) return '';
+    const dayKey = fmt(date);
+    const removable = canManageNataliePto();
+    const removeBtn = removable
+        ? `<button type="button" class="natalie-pto-remove" data-day="${dayKey}" title="Remove Natalie PTO" aria-label="Remove Natalie PTO">×</button>`
+        : '';
+    return `<div class="natalie-pto-banner${removable ? ' removable' : ''}" data-day="${dayKey}" title="Natalie PTO">
+      <span class="natalie-pto-label">Natalie PTO</span>
+      ${removeBtn}
+    </div>`;
+}
+
+// Remove the Natalie PTO flag for a single day (used by the inline banner
+// "×" control). Safe no-op for users who can't manage it.
+async function removeNataliePtoDay(dayKey) {
+    if (!canManageNataliePto() || !dayKey) return;
+    try {
+        await db.ref('scheduler/natalieptoDays/' + dayKey).remove();
+    } catch (err) {
+        showToast('Could not remove Natalie PTO: ' + (err.message || err), { type: 'error' });
+    }
 }
 
 // Returns a flat array of { key, time, type, ... } for the given day key.
@@ -4873,6 +4941,21 @@ function clearProcedureSelection() {
 //   - Single-click on a pill → select it (Delete key removes it).
 //   - Double-click on a pill → edit-procedure modal.
 function attachHourGridHandlers() {
+    // Natalie PTO banner: the inline "×" removes the flag for that day; a
+    // plain click on the banner shouldn't fall through to the .week-day
+    // day-detail modal. (Banner only renders for users who can manage it.)
+    document.querySelectorAll('.natalie-pto-banner').forEach(banner => {
+        banner.addEventListener('click', e => {
+            e.stopPropagation();
+            const rm = e.target.closest('.natalie-pto-remove');
+            if (rm) {
+                e.preventDefault();
+                removeNataliePtoDay(rm.dataset.day);
+            }
+        });
+        banner.addEventListener('dblclick', e => e.stopPropagation());
+    });
+
     document.querySelectorAll('.wd-hours').forEach(grid => {
         // Block the parent .week-day's click → day modal. Also clear any
         // procedure selection when the user clicks an empty area of the
@@ -6585,9 +6668,218 @@ document.getElementById('lfRemove').addEventListener('click', async () => {
     document.getElementById('lfModalBack').classList.remove('open');
 });
 
-// ────────────── SERVICE OVERRIDE MODAL (per day or full call week) ──────────────
-let activeSvcDayKey = null;
-let activeSvcDate = null;
+// ────────────── NATALIE PTO MODAL (Gross Room + admin) ──────────────
+// Flags "Natalie PTO" on the procedure schedule. Three scopes:
+//   • day    → the single selected date
+//   • week   → every weekday (Mon–Fri, skipping federal holidays) in the
+//              calendar week of the selected date
+//   • range  → every weekday in an inclusive start→end range
+// All scopes resolve to individual per-day flags under
+// scheduler/natalieptoDays/<YYYY-MM-DD>, mirroring the pathologist PTO
+// model (a set of days) without touching the rotation or allotment logic.
+let activeNpDate = null;
+
+// True for anyone allowed to manage Natalie PTO: Gross Room only.
+function canManageNataliePto() {
+    return isGrossRoom();
+}
+
+// Returns the list of dates a given scope will affect (used for both the
+// status preview and the actual write). Weekends and federal holidays are
+// skipped for week/range scopes; the day scope writes exactly the date
+// chosen (so a one-off weekend flag is still possible if ever needed).
+function _npDatesForScope(scope) {
+    if (scope === 'day') {
+        const v = document.getElementById('npDay').value;
+        if (!v) return [];
+        return [parseDate(v)];
+    }
+    if (scope === 'week') {
+        const base = activeNpDate || today;
+        const ws = startOfWeek(base);
+        const out = [];
+        for (let i = 0; i < 7; i++) {
+            const d = addDays(ws, i);
+            if (isWeekend(d) || getFederalHoliday(d)) continue;
+            out.push(d);
+        }
+        return out;
+    }
+    // range
+    const sV = document.getElementById('npStart').value;
+    const eV = document.getElementById('npEnd').value;
+    if (!sV || !eV) return [];
+    const s = parseDate(sV);
+    const e = parseDate(eV);
+    if (isNaN(s) || isNaN(e) || e < s) return [];
+    const out = [];
+    for (let d = new Date(s); d.getTime() <= e.getTime(); d = addDays(d, 1)) {
+        if (isWeekend(d) || getFederalHoliday(d)) continue;
+        out.push(new Date(d));
+    }
+    return out;
+}
+
+function _refreshNpModalUi() {
+    const scope = document.querySelector('input[name="npScope"]:checked').value;
+    document.getElementById('npDayWrap').style.display = (scope === 'day') ? '' : 'none';
+    document.getElementById('npRangeWrap').style.display = (scope === 'range') ? '' : 'none';
+
+    const statusEl = document.getElementById('npStatus');
+    const saveBtn = document.getElementById('npSave');
+    const dates = _npDatesForScope(scope);
+
+    statusEl.style.background = 'var(--bg-2)';
+    statusEl.style.color = 'var(--ink-2)';
+
+    if (scope === 'week') {
+        const base = activeNpDate || today;
+        const ws = startOfWeek(base);
+        const we = addDays(ws, 6);
+        const already = dates.filter(d => isNataliePtoDay(d)).length;
+        statusEl.textContent = dates.length === 0
+            ? 'No working days in this week.'
+            : `Flags Natalie PTO on ${dates.length} weekday(s) in the week of ${MONTHS_SHORT[ws.getMonth()]} ${ws.getDate()} – ${MONTHS_SHORT[we.getMonth()]} ${we.getDate()}, ${we.getFullYear()}.` +
+              (already > 0 ? ` (${already} already flagged.)` : '');
+        saveBtn.textContent = 'Add for this week';
+        saveBtn.disabled = dates.length === 0;
+    } else if (scope === 'range') {
+        statusEl.textContent = dates.length === 0
+            ? 'Choose a valid start and end date (weekends and holidays are skipped).'
+            : `Flags Natalie PTO on ${dates.length} weekday(s) in the selected range.`;
+        saveBtn.textContent = 'Add for range';
+        saveBtn.disabled = dates.length === 0;
+    } else {
+        const d = dates[0];
+        if (!d) {
+            statusEl.textContent = 'Choose a date.';
+            saveBtn.disabled = true;
+        } else if (isNataliePtoDay(d)) {
+            statusEl.textContent = 'This day is already flagged as Natalie PTO. Use the list below to remove it.';
+            statusEl.style.background = 'var(--accent-soft)';
+            saveBtn.disabled = true;
+        } else {
+            statusEl.textContent = `Flags Natalie PTO on ${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}.`;
+            saveBtn.disabled = false;
+        }
+        saveBtn.textContent = 'Add PTO';
+    }
+}
+
+function renderNpList() {
+    const list = document.getElementById('npList');
+    // Show upcoming flagged days (today onward), sorted, capped.
+    const todayKey = fmt(today);
+    const keys = Object.keys(nataliePtoDays || {})
+        .filter(k => nataliePtoDays[k] && k >= todayKey)
+        .sort()
+        .slice(0, 60);
+
+    if (keys.length === 0) {
+        list.innerHTML = `<div class="empty">No upcoming Natalie PTO scheduled.</div>`;
+        return;
+    }
+
+    list.innerHTML = keys.map(k => {
+        const d = parseDate(k);
+        const label = `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+        return `<div class="pto-list-item natalie-pto-item">
+        <div class="pdot"></div>
+        <div class="prange">
+          <div class="pname">Natalie PTO</div>
+          <div class="pdates">${label}</div>
+        </div>
+        <button data-key="${k}">Remove</button>
+      </div>`;
+    }).join('');
+
+    list.querySelectorAll('button[data-key]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+            if (!canManageNataliePto()) return;
+            const k = btn.dataset.key;
+            try {
+                await db.ref('scheduler/natalieptoDays/' + k).remove();
+                renderNpList();
+                _refreshNpModalUi();
+            } catch (err) {
+                showToast('Could not remove Natalie PTO: ' + (err.message || err), { type: 'error' });
+            }
+        });
+    });
+}
+
+function openNataliePtoModal(prefillDate) {
+    if (!canManageNataliePto()) return; // Belt-and-suspenders — button is also hidden.
+    const d = prefillDate || activeDayDate || cursor || today;
+    activeNpDate = new Date(d);
+    activeNpDate.setHours(0, 0, 0, 0);
+
+    document.getElementById('npScopeDay').checked = true;
+    document.getElementById('npDay').value = fmt(activeNpDate);
+    document.getElementById('npStart').value = fmt(activeNpDate);
+    document.getElementById('npEnd').value = fmt(activeNpDate);
+
+    renderNpList();
+    _refreshNpModalUi();
+    document.getElementById('npModalBack').classList.add('open');
+}
+
+document.querySelectorAll('input[name="npScope"]').forEach(radio => {
+    radio.addEventListener('change', _refreshNpModalUi);
+});
+document.getElementById('npDay').addEventListener('change', () => {
+    const v = document.getElementById('npDay').value;
+    if (v) { activeNpDate = parseDate(v); }
+    _refreshNpModalUi();
+});
+// Auto-advance end date when start is moved past it (mirrors the PTO modal).
+document.getElementById('npStart').addEventListener('change', () => {
+    const s = document.getElementById('npStart');
+    const e = document.getElementById('npEnd');
+    if (s.value && e.value && s.value > e.value) e.value = s.value;
+    _refreshNpModalUi();
+});
+document.getElementById('npEnd').addEventListener('change', _refreshNpModalUi);
+
+document.getElementById('npCancel').addEventListener('click', () => {
+    document.getElementById('npModalBack').classList.remove('open');
+});
+document.getElementById('npModalBack').addEventListener('click', e => {
+    if (e.target.id === 'npModalBack') e.target.classList.remove('open');
+});
+
+document.getElementById('npSave').addEventListener('click', async () => {
+    if (!canManageNataliePto()) return;
+    const scope = document.querySelector('input[name="npScope"]:checked').value;
+    const dates = _npDatesForScope(scope);
+    if (dates.length === 0) {
+        showToast('Nothing to add — check the dates.', { type: 'error' });
+        return;
+    }
+    const writes = {};
+    dates.forEach(d => { writes['scheduler/natalieptoDays/' + fmt(d)] = true; });
+    try {
+        await db.ref().update(writes);
+        renderNpList();
+        _refreshNpModalUi();
+        showToast(
+            dates.length === 1 ? 'Natalie PTO added.' : `Natalie PTO added for ${dates.length} days.`,
+            { type: 'success' }
+        );
+        document.getElementById('npModalBack').classList.remove('open');
+    } catch (err) {
+        showToast('Could not save Natalie PTO: ' + (err.message || err), { type: 'error' });
+    }
+});
+
+// Proxy + toolbar button → open the modal.
+document.getElementById('addNataliePtoBtn').addEventListener('click', () => openNataliePtoModal(null));
+(function wireNataliePtoToolbarBtn() {
+    const btn = document.getElementById('toolbarNataliePtoBtn');
+    if (btn) btn.addEventListener('click', () => openNataliePtoModal(null));
+})();
+
+
 
 // List every workday (skipping weekends + federal holidays) inside the call
 // cycle that contains `date`.  Used when applying a "full call week" service

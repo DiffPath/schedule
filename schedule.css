@@ -20,21 +20,23 @@
     --today-bg: rgba(254, 243, 199, 0.55);
     --today-ring: #d4a72c;
 
-    /* Pathologist identity colors */
-    --p1: #b94e2a;
-    /* MM */
-    --p2: #1f5e5b;
-    /* IM */
-    --p3: #b88512;
-    /* JR */
-    --p4: #6b4a8e;
-    /* MR */
+    /* Pathologist identity colors — chosen for maximum hue separation
+       (red · teal-green · blue · magenta-purple) so no two read alike,
+       and so none collide with the now cool-grey PTO styling. */
+    --p1: #c0392b;
+    /* MM — red */
+    --p2: #18897e;
+    /* IM — teal-green */
+    --p3: #2563b0;
+    /* JR — blue */
+    --p4: #8e3a96;
+    /* MR — magenta-purple */
 
     /* Pathologist light tint backgrounds (for service row highlights) */
-    --p1-bg: rgba(185, 78, 42, 0.09);
-    --p2-bg: rgba(31, 94, 91, 0.09);
-    --p3-bg: rgba(184, 133, 18, 0.09);
-    --p4-bg: rgba(107, 74, 142, 0.09);
+    --p1-bg: rgba(192, 57, 43, 0.09);
+    --p2-bg: rgba(24, 137, 126, 0.09);
+    --p3-bg: rgba(37, 99, 176, 0.09);
+    --p4-bg: rgba(142, 58, 150, 0.09);
 
     /* Service colors */
     --svc-cyto: #c2410c;
@@ -45,10 +47,11 @@
     --svc-off-service-director: #64748b;
     --svc-off-service-lab: #64748b;
 
-    /* PTO styling */
-    --pto-bg: #f1ebd8;
-    --pto-ink: #6b5d3a;
-    --pto-stripe: #e2d8b8;
+    /* PTO styling — neutral cool grey, deliberately hue-free so it can
+       never be confused with any pathologist identity color. */
+    --pto-bg: #e4e8ec;
+    --pto-ink: #4a5663;
+    --pto-stripe: #c8d0d8;
 
     /* ── Procedure colour categories ── */
     --proc-eus:      #c87d45;   /* 1. EUS  → orange-brown  */
@@ -970,10 +973,11 @@ main {
     text-transform: uppercase;
     background: var(--accent);
     color: var(--paper);
-    padding: 2px 5px;
+    padding: 1px 5px;
     border-radius: 3px;
     flex-shrink: 0;
     line-height: 1.2;
+    margin: -1px 0;          /* keep the badge from making the row taller */
 }
 
 /* Remove the .wd-row .oc-mark::after block entirely */
@@ -993,7 +997,9 @@ main {
     background: #4E2E85;
     border: 1px solid #4E2E85;
     color: white;
-    padding: 4px 4px;
+    padding: 5px 7px;            /* match a regular pathologist row */
+    min-height: 13.8px;          /* floor to the regular row's text height */
+    box-sizing: border-box;
     justify-content: center;
 }
 .wd-row.lf-sendout .lf-label {
@@ -1012,11 +1018,140 @@ main {
     display: none;
 }
 .month-view .day .wd-row.lf-sendout {
-    padding: 2px 6px;
+    padding: 3px 6px;            /* match a regular month-view row */
+    min-height: 12.6px;          /* floor to the regular row's text height */
+    box-sizing: border-box;
 }
 .month-view .day .wd-row.lf-sendout .lf-label {
     font-size: 8.5px;
     letter-spacing: 0.08em;
+}
+
+/* Keep the pathologist area the same height whether or not a day has a
+   Lake Forest sendout banner. On days that have no .lf-sendout row, reserve
+   the banner's footprint with a transparent spacer BELOW the assignments so
+   the layout stays the same height as flagged days.
+   The :has() selector matches a .wd-rows that does NOT contain a banner. */
+.wd-rows:not(:has(.wd-row.lf-sendout))::after {
+    content: "";
+    display: block;
+    height: 23.8px;        /* one row's height + the .wd-rows row gap */
+    flex-shrink: 0;
+}
+.month-view .day .wd-rows:not(:has(.wd-row.lf-sendout))::after {
+    height: 16.6px;        /* tighter row + gap in the month view */
+}
+
+/* ─────────────────── NATALIE PTO BANNER ─────────────────── */
+/* Display-only "Natalie PTO" marker shown directly above the hourly
+   procedure grid on flagged days, in both week and day views. Styled to
+   echo the Lake Forest sendout banner but in a distinct teal so the two
+   are never confused. */
+.natalie-pto-banner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #0E7C7B;
+    border: 1px solid #0E7C7B;
+    color: #fff;
+    padding: 5px 7px;
+    min-height: 13.8px;
+    box-sizing: border-box;
+    border-radius: 5px;   /* match the Lake Forest sendout indicator */
+    /* Small inset so the rounded corners read cleanly against the grid edges
+       and there's a touch of separation from the hour rows below. */
+    margin: 6px 6px 4px;
+    flex-shrink: 0;
+}
+.natalie-pto-banner .natalie-pto-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #fff;
+    line-height: 1.2;
+}
+.day-view .natalie-pto-banner {
+    min-height: 18px;
+}
+.day-view .natalie-pto-banner .natalie-pto-label {
+    font-size: 11px;
+}
+
+/* The .wd-hours-head is an empty spacer strip at the top of the grid. When
+   the Natalie PTO banner is present it directly precedes the head, leaving a
+   redundant gap between the banner and the first hour row — collapse it so
+   the hour rows sit flush beneath the banner. */
+.natalie-pto-banner + .wd-hours-head {
+    display: none;
+}
+
+/* Inline "×" remove control on the banner (Gross Room / admin only). */
+.natalie-pto-banner.removable {
+    /* keep the label visually centered while leaving room for the × at the
+       right edge */
+    padding-right: 22px;
+}
+.natalie-pto-remove {
+    position: absolute;
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    font-size: 14px;
+    line-height: 1;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.18);
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background 0.12s ease;
+}
+.natalie-pto-remove:hover {
+    background: rgba(255, 255, 255, 0.38);
+}
+
+/* Match the swatch dot colour for the list rows in the Natalie PTO modal. */
+.pto-list-item.natalie-pto-item .pdot {
+    background: #0E7C7B;
+}
+
+/* ─────────────────── NATALIE PTO TOOLBAR BUTTON ─────────────────── */
+.toolbar-np-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 10px;
+    padding: 6px 11px;
+    font-family: inherit;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: #0E7C7B;
+    background: rgba(14, 124, 123, 0.10);
+    border: 1px solid rgba(14, 124, 123, 0.35);
+    border-radius: 7px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+.toolbar-np-btn:hover {
+    background: rgba(14, 124, 123, 0.18);
+    border-color: rgba(14, 124, 123, 0.55);
+}
+.toolbar-np-btn .toolbar-np-plus {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+}
+.np-status {
+    line-height: 1.4;
 }
 
 /* ─────────────────── HOURLY GRID (week view) ─────────────────── */
@@ -2664,19 +2799,19 @@ main {
 
 /* Lake Forest sendout — banner row inside the day-detail modal */
 .day-detail-row.lf-row {
-    background: linear-gradient(90deg, #e8d6c8 0%, #f0e0d4 100%);
-    border: 1px solid #c69477;
-    color: #6b3a1e;
+    background: #4E2E85;
+    border: 1px solid #4E2E85;
+    color: #fff;
 }
 .day-detail-row.lf-row .ddot {
-    background: #6b3a1e;
+    background: #fff;
 }
 .day-detail-row.lf-row .dname {
-    color: #6b3a1e;
+    color: #fff;
     font-weight: 600;
 }
 .day-detail-row.lf-row .dservice {
-    color: #6b3a1e;
+    color: #fff;
     font-family: var(--mono);
     font-size: 10.5px;
     letter-spacing: 0.08em;
@@ -4233,11 +4368,14 @@ main {
     color: var(--accent);
 }
 
-/* List container on the page: no max-height (the page itself scrolls) */
+/* List container on the page: scrolls within itself when long, like the
+   tracker's History list. The header and tabs above stay static; only this
+   list gets a scrollbar once it exceeds the available height. Reverted to
+   natural page scroll on narrow viewports (see the max-width:1100px rule). */
 .requests-page-list {
-    max-height: none;
-    overflow: visible;
-    padding-right: 0;
+    max-height: calc(100vh - 300px);
+    overflow-y: auto;
+    padding-right: 6px;
     gap: 12px;
 }
 
@@ -4433,6 +4571,15 @@ main {
     gap: 10px;
 }
 
+/* Like the requests list and the tracker's History list: the changes log
+   scrolls within itself when it gets long, keeping the header/tabs static.
+   Reverted to natural page scroll below 1100px. */
+.changes-page-content .chg-list {
+    max-height: calc(100vh - 300px);
+    overflow-y: auto;
+    padding-right: 6px;
+}
+
 /* Individual change card. Distinct from request cards: no status pill,
    no action buttons, narrower vertical padding. Uses a left-edge accent
    tinted by the change type so categories are scannable at a glance. */
@@ -4445,7 +4592,7 @@ main {
     border-left: 3px solid var(--rule);
 }
 
-.chg-card.kind-pto      { border-left-color: #8a6614; }
+.chg-card.kind-pto      { border-left-color: var(--pto-ink); }
 .chg-card.kind-oncall   { border-left-color: #2a8c46; }
 .chg-card.kind-service  { border-left-color: #3d6fa8; }
 .chg-card.kind-recompute { border-left-color: var(--ink-3); }
@@ -6884,5 +7031,14 @@ table.tracking-summary tbody td.t-sum-total {
         min-height: 0;
         overflow-y: visible;
         padding-bottom: 0;
+    }
+
+    /* Match the History list: on narrow/stacked layouts let the page
+       scroll naturally instead of confining scroll to the list. */
+    .requests-page-list,
+    .changes-page-content .chg-list {
+        max-height: none;
+        overflow-y: visible;
+        padding-right: 0;
     }
 }

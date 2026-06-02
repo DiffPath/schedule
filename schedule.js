@@ -7584,6 +7584,15 @@ if (mobilePathSel) {
     let tracking = false, dragging = false;
     let isAnimating = false;
 
+    // Live-drag tracking. lastDx is the most recent horizontal offset the
+    // band was actually moved to during touchmove; that is the position
+    // the user *sees*, so commit decisions key off it rather than the
+    // touchend coordinate (a finger commonly rolls back a few px on
+    // release, which would otherwise drop a clearly-past-half drag back
+    // to the original day). prevDx/prevT/lastT feed a release-velocity
+    // estimate so a deliberate fling still commits even under half.
+    let lastDx = 0, lastT = 0, prevDx = 0, prevT = 0;
+
     // Neighbor snapshots built on first confirmed horizontal move and
     // torn down at the end of every gesture (commit or abort).
     let prevSnap = null, nextSnap = null;
@@ -7591,7 +7600,6 @@ if (mobilePathSel) {
 
     const MIN_DISTANCE_PX = 60;   // horizontal travel required to count as a swipe
     const MAX_VERTICAL_PX  = 60;  // vertical drift allowed (keeps scroll gestures intact)
-    const MAX_DURATION_MS  = 600; // flicks only — long slow drags are probably scrolling
     const ANIM_MS          = 280; // slide-in / slide-out duration
 
     // Compute the cursor value for the period `delta` steps from the
@@ -7810,6 +7818,8 @@ if (mobilePathSel) {
         startTime = Date.now();
         tracking  = true;
         dragging  = false;
+        lastDx = 0; lastT = startTime;
+        prevDx = 0; prevT = startTime;
         // Kill any residual transition so the live-drag is instant.
         mainEl.style.transition = 'none';
         mainEl.style.transform  = '';
@@ -7842,6 +7852,10 @@ if (mobilePathSel) {
         // Confirmed horizontal drag: move the whole band with the finger
         // and suppress native scroll.
         e.preventDefault();
+        // Record where the band actually is, plus a short velocity window
+        // (previous sample → current sample) for the release-fling test.
+        prevDx = lastDx; prevT = lastT;
+        lastDx = dx;     lastT = Date.now();
         moveAll(dx);
     }, { passive: false });
 
@@ -7851,10 +7865,15 @@ if (mobilePathSel) {
         if (!dragging) return;
         dragging = false;
 
-        const elapsed = Date.now() - startTime;
         const t  = e.changedTouches[0];
-        const dx = t.clientX - startX;
         const dy = t.clientY - startY;
+
+        // Use the band's last *rendered* position, not the touchend
+        // coordinate. The two can differ by several px when the finger
+        // rolls back on lift; lastDx is what the user actually sees, so
+        // committing off it removes the "looked past half but snapped
+        // back" inconsistency.
+        const dx = lastDx;
 
         // Too much vertical drift — this was a scroll, not a swipe.
         if (Math.abs(dy) > MAX_VERTICAL_PX) {
@@ -7862,16 +7881,25 @@ if (mobilePathSel) {
             return;
         }
 
-        // Commit if EITHER:
-        //  (a) the band has been dragged at least halfway across (distance
-        //      commit — works for slow drags and paused gestures), or
-        //  (b) it was a quick flick that cleared the minimum distance
-        //      (lets short fast swipes commit before reaching 50%).
-        const draggedHalf = snapWidth > 0 && Math.abs(dx) >= snapWidth * 0.5;
-        const quickFlick   = elapsed <= MAX_DURATION_MS &&
-                             Math.abs(dx) >= MIN_DISTANCE_PX;
+        // Release velocity in px/ms over the last touchmove window, signed
+        // to match the drag direction. A short, fast fling should commit
+        // even when the band never reached the halfway line.
+        const dt  = Math.max(1, lastT - prevT);
+        const vel = (lastDx - prevDx) / dt;
 
-        if (draggedHalf || quickFlick) {
+        // Commit if EITHER:
+        //  (a) the band was dragged at least halfway across (works for
+        //      slow drags and gestures paused at the end), or
+        //  (b) it was a deliberate fling past the minimum distance whose
+        //      release velocity is moving in the same direction as the
+        //      drag (lets short fast swipes commit before reaching 50%).
+        const draggedHalf = snapWidth > 0 && Math.abs(dx) >= snapWidth * 0.5;
+        const FLING_VEL    = 0.5; // px/ms ≈ a brisk flick
+        const flung        = Math.abs(dx) >= MIN_DISTANCE_PX &&
+                             Math.abs(vel) >= FLING_VEL &&
+                             Math.sign(vel) === Math.sign(dx);
+
+        if (draggedHalf || flung) {
             // Valid swipe — commit. swipe left → next; swipe right → prev.
             commitAnimation(dx < 0, dx);
         } else {
@@ -7879,13 +7907,9 @@ if (mobilePathSel) {
         }
     }, { passive: true });
 
-    mainEl.addEventListener('touchcancel', (e) => {
-        if (dragging) {
-            // Use last-known dx if available, else 0.
-            const t = (e.changedTouches && e.changedTouches[0]) || null;
-            const dx = t ? (t.clientX - startX) : 0;
-            snapBack(dx);
-        }
+    mainEl.addEventListener('touchcancel', () => {
+        // Cancel always aborts; snap back from the last rendered position.
+        if (dragging) snapBack(lastDx);
         tracking = false;
         dragging = false;
     }, { passive: true });

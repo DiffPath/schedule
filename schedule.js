@@ -9,9 +9,11 @@ const firebaseConfig = {
     appId: "1:529858873691:web:2f4f60038da8db4a0af27e",
     measurementId: "G-WEKS3DWMCG"
 };
+
 firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 const auth = firebase.auth();
+const analytics = firebase.analytics();
 
 // ────────────── AUTH MAPPING ──────────────
 // Authentication moved from a homegrown plaintext-password node in the DB
@@ -190,20 +192,34 @@ const HOURS_END = 16;  // last hour shown (so last slot is HOURS_END:30 = 4:30 P
 // "<location> - <name>" (e.g. "HH - CT Random Kidney bx").
 const PROCEDURE_TYPES = [
     'EUS',
-    'EBUS/ION',
+    'EBUS',
     'IR Thyroid bx',
     'IR Thyroid w/ Afirma',
     'CT Random Kidney bx',
     'CT Bone Marrow',
     'Lymph Node bx',
+    'CT lung bx',
     'Lumpectomy',
     'Mastectomy',
-    'Bilateral Mastectomy',
-    'Excisional bx',
     'FS Brain',
     'FS Lung',
     'FS Parathyroid',   
 ];
+
+// Some procedure types act as expandable parents: clicking the little
+// chevron on the right of the button reveals sub-options (variants) that can
+// be selected instead of the base name. The variant strings are stored as the
+// procedureName verbatim, so they flow through saving / colouring exactly like
+// any other name (they inherit the same colour category as the base item).
+// To give an item variants, add an entry here keyed by the base name.
+const PROCEDURE_VARIANTS = {
+    'EUS': ['EUS/ERCP'],
+    'EBUS': ['EBUS/ION'],
+    'IR Thyroid bx': ['IR Thyroid bx x2', 'IR Thyroid bx x3'],
+    'IR Thyroid w/ Afirma': ['IR Thyroid w/ Afirma x2', 'IR Thyroid w/ Afirma x3'],
+    'Lumpectomy': ['Excisional bx'],
+    'Mastectomy': ['Bilateral Mastectomy'],
+};
 
 const PROCEDURE_LOCATIONS = ['HH', 'MH'];
 
@@ -1975,7 +1991,13 @@ function _reqDateRange(start, end) {
 
 function _pathName(id) {
     const p = pathologists.find(x => x.id === id);
-    return p ? p.name : `(unknown #${id})`;
+    if (p) return p.name;
+    // Special non-pathologist accounts aren't in the pathologists array, so
+    // resolve their display names explicitly before falling back to unknown.
+    if (id === MANAGER_ID) return 'Kathleen';
+    if (id === GROSS_ROOM_ID) return 'Gross Room';
+    if (id === HISTOLOGY_ID) return 'Histology';
+    return `(unknown #${id})`;
 }
 
 // Returns { title, body } for a given request.  Used both in the request
@@ -3265,6 +3287,14 @@ regListener('scheduler/conferenceLog', snap => {
         && typeof renderTrackingPage === 'function') {
         renderTrackingPage();
     }
+    // Conferences also render on the procedure grid (week/day views), so a
+    // change to the log must repaint those views too. Only the procedure-
+    // bearing views show them; month/year are summary-only.
+    if (pathologistsReady && vacationsReady
+        && (typeof view !== 'undefined') && (view === 'week' || view === 'day')
+        && typeof renderMain === 'function') {
+        renderMain();
+    }
 }, err => {
     console.error('Firebase conferenceLog error:', err);
 });
@@ -3734,6 +3764,99 @@ function getBigsPathForDate(date) {
     return null;
 }
 
+// ── Conference time helpers ───────────────────────────────────────────────
+// Default start time ("HH:MM", 24h) for a conference, given its type and the
+// calendar date it falls on. Rules:
+//   • Breast Conference        → 12:00 PM  (held Fridays)
+//   • Lung Conference          → 12:00 PM  (held on its designated day)
+//   • Morning / CDH (Heme)     →  7:00 AM  on Fridays
+//   • All other conferences    →  7:30 AM
+//   • There are NO 7:30 AM conferences on Fridays, so any non-breast
+//     conference that lands on a Friday defaults to 7:00 AM instead.
+// `dateStr` is a 'YYYY-MM-DD' string (may be empty/invalid → treated as a
+// non-Friday weekday so the generic 7:30 AM default applies).
+function defaultConfTime(type, dateStr) {
+    if (type === 'breast' || type === 'lung') return '12:00';
+
+    let isFriday = false;
+    if (dateStr) {
+        try {
+            const d = parseDate(dateStr);
+            if (d && !isNaN(d.getTime())) isFriday = (d.getDay() === 5);
+        } catch (_) { /* leave isFriday false */ }
+    }
+    // Friday: no 7:30 AM slot exists, so every non-breast conference is 7:00 AM
+    // (this also covers the Morning/CDH Heme-on-Friday case).
+    if (isFriday) return '07:00';
+    return '07:30';
+}
+
+// Returns the effective start time for a stored conference entry: its own
+// `time` field when present and valid, otherwise the default derived from its
+// type and date. Lets historical entries (logged before times were tracked)
+// still render on the schedule at a sensible hour.
+function effectiveConfTime(entry) {
+    if (entry && typeof entry.time === 'string' && /^\d{2}:\d{2}$/.test(entry.time)) {
+        return entry.time;
+    }
+    return defaultConfTime(entry && entry.type, entry && entry.date);
+}
+
+// Returns a flat array of conference entries scheduled for the given day key,
+// each shaped { key, time, type, subtype, otherTitle, note, pathologistId,
+// label }. Only entries whose presenter matches the current path filter are
+// returned: conferences live on the presenter's OWN schedule, so they appear
+// in an individual pathologist's view but never in the all-group view (where
+// they would clutter every column with one person's commitment).
+// Returns a flat array of conference entries scheduled for the given day key,
+// each shaped { key, time, type, subtype, otherTitle, note, pathologistId,
+// label }. A conference is a personal commitment of its presenter, so it is
+// shown ONLY on the signed-in pathologist's own schedule — i.e. when the
+// logged-in user IS the presenter. It appears in both the Group and the
+// Individual views (it's their commitment either way) but is never visible to
+// any other user, and the non-pathologist accounts (gross room, manager,
+// histology) never have personal conferences so they see none.
+function getConferencesForDay(dayKey) {
+    // Resolve the signed-in pathologist. Special non-pathologist accounts
+    // (string ids) have no personal conferences.
+    const meId = (typeof loggedInPathId === 'number') ? loggedInPathId : null;
+    if (meId === null) return [];
+
+    const out = [];
+    Object.entries(conferenceLog || {}).forEach(([key, e]) => {
+        if (!e || e.date !== dayKey) return;
+        // Only the presenter sees their own conference on the schedule.
+        if (Number(e.pathologistId) !== meId) return;
+        out.push({
+            key,
+            time: effectiveConfTime(e),
+            type: e.type,
+            subtype: e.subtype || null,
+            otherTitle: e.otherTitle || null,
+            note: e.note || null,
+            pathologistId: e.pathologistId,
+            label: confScheduleLabel(e),
+        });
+    });
+    return out.sort((a, b) => a.time.localeCompare(b.time));
+}
+
+// Short label for a conference pill on the schedule, e.g. "Breast Conf",
+// "Morning/CDH (Heme)", or "Tumor Board — NMH Gyn Onc".
+function confScheduleLabel(e) {
+    const meta = CONF_TYPE_BY_ID[e.type];
+    if (e.type === 'cdh') {
+        return 'Morning/CDH' + (e.subtype ? ` (${e.subtype})` : '');
+    }
+    if (e.type === 'other') {
+        return 'Tumor Board' + (e.otherTitle ? ` — ${e.otherTitle}` : '');
+    }
+    if (e.type === 'breast') return 'Breast Conf';
+    if (e.type === 'lung') return 'Lung Conf';
+    if (e.type === 'thoracic') return 'Thoracic Conf';
+    return (meta && meta.singular) || 'Conference';
+}
+
 // ── Conference modal: open / close / save / delete ───────────────────────
 // Track which entry is being edited (null when adding a new one)
 let _editingConferenceKey = null;
@@ -3854,6 +3977,7 @@ function openConferenceModal(editKey) {
     const subtypeSel = document.getElementById('confSubtype');
     const otherTitleInput = document.getElementById('confOtherTitle');
     const dateInput = document.getElementById('confDate');
+    const timeInput = document.getElementById('confTime');
     const pathSel = document.getElementById('confPathologist');
     const noteInput = document.getElementById('confNote');
     const deleteBtn = document.getElementById('confDelete');
@@ -3881,6 +4005,7 @@ function openConferenceModal(editKey) {
         subtypeSel.value = CDH_SUBTYPES.includes(e.subtype) ? e.subtype : 'GI';
         otherTitleInput.value = e.otherTitle || '';
         dateInput.value = e.date || '';
+        if (timeInput) { timeInput.value = effectiveConfTime(e); timeInput.dataset.userEdited = '1'; }
         if (pathologists.some(p => p.id === e.pathologistId)) {
             pathSel.value = String(e.pathologistId);
         }
@@ -3904,6 +4029,15 @@ function openConferenceModal(editKey) {
         // pathologist who will be on McH Bigs service that day.
         const _predDate = predictedConferenceDate(_confType);
         dateInput.value = fmt(_predDate);
+        // Autopopulate the time placeholder for this conference + date per the
+        // standing conference schedule (breast/lung noon, Friday non-breast
+        // 7 AM, everything else 7:30 AM).
+        if (timeInput) {
+            const _t = defaultConfTime(_confType, fmt(_predDate));
+            timeInput.value = _t;
+            timeInput.placeholder = formatTime12(_t);
+            timeInput.dataset.userEdited = '';
+        }
         const _bigsId = getBigsPathForDate(_predDate);
         if (_bigsId !== null && pathologists.some(p => p.id === _bigsId)) {
             pathSel.value = String(_bigsId);
@@ -3913,6 +4047,24 @@ function openConferenceModal(editKey) {
     }
 
     syncConferenceTypeFields();
+
+    // Final guarantee: make sure the time field holds a valid HH:MM value
+    // before the modal is shown. This runs regardless of which branch above
+    // executed and regardless of how the modal was opened (direct add button,
+    // edit, or the tracking-page per-conference buttons that set the type and
+    // dispatch a change event after this function returns). For edits we keep
+    // the entry's stored time; for new entries we derive the standing default
+    // from the currently-selected type + date.
+    if (timeInput) {
+        if (_editingConferenceKey && conferenceLog[_editingConferenceKey]) {
+            timeInput.value = effectiveConfTime(conferenceLog[_editingConferenceKey]);
+        } else if (!/^\d{2}:\d{2}$/.test(timeInput.value || '')) {
+            const _t = defaultConfTime(typeSel.value, dateInput.value);
+            timeInput.value = _t;
+            timeInput.placeholder = formatTime12(_t);
+        }
+    }
+
     renderConferenceDaySchedule();
     back.classList.add('open');
     // Focus first relevant field
@@ -3943,6 +4095,7 @@ async function saveConferenceEntry() {
     const subtypeSel = document.getElementById('confSubtype');
     const otherTitleInput = document.getElementById('confOtherTitle');
     const dateInput = document.getElementById('confDate');
+    const timeInput = document.getElementById('confTime');
     const pathSel = document.getElementById('confPathologist');
     const noteInput = document.getElementById('confNote');
     const errEl = document.getElementById('confFormError');
@@ -3958,6 +4111,10 @@ async function saveConferenceEntry() {
     const date = dateInput.value;
     const pathId = parseInt(pathSel.value, 10);
     const note = (noteInput.value || '').trim();
+    // Time: use the entered value when valid, otherwise fall back to the
+    // standing default for this conference type + date.
+    let time = (timeInput && timeInput.value) ? timeInput.value : '';
+    if (!/^\d{2}:\d{2}$/.test(time)) time = defaultConfTime(type, date);
 
     if (!type || !CONF_TYPE_BY_ID[type]) {
         showError('Please select a conference type.');
@@ -3976,6 +4133,7 @@ async function saveConferenceEntry() {
         pathologistId: pathId,
         type,
         date,
+        time,
     };
     if (type === 'cdh') {
         const st = subtypeSel.value;
@@ -4090,8 +4248,31 @@ function _confChangeSummary(verb, type, dateKey, pathObj, payload) {
     // openConferenceModal() handles the initial paint.
     const confDateEl = document.getElementById('confDate');
     const confPathEl = document.getElementById('confPathologist');
+    const confTimeEl = document.getElementById('confTime');
+
+    // Re-apply the standing default time for the currently-selected type +
+    // date. Skipped while editing an existing entry (its stored time stands)
+    // and skipped once the user has manually touched the time field, so we
+    // never clobber a deliberate choice.
+    function reapplyDefaultConfTime() {
+        if (_editingConferenceKey) return;
+        if (confTimeEl && confTimeEl.dataset.userEdited === '1') return;
+        if (!confTimeEl || !typeSel || !confDateEl) return;
+        const t = defaultConfTime(typeSel.value, confDateEl.value);
+        confTimeEl.value = t;
+        confTimeEl.placeholder = formatTime12(t);
+    }
+
+    // Note when the user edits the time directly so autofill stops overriding.
+    if (confTimeEl) {
+        confTimeEl.addEventListener('input', () => { confTimeEl.dataset.userEdited = '1'; });
+    }
+
     if (confDateEl) {
-        confDateEl.addEventListener('change', renderConferenceDaySchedule);
+        confDateEl.addEventListener('change', () => {
+            reapplyDefaultConfTime();
+            renderConferenceDaySchedule();
+        });
         confDateEl.addEventListener('input', renderConferenceDaySchedule);
     }
     if (confPathEl) confPathEl.addEventListener('change', renderConferenceDaySchedule);
@@ -4116,6 +4297,10 @@ function _confChangeSummary(verb, type, dateKey, pathObj, payload) {
         if (bigsId !== null && pathologists.some(p => p.id === bigsId)) {
             pathSel.value = String(bigsId);
         }
+        // Switching conference type resets the time back to that type's
+        // standing default (clearing any prior manual edit).
+        if (confTimeEl) confTimeEl.dataset.userEdited = '';
+        reapplyDefaultConfTime();
         // Programmatic value changes don't fire 'change', so repaint manually.
         renderConferenceDaySchedule();
     });
@@ -4704,6 +4889,12 @@ function renderWeek() {
 function renderHourGrid(date) {
     const dayKey = fmt(date);
     const procs = getProceduresForDay(dayKey);
+    // Conferences the signed-in pathologist is presenting at this day. These
+    // are personal to the presenter (see getConferencesForDay), so they show
+    // only on that user's own schedule and are empty for everyone else. They
+    // share the hourly grid with procedures but render as a visually distinct
+    // banner so the conference commitment is unmistakable next to procedures.
+    const confs = getConferencesForDay(dayKey);
 
     // Group procedures into the half-hour slot they fall into. A procedure
     // whose start time is exactly on a :00 or :30 boundary goes in that slot;
@@ -4718,6 +4909,16 @@ function renderHourGrid(date) {
         bySlot[slotKey].push(p);
     });
 
+    // Conferences bucket the same way. Tagged so the slot renderer knows to
+    // draw a conference pill rather than a procedure pill.
+    const confBySlot = {};
+    confs.forEach(c => {
+        const slotKey = slotKeyForTime(c.time);
+        if (!slotKey) return; // outside the visible window
+        if (!confBySlot[slotKey]) confBySlot[slotKey] = [];
+        confBySlot[slotKey].push(c);
+    });
+
     let rowsHtml = '';
     for (let h = HOURS_START; h <= HOURS_END; h++) {
         for (let m of [0, 30]) {
@@ -4725,6 +4926,15 @@ function renderHourGrid(date) {
             const isHourMark = (m === 0);
             const cls = isHourMark ? 'hour-mark' : 'half';
             const label = isHourMark ? formatHour12(h) : '';
+            // Conference pills render first so they sit at the front of the
+            // slot and catch the eye before the procedure pills.
+            const confItems = (confBySlot[timeKey] || []).map(c => {
+                const lbl = `${formatTime12Short(c.time)} ${c.label}`;
+                const tipParts = [c.label, formatTime12(c.time)];
+                if (c.note) tipParts.push(c.note);
+                const tooltip = tipParts.join(' — ');
+                return `<span class="conf-item conf-type-${escapeHtml(c.type)}" data-day="${dayKey}" data-conf-key="${escapeHtml(c.key)}" tabindex="0" title="${escapeHtml(tooltip)}"><span class="conf-item-dot" aria-hidden="true"></span>${escapeHtml(lbl)}</span>`;
+            }).join('');
             const items = (bySlot[timeKey] || []).map(p => {
                 // Always prefix the pill label with the exact start time so
                 // it's visible at a glance regardless of whether the time
@@ -4740,7 +4950,7 @@ function renderHourGrid(date) {
             }).join('');
             rowsHtml += `<div class="hour-row ${cls}" data-day="${dayKey}" data-time="${timeKey}" title="Double-click an empty slot to add a procedure">
               <div class="hour-label">${label}</div>
-              <div class="hour-slot">${items}</div>
+              <div class="hour-slot">${confItems}${items}</div>
             </div>`;
         }
     }
@@ -4976,7 +5186,9 @@ function attachHourGridHandlers() {
             if (isHistology()) return;
             // If the dblclick landed on an existing pill, the pill's own
             // handler opens the edit modal — don't open the add modal.
-            if (e.target.closest('.proc-item')) return;
+            // Conference pills are read-only on the schedule (managed from the
+            // Tracking page), so a dblclick on one is simply ignored here.
+            if (e.target.closest('.proc-item') || e.target.closest('.conf-item')) return;
             const dayKey = row.dataset.day;
             const timeKey = row.dataset.time;
             if (!dayKey || !timeKey) return;
@@ -5172,6 +5384,9 @@ function openProcedureModal(dayKey, timeKey, editingKey) {
     if (titleEl) titleEl.textContent = editingKey ? 'Edit Procedure' : 'Add Procedure';
     const confirmBtn = document.getElementById('procConfirm');
     if (confirmBtn) confirmBtn.textContent = editingKey ? 'Save Changes' : 'Add Procedure';
+    // Delete is only available when editing an existing procedure.
+    const deleteBtn = document.getElementById('procDelete');
+    if (deleteBtn) deleteBtn.style.display = editingKey ? '' : 'none';
 
     // Prefill the time input. For new procedures this is the half-hour slot
     // the user double-clicked; for edits, the procedure's existing time.
@@ -5194,7 +5409,30 @@ function openProcedureModal(dayKey, timeKey, editingKey) {
     grid.innerHTML = PROCEDURE_TYPES.map(name => {
         // Derive the fixed category (no location needed for EUS/EBUS/surgical)
         const cat = getProcedureCategory(null, name);
-        return `<button type="button" class="proc-type-btn proc-cat-${cat}" data-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`;
+        const variants = PROCEDURE_VARIANTS[name];
+
+        // Plain (non-expandable) button — unchanged behaviour.
+        if (!variants || !variants.length) {
+            return `<button type="button" class="proc-type-btn proc-cat-${cat}" data-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`;
+        }
+
+        // Expandable parent: the main label still selects the base name; the
+        // chevron toggles a sub-option list rendered just beneath it. The
+        // parent + its sub-options share one grid cell that spans both columns.
+        const subBtns = variants.map(v => {
+            const vcat = getProcedureCategory(null, v);
+            return `<button type="button" class="proc-type-btn proc-type-subbtn proc-cat-${vcat}" data-name="${escapeHtml(v)}">${escapeHtml(v)}</button>`;
+        }).join('');
+
+        return `<div class="proc-type-expandable" data-parent="${escapeHtml(name)}">` +
+            `<button type="button" class="proc-type-btn proc-type-parent proc-cat-${cat}" data-name="${escapeHtml(name)}" aria-expanded="false">` +
+            `<span class="proc-type-parent-label">${escapeHtml(name)}</span>` +
+            `<span class="proc-type-caret" role="button" tabindex="0" aria-label="Show options for ${escapeHtml(name)}">` +
+            `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,6 8,10 12,6"/></svg>` +
+            `</span>` +
+            `</button>` +
+            `<div class="proc-type-suboptions">${subBtns}</div>` +
+            `</div>`;
     }).join('') +
         `<div class="proc-freetext-wrap" id="procFreetextWrap">` +
         `<input type="text" id="procFreetextInput" class="proc-freetext-input" placeholder="Or type a custom procedure…" maxlength="80">` +
@@ -5203,16 +5441,25 @@ function openProcedureModal(dayKey, timeKey, editingKey) {
     // Pre-select the matching preset button or populate the freetext input
     // when editing an existing procedure.
     if (existing && existing.procedureName) {
-        const isPreset = PROCEDURE_TYPES.includes(existing.procedureName);
-        if (isPreset) {
+        const existingName = existing.procedureName;
+        const isPreset = PROCEDURE_TYPES.includes(existingName);
+        // Find the parent whose variant list contains this name (if any).
+        const parentOfVariant = Object.keys(PROCEDURE_VARIANTS).find(
+            p => PROCEDURE_VARIANTS[p].includes(existingName)
+        );
+        if (isPreset || parentOfVariant) {
             const presetBtn = document.querySelector(
-                '#procTypeGrid .proc-type-btn[data-name="' + CSS.escape(existing.procedureName) + '"]'
+                '#procTypeGrid .proc-type-btn[data-name="' + CSS.escape(existingName) + '"]'
             );
-            if (presetBtn) presetBtn.classList.add('selected');
+            if (presetBtn) {
+                presetBtn.classList.add('selected');
+                // For a variant, leave the dropdown collapsed — the parent row
+                // will display the chosen variant via syncProcParentLabels().
+            }
         } else {
             const input = document.getElementById('procFreetextInput');
             const wrap = document.getElementById('procFreetextWrap');
-            if (input) input.value = existing.procedureName;
+            if (input) input.value = existingName;
             if (wrap) wrap.classList.add('active');
         }
     }
@@ -5228,10 +5475,12 @@ function openProcedureModal(dayKey, timeKey, editingKey) {
         const wrap = document.getElementById('procFreetextWrap');
         if (wrap) wrap.classList.toggle('active', val.length > 0);
         _pendingProc.procedureName = val || null;
+        syncProcParentLabels();
         updateModalProcColors();
         updateProcConfirmEnabled();
     });
 
+    syncProcParentLabels();
     updateModalProcColors();
     updateProcConfirmEnabled();
     document.getElementById('procModalBack').classList.add('open');
@@ -5328,6 +5577,21 @@ async function saveProcedure() {
     }
 }
 
+// Delete the procedure currently being edited. Only callable in edit mode
+// (the Delete button is hidden otherwise). Confirms first, since removal is
+// permanent.
+async function deleteProcedure() {
+    if (!_pendingProc || !_pendingProc.editingKey) return;
+    if (!confirm('Delete this procedure? This cannot be undone.')) return;
+    const { dayKey, editingKey } = _pendingProc;
+    try {
+        await db.ref('scheduler/procedures/' + dayKey + '/' + editingKey).remove();
+        closeProcedureModal();
+    } catch (err) {
+        showToast('Could not delete procedure: ' + (err.message || err), { type: 'error' });
+    }
+}
+
 // Wire up the modal once. Inputs delegate from the modal back so the
 // dynamically-rendered procedure-type buttons work without re-binding.
 
@@ -5345,8 +5609,8 @@ async function saveProcedure() {
   <div class="proc-header">
     <div class="proc-header-text">
       <h3 id="procModalTitle">Add Procedure</h3>
-      <p class="sub" id="procModalSub"></p>
     </div>
+    <p class="sub proc-header-date" id="procModalSub"></p>
   </div>
 
   <div class="proc-section-label">Time</div>
@@ -5372,6 +5636,7 @@ async function saveProcedure() {
   <div id="procTypeGrid" class="proc-type-grid"></div>
 
   <div class="modal-actions">
+    <button id="procDelete" class="danger" type="button" style="display:none;">Delete</button>
     <button id="procCancel">Cancel</button>
     <button id="procConfirm" class="primary" disabled>Add Procedure</button>
   </div>
@@ -5388,6 +5653,7 @@ document.getElementById('procModalBack').addEventListener('input', e => {
 
 document.getElementById('procCancel').addEventListener('click', closeProcedureModal);
 document.getElementById('procConfirm').addEventListener('click', saveProcedure);
+document.getElementById('procDelete').addEventListener('click', deleteProcedure);
 document.getElementById('procModalBack').addEventListener('click', e => {
     if (e.target.id === 'procModalBack') closeProcedureModal();
 });
@@ -5400,11 +5666,58 @@ document.getElementById('procLocToggle').addEventListener('change', e => {
     updateProcConfirmEnabled();
 });
 
+// Keep each expandable parent's collapsed label/selected-state in sync with
+// the current selection. When a variant is chosen, its parent row shows the
+// variant's name and reads as selected even while the dropdown is collapsed.
+// When the base or any other item is chosen, the parent reverts to its base
+// label. Always called after the selection changes.
+function syncProcParentLabels() {
+    const selectedName = _pendingProc ? _pendingProc.procedureName : null;
+    document.querySelectorAll('#procTypeGrid .proc-type-expandable').forEach(exp => {
+        const base = exp.dataset.parent;
+        const parentBtn = exp.querySelector('.proc-type-parent');
+        const label = exp.querySelector('.proc-type-parent-label');
+        if (!parentBtn || !label) return;
+
+        const variants = PROCEDURE_VARIANTS[base] || [];
+        const variantSelected = variants.includes(selectedName);
+        const baseSelected = selectedName === base;
+
+        if (variantSelected) {
+            // Show the chosen variant on the collapsed parent row.
+            label.textContent = selectedName;
+            parentBtn.classList.add('selected', 'proc-type-parent-variant');
+        } else {
+            // Revert to the base label; selected only if the base itself is chosen.
+            label.textContent = base;
+            parentBtn.classList.toggle('selected', baseSelected);
+            parentBtn.classList.remove('proc-type-parent-variant');
+        }
+    });
+}
+
 // Procedure-type buttons: single-select (one selected at a time).
 // Clicking a preset button also clears the free-text input.
+// Clicking the caret on an expandable parent toggles its sub-option list
+// instead of selecting the parent.
 document.getElementById('procTypeGrid').addEventListener('click', e => {
+    if (!_pendingProc) return;
+
+    // Caret toggle: expand / collapse the variant list without selecting.
+    const caret = e.target.closest('.proc-type-caret');
+    if (caret) {
+        e.stopPropagation();
+        const exp = caret.closest('.proc-type-expandable');
+        if (exp) {
+            const nowExpanded = exp.classList.toggle('expanded');
+            const parentBtn = exp.querySelector('.proc-type-parent');
+            if (parentBtn) parentBtn.setAttribute('aria-expanded', nowExpanded ? 'true' : 'false');
+        }
+        return;
+    }
+
     const btn = e.target.closest('.proc-type-btn');
-    if (!btn || !_pendingProc) return;
+    if (!btn) return;
     document.querySelectorAll('#procTypeGrid .proc-type-btn').forEach(b => b.classList.remove('selected'));
     btn.classList.add('selected');
     // Clear freetext state
@@ -5413,8 +5726,36 @@ document.getElementById('procTypeGrid').addEventListener('click', e => {
     if (input) input.value = '';
     if (wrap) wrap.classList.remove('active');
     _pendingProc.procedureName = btn.dataset.name;
+
+    // If a variant sub-option was chosen, collapse its dropdown — the parent
+    // now shows the chosen variant as the selected option.
+    if (btn.classList.contains('proc-type-subbtn')) {
+        const exp = btn.closest('.proc-type-expandable');
+        if (exp) {
+            exp.classList.remove('expanded');
+            const parentBtn = exp.querySelector('.proc-type-parent');
+            if (parentBtn) parentBtn.setAttribute('aria-expanded', 'false');
+        }
+    }
+
+    syncProcParentLabels();
     updateModalProcColors();
     updateProcConfirmEnabled();
+});
+
+// Keyboard support for the caret (Enter / Space toggles expansion).
+document.getElementById('procTypeGrid').addEventListener('keydown', e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const caret = e.target.closest('.proc-type-caret');
+    if (!caret) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const exp = caret.closest('.proc-type-expandable');
+    if (exp) {
+        const nowExpanded = exp.classList.toggle('expanded');
+        const parentBtn = exp.querySelector('.proc-type-parent');
+        if (parentBtn) parentBtn.setAttribute('aria-expanded', nowExpanded ? 'true' : 'false');
+    }
 });
 
 // ────────────── MONTH VIEW ──────────────

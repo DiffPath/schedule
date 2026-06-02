@@ -7856,17 +7856,27 @@ if (mobilePathSel) {
         const dx = t.clientX - startX;
         const dy = t.clientY - startY;
 
-        if (
-            elapsed > MAX_DURATION_MS ||
-            Math.abs(dx) < MIN_DISTANCE_PX ||
-            Math.abs(dy) > MAX_VERTICAL_PX
-        ) {
+        // Too much vertical drift — this was a scroll, not a swipe.
+        if (Math.abs(dy) > MAX_VERTICAL_PX) {
             snapBack(dx);
             return;
         }
 
-        // Valid swipe — commit. swipe left → next; swipe right → prev.
-        commitAnimation(dx < 0, dx);
+        // Commit if EITHER:
+        //  (a) the band has been dragged at least halfway across (distance
+        //      commit — works for slow drags and paused gestures), or
+        //  (b) it was a quick flick that cleared the minimum distance
+        //      (lets short fast swipes commit before reaching 50%).
+        const draggedHalf = snapWidth > 0 && Math.abs(dx) >= snapWidth * 0.5;
+        const quickFlick   = elapsed <= MAX_DURATION_MS &&
+                             Math.abs(dx) >= MIN_DISTANCE_PX;
+
+        if (draggedHalf || quickFlick) {
+            // Valid swipe — commit. swipe left → next; swipe right → prev.
+            commitAnimation(dx < 0, dx);
+        } else {
+            snapBack(dx);
+        }
     }, { passive: true });
 
     mainEl.addEventListener('touchcancel', (e) => {
@@ -8627,3 +8637,49 @@ document.getElementById('exportDownload').addEventListener('click', () => {
    is hidden. (The hidden #todayBtn is preserved in HTML for click-through
    purposes, so the existing handler already works — this is a safety net.)
    ──────────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   Tracking page: per-conference "Add entry" buttons.
+   Moved here from an inline <script> in schedule.html. Mirrors admin-only
+   visibility from the hidden #trackingAddBtn proxy and wires each
+   .tracking-conf-btn to open the conference modal pre-set to its type.
+   ──────────────────────────────────────────────────────────────────── */
+(function () {
+    function init() {
+        var addBtn = document.getElementById('trackingAddBtn');
+        var section = document.getElementById('trackingConfAdd');
+        if (!addBtn || !section) return;
+
+        // Mirror admin-only visibility from the hidden proxy button to our section.
+        // schedule.js toggles addBtn.style.display = 'none' / '' / 'inline-flex'.
+        function syncVisibility() {
+            section.style.display = (addBtn.style.display === 'none') ? 'none' : '';
+        }
+        syncVisibility();
+        new MutationObserver(syncVisibility).observe(addBtn, {
+            attributes: true,
+            attributeFilter: ['style']
+        });
+
+        // Wire each per-conference button: open the modal via the proxy,
+        // then pre-select the matching conference type and dispatch 'change'
+        // so any dependent fields (CDH subtype, Other title) render correctly.
+        var btns = section.querySelectorAll('.tracking-conf-btn');
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].addEventListener('click', function () {
+                var conf = this.getAttribute('data-conf');
+                addBtn.click();
+                var sel = document.getElementById('confType');
+                if (sel && conf) {
+                    sel.value = conf;
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();

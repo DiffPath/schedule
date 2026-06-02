@@ -1350,6 +1350,59 @@ main {
     opacity: 1;
 }
 
+/* ── Conference pill ──────────────────────────────────────────────────────
+   A conference the signed-in pathologist is scheduled to present at. Shares
+   the hourly grid with procedure pills but is deliberately styled to stand
+   apart in KIND, not just hue: it spans the full width of the slot as a
+   banner, carries a "CONF" badge, uses a deep indigo fill with a bright gold
+   accent bar, and sits on its own line. Conferences appear ONLY on the
+   presenter's own schedule (never visible to other users). They're read-only
+   here — editing happens on the Tracking page. */
+.conf-item {
+    display: flex;                 /* full-width banner, unlike the inline proc pills */
+    width: 100%;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 8px 3px 7px;
+    border-radius: 4px;
+    background: #1e1b4b;           /* deep indigo — outside the entire procedure palette */
+    color: #fef9c3;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.35;
+    letter-spacing: 0.2px;
+    border-left: 4px solid #facc15; /* bright gold accent bar */
+    box-shadow: 0 1px 4px rgba(30, 27, 75, 0.4);
+    cursor: default;
+    white-space: normal;
+    word-break: break-word;
+    box-sizing: border-box;
+}
+
+/* Small leading "CONF" badge — an unmistakable cue this row is a conference
+   and not a procedure. */
+.conf-item .conf-item-dot {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+    height: 13px;
+    border-radius: 3px;
+    background: #facc15;
+    color: #1e1b4b;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+.conf-item .conf-item-dot::before { content: 'Conf'; }
+
+.conf-item:focus { outline: none; }
+.conf-item:focus-visible {
+    box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px #1e1b4b;
+}
+
 /* ─────────────────── ADD PROCEDURE PANEL ─────────────────── */
 /* All rules scoped to #procModalBack so they never bleed into other modals. */
 
@@ -1389,14 +1442,20 @@ main {
     overflow-y: auto;
 }
 
-/* Header block: icon + title + subtitle */
+/* Header block: title on the left, date on the right of the same line */
 #procModalBack .proc-header {
     display: flex;
-    align-items: flex-start;
+    align-items: baseline;
+    justify-content: space-between;
     gap: 14px;
-    margin-bottom: 20px;
-    padding-bottom: 16px;
+    margin-bottom: 10px;
+    padding-bottom: 12px;
     border-bottom: 1px solid var(--rule-soft);
+}
+
+#procModalBack .proc-header-text {
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 #procModalBack .proc-header-icon {
@@ -1419,9 +1478,22 @@ main {
     font-weight: 400;
     color: var(--ink);
     line-height: 1.1;
-    margin-bottom: 4px;
+    margin: 0;
 }
 
+#procModalBack .proc-header-date {
+    flex: 0 0 auto;
+    font-size: 11px;
+    color: var(--ink-3);
+    margin: 0;
+    font-family: var(--mono);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    text-align: right;
+    white-space: nowrap;
+}
+
+/* Legacy: kept in case .sub still appears inside header-text anywhere */
 #procModalBack .proc-header-text .sub {
     font-size: 11px;
     color: var(--ink-3);
@@ -1441,7 +1513,7 @@ main {
     text-transform: uppercase;
     letter-spacing: 0.18em;
     color: var(--ink-3);
-    margin: 10px 0 10px;
+    margin: 8px 0 8px;
 }
 
 #procModalBack .proc-section-label::before {
@@ -1751,6 +1823,105 @@ main {
     background-size: 10px; background-position: center; background-repeat: no-repeat;
 }
 
+/* ── Expandable procedure-type parents (e.g. IR Thyroid bx) ── */
+/* Occupies a single grid cell like any other proc-type-btn; the dropdown
+   stacks beneath the parent within that one column. */
+.proc-type-expandable {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* The parent button keeps the standard proc-type-btn look but reserves room
+   on the right for the caret and lays its label + caret out in a row. */
+.proc-type-btn.proc-type-parent {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding-right: 8px; /* caret hit-area provides the right padding */
+}
+
+.proc-type-parent-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* When a variant is the active choice, the collapsed parent shows that
+   variant's name; give it the selected weight for clarity. */
+.proc-type-btn.proc-type-parent.proc-type-parent-variant .proc-type-parent-label {
+    font-weight: 600;
+}
+
+/* Caret hit area on the right edge of the parent button. Clicking here
+   toggles the sub-options instead of selecting the base procedure. */
+.proc-type-caret {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    margin: -6px -4px -6px 0;
+    border-radius: 6px;
+    color: currentColor;
+    opacity: 0.65;
+    cursor: pointer;
+    transition: transform 0.18s ease, opacity 0.15s ease, background 0.15s ease;
+}
+
+.proc-type-caret:hover {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.06);
+}
+
+.proc-type-caret:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+/* Rotate the caret when the group is expanded. */
+.proc-type-expandable.expanded .proc-type-caret {
+    transform: rotate(180deg);
+    opacity: 1;
+}
+
+/* Sub-options: hidden until expanded, then revealed as an indented stack. */
+.proc-type-suboptions {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 18px;
+}
+
+.proc-type-expandable.expanded .proc-type-suboptions {
+    display: flex;
+}
+
+/* Slightly smaller sub-buttons, with a connector line down the indent. */
+.proc-type-suboptions {
+    position: relative;
+}
+.proc-type-suboptions::before {
+    content: '';
+    position: absolute;
+    left: 7px;
+    top: 2px;
+    bottom: 2px;
+    width: 1.5px;
+    background: var(--rule-soft);
+    border-radius: 1px;
+}
+
+.proc-type-btn.proc-type-subbtn {
+    font-size: 11.5px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+}
+
 /* ── Category-coloured free-text wrap (active state) ── */
 /* Same light tint as the unselected proc-type-btn category style */
 .proc-freetext-wrap.active.proc-cat-eus      { background: rgba(200,125,69,0.22);  border-color: var(--proc-eus); }
@@ -1852,13 +2023,15 @@ main {
 
 
 
-/* ── Actions bar ── */
+/* ── Actions bar ──
+   Three columns: Delete (left, edit-only) | Cancel | primary (fills, right).
+   When Delete is hidden its auto column collapses to zero width. */
 #procModalBack .modal-actions {
     display: grid;
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto auto 1fr;
     gap: 8px;
-    margin-top: 22px;
-    padding-top: 16px;
+    margin-top: 14px;
+    padding-top: 12px;
     border-top: 1px solid var(--rule-soft);
 }
 
@@ -1879,6 +2052,18 @@ main {
     background: var(--bg);
     border-color: var(--ink-3);
     color: var(--ink);
+}
+
+/* Delete button — danger styling, scoped to win over the :not(.primary) rule */
+#procModalBack .modal-actions button.danger {
+    color: #b94e2a;
+    border-color: rgba(185, 78, 42, 0.3);
+}
+
+#procModalBack .modal-actions button.danger:hover {
+    background: rgba(185, 78, 42, 0.06);
+    border-color: #b94e2a;
+    color: #b94e2a;
 }
 
 #procModalBack .modal-actions button.primary {

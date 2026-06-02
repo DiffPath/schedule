@@ -846,6 +846,9 @@
             <label>Date</label>
             <input type="date" id="confDate" />
 
+            <label>Time</label>
+            <input type="time" id="confTime" />
+
             <!-- Live schedule panel: shows who is on which service for the
                  selected date. Rendered by renderConferenceDaySchedule() in
                  schedule.js; clicking a row selects that presenter. -->
@@ -870,12 +873,8 @@
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics-compat.js"></script>
 
-    <!-- Tracking-page conference quick-add wiring.
-         Hooks the five per-conference buttons in #trackingConfAdd to the same
-         modal that the legacy #trackingAddBtn opens. Visibility of the whole
-         section mirrors #trackingAddBtn's display state (set by schedule.js
-         based on admin status). -->
     <script>
         (function () {
             function init() {
@@ -920,7 +919,7 @@
     </script>
 
     <script src="schedule.js"></script>
-        <script src="recompute.js"></script>
+    <script src="recompute.js"></script>
 
 </body>
 </html>

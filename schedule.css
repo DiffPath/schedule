@@ -1,7 +1,6 @@
 :root {
-    /* Height shared by the schedule toolbar and the sidebar brand section,
-       so their border-bottoms land on exactly the same pixel.
-       Both use box-sizing: border-box, so the 1px border is inside this value. */
+    /* Height shared by the toolbar and the sidebar brand section so their
+       border-bottoms align (border-box: the 1px border is inside this value). */
     --toolbar-h: 57px;
 
     --bg: #eaf3fb;
@@ -20,9 +19,8 @@
     --today-bg: rgba(254, 243, 199, 0.55);
     --today-ring: #d4a72c;
 
-    /* Pathologist identity colors — chosen for maximum hue separation
-       (red · teal-green · blue · magenta-purple) so no two read alike,
-       and so none collide with the now cool-grey PTO styling. */
+    /* Pathologist identity colors — max hue separation; none collide with the
+       cool-grey PTO styling. */
     --p1: #c0392b;
     /* MM — red */
     --p2: #18897e;
@@ -46,6 +44,9 @@
     --svc-off-service: #64748b;
     --svc-off-service-director: #64748b;
     --svc-off-service-lab: #64748b;
+    /* Freetext / custom services (admin-typed, always locked) — dark gold
+       so they read as "special" against the built-in service palette. */
+    --svc-freetext: #a16207;
 
     /* PTO styling — neutral cool grey, deliberately hue-free so it can
        never be confused with any pathologist identity color. */
@@ -153,17 +154,6 @@ header {
     padding-bottom: 2px;
 }
 
-.header-center {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-}
-
-.nav-group {
-    display: flex;
-    gap: 4px;
-}
-
 .nav-btn,
 .today-btn {
     background: transparent;
@@ -182,13 +172,6 @@ header {
     align-items: center;
     justify-content: center;
     line-height: 1;
-}
-
-.today-btn {
-    padding: 7px 14px;
-    font-size: 12px;
-    font-weight: 500;
-    letter-spacing: 0.02em;
 }
 
 .nav-btn:hover,
@@ -276,10 +259,7 @@ header {
     box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
-/* The Day tab is mobile-only — desktop has plenty of horizontal space
-   to render the full week, so the Day tab only appears at the same
-   breakpoint where the toolbar collapses to its 2-row mobile layout
-   (max-width: 800px). The matching mobile rule below makes it visible. */
+/* Day tab is mobile-only; the ≤800px rules below reveal it. */
 .view-tab-day {
     display: none;
 }
@@ -304,13 +284,6 @@ header {
     padding: 3px;
     gap: 2px;
     margin-right: 12px;
-}
-
-/* Wrapper divs sit in the header and align themselves */
-.header-pathtabs-wrap,
-.header-viewtabs-wrap {
-    display: flex;
-    align-items: center;
 }
 
 .path-tab {
@@ -338,49 +311,6 @@ header {
 }
 
 /* ─────────────────── HAMBURGER MENU (mobile) ─────────────────── */
-/* Hidden on desktop — sidebar holds Manage PTO / Requests / Export there */
-.menu-btn {
-    display: none;
-    position: relative;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    background: transparent;
-    border: 1px solid var(--rule);
-    border-radius: 7px;
-    color: var(--ink-2);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-}
-
-.menu-btn:hover,
-.menu-btn[aria-expanded="true"] {
-    background: var(--paper);
-    border-color: var(--ink-3);
-    color: var(--ink);
-}
-
-/* Three-line hamburger drawn in CSS — no icon font dependency */
-.menu-icon,
-.menu-icon::before,
-.menu-icon::after {
-    content: '';
-    display: block;
-    width: 16px;
-    height: 1.5px;
-    background: currentColor;
-    border-radius: 1px;
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-}
-.menu-icon { top: 50%; transform: translate(-50%, -50%); }
-.menu-icon::before { top: -5px; }
-.menu-icon::after  { top: 5px; }
-
 /* Red alert dot on hamburger when there are pending requests */
 .menu-dot {
     position: absolute;
@@ -457,13 +387,6 @@ header {
     flex: 1 1 auto;
 }
 
-/* Tweak the existing red badge to fit menu items */
-.menu-req-badge {
-    margin-left: 0;
-    animation: none;
-    box-shadow: none;
-}
-
 /* ─────────────────── SIDEBAR ─────────────────── */
 aside {
     position: relative;
@@ -471,29 +394,6 @@ aside {
     padding: 22px 20px;
     background: var(--bg);
     overflow-y: auto;
-}
-
-.side-section {
-    margin-bottom: 24px;
-}
-
-.side-label {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-    color: var(--ink-3);
-    margin-bottom: 12px;
-    display: block;
-}
-
-.oc-callout {
-    background: var(--paper);
-    border: 1px solid var(--rule);
-    border-left: 3px solid var(--accent);
-    border-radius: 6px;
-    padding: 12px 14px;
-    margin-bottom: 18px;
 }
 
 .oc-callout .label {
@@ -566,87 +466,6 @@ aside {
     flex-shrink: 0;
 }
 
-.legend-list {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-}
-
-.legend-item {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    font-size: 12px;
-    color: var(--ink-2);
-}
-
-.legend-swatch {
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
-    background: var(--c);
-    flex-shrink: 0;
-}
-
-.legend-pto {
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
-    background: repeating-linear-gradient(45deg,
-            var(--pto-stripe) 0, var(--pto-stripe) 2px,
-            var(--pto-bg) 2px, var(--pto-bg) 4px);
-    border: 1px solid var(--rule);
-    flex-shrink: 0;
-}
-
-.legend-call {
-    background: var(--accent);
-    color: var(--paper);
-    padding: 2px 5px;
-    border-radius: 3px;
-    font-family: var(--mono);
-    font-size: 7.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    flex-shrink: 0;
-    line-height: 1.2;
-}
-
-.legend-off {
-    width: 10px;
-    height: 10px;
-    border-radius: 3px;
-    background: transparent;
-    border: 1px dashed var(--ink-3);
-    flex-shrink: 0;
-}
-
-.add-pto-btn {
-    width: 100%;
-    background: var(--paper);
-    color: var(--accent);
-    border: 1px solid var(--rule);
-    border-left: 3px solid var(--accent);
-    padding: 10px 14px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 500;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 7px;
-    text-align: left;
-}
-
-.add-pto-btn:hover {
-    background: var(--accent);
-    color: var(--paper);
-    border-color: var(--accent);
-}
-
 .add-pto-btn .plus {
     font-size: 14px;
     line-height: 1;
@@ -660,13 +479,8 @@ main {
 }
 
 /* ─────────────────── DAY VIEW ───────────────────
-   Mobile-first single-day view. Reuses .week-day / .wd-head / .wd-rows /
-   .wd-hours from week view (same classes → same theming, same handlers)
-   and just gives the lone card a wider, more readable layout. The Day
-   tab is hidden on desktop (see the @media (min-width: 801px) block
-   further down) — desktop users see Week / Month / Year / Compact and
-   never need a single-day view.
-*/
+   Mobile-first single-day view reusing .week-day / .wd-* classes (same
+   theming + handlers), one wide card. Hidden on desktop. */
 .day-view {
     display: flex;
     flex-direction: column;
@@ -677,17 +491,13 @@ main {
 }
 
 .day-view .day-view-card {
-    /* The single card stretches to fill the viewport (no grid columns
-       to share space with). On wider screens we cap the width so the
-       hour-grid rows don't get absurdly long; the card stays centered. */
+    /* Single card fills the viewport; width capped on wide screens so hour
+       rows don't stretch absurdly. */
     width: 100%;
     max-width: 720px;
     margin: 0 auto;
-    /* Day view's card is the entire screen on mobile — disable the
-       hover/cursor:pointer that week view uses (clicking a tiny week-day
-       card to drill in makes sense; clicking a giant day-view card
-       doesn't, since you're already viewing the day in detail). The
-       day-modal still opens via tapping a pathologist row if needed. */
+    /* Disable week-view's hover/cursor:pointer — you're already viewing the
+       day; the day-modal still opens via a pathologist row. */
     cursor: default;
 }
 
@@ -929,22 +739,26 @@ main {
     vertical-align: -1px;
 }
 
-/* The month view emits both a long-form (.svc-full) and 3-letter (.svc-abbr)
-   service label inside .svc. Hide the abbr by default — only the mobile
-   month view swaps to it (see the @media (max-width: 800px) block). */
+/* Month view emits .svc-full + .svc-abbr; abbr hidden by default (mobile
+   month swaps to it). */
 .svc-abbr {
     display: none;
 }
 
 .wd-row.pto {
+    /* PTO keeps the diagonal-stripe look, tinted with the pathologist's --c
+       (grey fallback). */
+    --pto-c-stripe: color-mix(in srgb, var(--c, var(--pto-stripe)) 22%, white);
+    --pto-c-bg: color-mix(in srgb, var(--c, var(--pto-bg)) 6%, white);
+    --pto-c-ink: color-mix(in srgb, var(--c, var(--pto-ink)) 82%, black);
     background: repeating-linear-gradient(45deg,
-            var(--pto-stripe) 0, var(--pto-stripe) 3px,
-            var(--pto-bg) 3px, var(--pto-bg) 6px);
-    color: var(--pto-ink);
+            var(--pto-c-stripe) 0, var(--pto-c-stripe) 3px,
+            var(--pto-c-bg) 3px, var(--pto-c-bg) 6px);
+    color: var(--pto-c-ink);
 }
 
 .wd-row.pto .svc {
-    color: var(--pto-ink);
+    color: var(--pto-c-ink);
     font-weight: 600;
     text-transform: uppercase;
     font-size: 10px;
@@ -964,6 +778,17 @@ main {
 
 .wd-row.off .pid {
     opacity: 0.65;
+}
+
+/* ── Approved & locked assignment ─────────────────────────────────── */
+/* Glow in the pathologist's --c marks an approved+locked service (hard pin
+   for recompute; admin confirms before replacing). Existing 1px borders
+   mean no layout shift. */
+.wd-row.locked {
+    border-color: color-mix(in srgb, var(--c) 45%, transparent);
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--c) 26%, transparent),
+        0 0 8px 1px color-mix(in srgb, var(--c) 32%, transparent);
 }
 
 .wd-row .oc-mark {
@@ -990,9 +815,8 @@ main {
 }
 
 /* ── Lake Forest sendout banner ──────────────────────────────────── */
-/* Renders above the first pathologist row on flagged days, in both the
-   week and month views.  Compact, distinct from a pathologist row so it
-   reads as a department-wide marker rather than a per-doctor assignment. */
+/* Renders above the first pathologist row on flagged days (week + month);
+   reads as a department-wide marker, not a per-doctor assignment. */
 .wd-row.lf-sendout {
     background: #4E2E85;
     border: 1px solid #4E2E85;
@@ -1011,9 +835,7 @@ main {
     color: white;
     line-height: 1.2;
 }
-/* Same swap pattern as .svc-full / .svc-abbr — the abbr ("LF sendout") is
-   hidden by default and only revealed inside the mobile month view, where
-   day cells are too narrow for the full "Lake Forest sendout" wording. */
+/* Same .svc-full/.svc-abbr swap — abbr only inside mobile month view. */
 .lf-label-abbr {
     display: none;
 }
@@ -1027,11 +849,8 @@ main {
     letter-spacing: 0.08em;
 }
 
-/* Keep the pathologist area the same height whether or not a day has a
-   Lake Forest sendout banner. On days that have no .lf-sendout row, reserve
-   the banner's footprint with a transparent spacer BELOW the assignments so
-   the layout stays the same height as flagged days.
-   The :has() selector matches a .wd-rows that does NOT contain a banner. */
+/* Reserve the banner's footprint with a transparent spacer on days without
+   .lf-sendout (:has() matches a .wd-rows lacking the banner) so day heights match. */
 .wd-rows:not(:has(.wd-row.lf-sendout))::after {
     content: "";
     display: block;
@@ -1043,10 +862,8 @@ main {
 }
 
 /* ─────────────────── NATALIE PTO BANNER ─────────────────── */
-/* Display-only "Natalie PTO" marker shown directly above the hourly
-   procedure grid on flagged days, in both week and day views. Styled to
-   echo the Lake Forest sendout banner but in a distinct teal so the two
-   are never confused. */
+/* Display-only "Natalie PTO" marker above the hourly grid (week + day);
+   teal so it's never confused with the LF sendout banner. */
 .natalie-pto-banner {
     position: relative;
     display: flex;
@@ -1080,10 +897,8 @@ main {
     font-size: 11px;
 }
 
-/* The .wd-hours-head is an empty spacer strip at the top of the grid. When
-   the Natalie PTO banner is present it directly precedes the head, leaving a
-   redundant gap between the banner and the first hour row — collapse it so
-   the hour rows sit flush beneath the banner. */
+/* Collapse the gap between the banner and .wd-hours-head so hour rows sit
+   flush beneath it. */
 .natalie-pto-banner + .wd-hours-head {
     display: none;
 }
@@ -1155,17 +970,14 @@ main {
 }
 
 /* ─────────────────── HOURLY GRID (week view) ─────────────────── */
-/* Independent hourly schedule shown beneath each day's pathologist
-   assignments in the week view. Half-hour slots; double-click to add
-   a "procedure". */
+/* Independent hourly schedule beneath each day's assignments (week view);
+   half-hour slots, double-click to add a procedure. */
 .wd-hours {
     border-top: 1px solid var(--rule-soft);
     background: var(--paper);
     /* Don't bubble clicks up to .week-day (which would open the day modal) */
-    /* Fill whatever height remains in the day column after .wd-head and
-       .wd-rows. Flex column lets .hour-row children share that space.
-       overflow-y:auto adds a scrollbar only when pills push total row
-       height beyond the available space. */
+    /* Fill the remaining column height; overflow-y:auto only when pills push
+       past the available space. */
     flex: 1 1 0;
     min-height: 0;
     display: flex;
@@ -1192,9 +1004,8 @@ main {
     min-height: 22px;   /* floor — preserved as the "default" slot height */
     user-select: none;
     cursor: pointer;
-    /* flex:1 0 auto: grow equally to fill .wd-hours; flex-shrink:0 + the
-       implicit min-height:auto floor means a slot with multiple pills
-       expands rather than overlapping, triggering .wd-hours to scroll. */
+    /* flex:1 0 auto — slots grow equally; a multi-pill slot expands (triggering
+       .wd-hours scroll) instead of overlapping. */
     flex: 1 0 auto;
 }
 
@@ -1300,10 +1111,8 @@ main {
     transform: translateY(-0.5px);
 }
 
-/* Selected state — the user has clicked a procedure pill. Hitting Delete
-   while a pill is selected removes it; double-click opens the edit modal.
-   Uses box-shadow rings rather than outline/border so the pill doesn't
-   shift in the layout when toggled. */
+/* Selected pill (Delete removes, dbl-click edits). box-shadow rings, not
+   outline/border, so the layout doesn't shift on toggle. */
 .proc-item.selected,
 .proc-item.proc-cat-eus.selected,
 .proc-item.proc-cat-ebus.selected,
@@ -1350,14 +1159,9 @@ main {
     opacity: 1;
 }
 
-/* ── Conference pill ──────────────────────────────────────────────────────
-   A conference the signed-in pathologist is scheduled to present at. Shares
-   the hourly grid with procedure pills but is deliberately styled to stand
-   apart in KIND, not just hue: it spans the full width of the slot as a
-   banner, carries a "CONF" badge, uses a deep indigo fill with a bright gold
-   accent bar, and sits on its own line. Conferences appear ONLY on the
-   presenter's own schedule (never visible to other users). They're read-only
-   here — editing happens on the Tracking page. */
+/* ── Conference pill ── the presenter's own conference: full-width banner,
+   CONF badge, indigo fill + gold accent — distinct in KIND from procedure
+   pills. Presenter-only; read-only here (edited on the Tracking page). */
 .conf-item {
     display: flex;                 /* full-width banner, unlike the inline proc pills */
     width: 100%;
@@ -1416,9 +1220,8 @@ main {
     box-shadow:
         0 24px 60px rgba(17, 24, 39, 0.22),
         0 4px 12px rgba(17, 24, 39, 0.08);
-    /* Flex column lets the 4px gradient strip stay pinned at the top
-       while .modal-inner takes the remaining height and scrolls when
-       the procedure list is taller than the viewport allows. */
+    /* Flex column pins the 4px gradient strip; .modal-inner takes the rest and
+       scrolls. */
     display: flex;
     flex-direction: column;
     max-height: 90vh;
@@ -1432,9 +1235,8 @@ main {
     background: linear-gradient(90deg, var(--accent) 0%, #2e86c1 60%, #5dade2 100%);
 }
 
-/* Inner wrapper restores padding the .modal override removed.
-   Flex item that grows to fill the modal and scrolls internally so
-   the Cancel / Add Procedure buttons never get clipped. */
+/* Inner wrapper restores padding the .modal override removed; grows +
+   scrolls internally so the action buttons never clip. */
 #procModalBack .modal-inner {
     padding: 20px 24px 22px;
     flex: 1 1 auto;
@@ -1526,10 +1328,8 @@ main {
     flex-shrink: 0;
 }
 
-/* ── Time input row ──
-   Native <input type="time"> styled to match the freetext input below.
-   Sits in its own row above the location toggle. Pre-fills with the
-   half-hour slot the user double-clicked but is fully editable. */
+/* ── Time input row ── native time input styled like the freetext input;
+   prefilled with the double-clicked slot, fully editable. */
 #procModalBack .proc-time-row {
     display: flex;
     align-items: center;
@@ -1640,9 +1440,8 @@ main {
     transition: color 0.18s ease;
 }
 
-/* Higher specificity than .modal label (0-1-1) so the margin: 12px 0 5px
-   from that rule doesn't bleed onto these <label> cards and create extra
-   space below the "Location" section heading. */
+/* Higher specificity than `.modal label` so its margin doesn't bleed onto
+   these label cards. */
 .proc-loc-toggle .proc-loc-opt {
     margin: 0;
 }
@@ -2023,9 +1822,8 @@ main {
 
 
 
-/* ── Actions bar ──
-   Three columns: Delete (left, edit-only) | Cancel | primary (fills, right).
-   When Delete is hidden its auto column collapses to zero width. */
+/* ── Actions bar ── Delete (left, edit-only) | Cancel | primary (right);
+   a hidden Delete's auto column collapses to zero. */
 #procModalBack .modal-actions {
     display: grid;
     grid-template-columns: auto auto 1fr;
@@ -2251,6 +2049,14 @@ main {
 .month-view .day .wd-row.pto .svc,
 .month-view .day .wd-row.off .svc {
     font-size: 9px;
+}
+
+/* Month cells pack rows 2px apart — pull the lock glow in so halos of
+   adjacent locked rows don't visually merge. */
+.month-view .day .wd-row.locked {
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--c) 26%, transparent),
+        0 0 5px 1px color-mix(in srgb, var(--c) 30%, transparent);
 }
 
 /* ─────────────────── YEAR VIEW ─────────────────── */
@@ -2678,26 +2484,6 @@ main {
     cursor: not-allowed;
 }
 
-.login-foot {
-    text-align: center;
-    margin-top: 16px;
-    font-size: 11px;
-    color: var(--ink-3);
-}
-
-/* Signed-in indicator + sign-out (sidebar) */
-.signin-info {
-    margin-top: 16px;
-    padding-top: 14px;
-    border-top: 1px solid var(--rule-soft);
-    font-size: 11px;
-    color: var(--ink-3);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-}
-
 .signin-info .who {
     font-family: var(--mono);
     text-transform: uppercase;
@@ -2706,26 +2492,6 @@ main {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.signin-info button {
-    background: transparent;
-    border: 1px solid var(--rule);
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-family: var(--mono);
-    font-size: 9.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--ink-2);
-    cursor: pointer;
-    transition: all 0.15s ease;
-}
-
-.signin-info button:hover {
-    background: var(--bg);
-    color: var(--ink);
-    border-color: var(--ink-3);
 }
 
 .loading-overlay {
@@ -2834,6 +2600,54 @@ main {
 .modal input,
 .modal select {
     width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    font-family: var(--sans);
+    font-size: 13px;
+    background: var(--bg);
+    color: var(--ink);
+}
+
+/* Service rows: select + Lock toggle; custom/off-site picks force the
+   checkbox on + disabled (always locked). */
+#svcAssignments .svc-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+#svcAssignments .svc-row select {
+    flex: 1;
+    min-width: 0;
+    width: auto;
+}
+.svc-lock-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    color: var(--ink-2);
+    cursor: pointer;
+    flex-shrink: 0;
+    user-select: none;
+}
+.svc-lock-toggle input[type="checkbox"] {
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+.svc-lock-toggle input[type="checkbox"]:disabled {
+    cursor: default;
+}
+.svc-lock-toggle:has(input:disabled) {
+    color: var(--ink-3);
+    cursor: default;
+}
+
+/* Freetext "Custom service…" input under a service-modal row. */
+#svcAssignments .svc-ft-input {
+    width: 100%;
+    margin-top: 6px;
     padding: 8px 10px;
     border: 1px solid var(--rule);
     border-radius: 5px;
@@ -2957,15 +2771,41 @@ main {
     border-radius: 3px;
 }
 
+/* Approved & locked — same glow as the schedule pills plus an outline
+   badge (reads lighter than the solid On Call pill). */
+.day-detail-row.locked {
+    border-color: color-mix(in srgb, var(--c) 45%, transparent);
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--c) 24%, transparent),
+        0 0 9px 1px color-mix(in srgb, var(--c) 30%, transparent);
+}
+
+.day-detail-row .lock-badge {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, var(--c) 78%, black);
+    background: color-mix(in srgb, var(--c) 10%, white);
+    border: 1px solid color-mix(in srgb, var(--c) 45%, transparent);
+    padding: 1px 6px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    cursor: default;
+}
+
 .day-detail-row.pto-row {
+    --pto-c-stripe: color-mix(in srgb, var(--c, var(--pto-stripe)) 22%, white);
+    --pto-c-bg: color-mix(in srgb, var(--c, var(--pto-bg)) 6%, white);
+    --pto-c-ink: color-mix(in srgb, var(--c, var(--pto-ink)) 82%, black);
     background: repeating-linear-gradient(45deg,
-            var(--pto-stripe) 0, var(--pto-stripe) 4px,
-            var(--pto-bg) 4px, var(--pto-bg) 8px);
-    color: var(--pto-ink);
+            var(--pto-c-stripe) 0, var(--pto-c-stripe) 4px,
+            var(--pto-c-bg) 4px, var(--pto-c-bg) 8px);
+    color: var(--pto-c-ink);
 }
 
 .day-detail-row.pto-row .dservice {
-    color: var(--pto-ink);
+    color: var(--pto-c-ink);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -3158,6 +2998,50 @@ main {
 }
 .path-quick-panel .pqp-reset:hover { color: var(--ink-2); }
 
+/* Lock toggle row in the quick panel; custom/off-site force it on +
+   disabled and the label says why. */
+.path-quick-panel .pqp-lock-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    font-size: 11.5px;
+    color: var(--ink-2);
+    cursor: pointer;
+    line-height: 1.35;
+}
+.path-quick-panel .pqp-lock-row input[type="checkbox"] {
+    margin: 1px 0 0;
+    accent-color: var(--accent);
+    flex-shrink: 0;
+    cursor: pointer;
+}
+.path-quick-panel .pqp-lock-row input[type="checkbox"]:disabled {
+    cursor: default;
+}
+.path-quick-panel .pqp-lock-row:has(input:disabled) {
+    cursor: default;
+    color: var(--ink-3);
+}
+
+/* Freetext "Custom service…" input row (quick panel). */
+.path-quick-panel .pqp-ft-row {
+    margin-top: -2px;
+}
+.path-quick-panel .pqp-ft-input {
+    flex: 1;
+    padding: 6px 9px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    background: var(--paper);
+    font-family: var(--sans);
+    font-size: 12.5px;
+    color: var(--ink);
+}
+.path-quick-panel .pqp-ft-input:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
 /* PTO list inside modal */
 .pto-list {
     margin-top: 10px;
@@ -3276,10 +3160,6 @@ main {
 /* ─────────────────── MOBILE: ≤ 800px ─────────────────── */
 @media (max-width: 800px) {
 
-    /* Settings gear and drawer are desktop-only features */
-    .settings-btn,
-    .settings-drawer { display: none !important; }
-
     html,
     body {
         height: auto;
@@ -3288,19 +3168,17 @@ main {
     }
 
     .app {
-        /* No sidebar on mobile — single column, header then main.
-           !important is needed because a later unconditional rule
-           (.app { grid-template-columns: 220px 1fr; } around line 4333)
-           appears further down in the file and would otherwise win on
-           every viewport, including phones. */
+        /* No sidebar on mobile — single column. !important because the later
+           unconditional `.app { grid-template-columns: 220px 1fr }` would otherwise
+           win on every viewport, including phones. */
         grid-template-columns: 1fr !important;
         grid-template-rows: auto 1fr;
         height: auto;
         min-height: 100vh;
         max-width: 100%;
-        /* overflow-x: hidden would break position:sticky on the header child;
-           overflow-x: clip achieves the same visual clipping without creating a
-           scroll container, so sticky positioning continues to work. */
+        /* overflow-x: clip, not hidden — hidden creates a scroll container and
+           breaks the header child's position:sticky; clip gives the same visual
+           clipping without one. */
         overflow-x: clip;
         position: relative;
     }
@@ -3321,29 +3199,6 @@ main {
         padding: 10px 14px;
         align-items: center;
     }
-
-    /* Row 1 placement */
-    .menu-btn {
-        display: inline-flex;            /* show hamburger on mobile */
-        grid-column: 1;
-        grid-row: 1;
-        width: 40px;
-        height: 40px;
-    }
-
-    .header-center {
-        grid-column: 2 / span 2;          /* nav + period takes the rest of row 1 */
-        grid-row: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        flex-wrap: nowrap;
-        min-width: 0;
-    }
-
-    /* Today button hidden — period itself becomes tap-to-today on mobile */
-    .today-btn { display: none; }
 
     .nav-btn {
         width: 40px;
@@ -3373,35 +3228,12 @@ main {
         margin-left: 4px;
     }
 
-    /* Row 2 placement */
-    .header-pathtabs-wrap {
-        grid-column: 1 / span 2;
-        grid-row: 2;
-        display: flex;
-        align-items: stretch;
-        min-width: 0;
-    }
-
-    .header-viewtabs-wrap {
-        grid-column: 3;
-        grid-row: 2;
-        display: flex;
-        align-items: stretch;
-        min-width: 0;
-    }
-
     /* Switch to short labels on mobile */
     .tab-full  { display: none; }
     .tab-short { display: inline; }
 
     /* Hide Export from the hamburger menu on mobile — not needed on phone */
     #menuExportItem { display: none !important; }
-
-    /* Row 2: stretch both wrappers to the same height so tab bars align */
-    .header-pathtabs-wrap,
-    .header-viewtabs-wrap {
-        align-self: stretch;
-    }
 
     .path-tabs {
         flex: 1 1 auto;
@@ -3443,9 +3275,8 @@ main {
         justify-content: center;
     }
 
-    /* Menu dropdown: position fixed so it stays anchored to the hamburger
-       even if the user has scrolled the page (mobile pages aren't a fixed
-       viewport like desktop). */
+    /* position:fixed so the dropdown stays anchored to the hamburger even
+       after the page has scrolled. */
     .menu-dropdown {
         position: fixed;
         top: 52px;
@@ -3455,9 +3286,8 @@ main {
         max-width: calc(100vw - 28px);
     }
 
-    /* ── Aside: hidden entirely on phone (per request) ──
-       Manage PTO, Requests, and Export are reachable through the hamburger;
-       the on-call callout is removed to free up vertical space. */
+    /* ── Aside hidden on phone ── PTO / Requests / Export live in the
+       hamburger; the callout is dropped to free vertical space. */
     aside {
         display: none !important;
     }
@@ -3472,13 +3302,9 @@ main {
         display: block;
     }
 
-    /* Week view: each day as its own card, stacked.
-       !important is necessary on grid-template-columns because the
-       schedule's JavaScript sets an inline style on .week-view to set
-       up the 7-column desktop grid. Inline styles beat regular CSS
-       declarations, so without !important the mobile stack rule loses
-       and you get 7 squashed columns on a phone. The other declarations
-       use !important defensively in case JS also sets inline flex/height. */
+    /* !important on grid-template-columns: JS sets an inline 7-column style on
+       .week-view and inline beats CSS, so the mobile stack rule loses without
+       it (the other declarations use it defensively). */
     .week-view {
         grid-template-columns: 1fr !important;
         grid-auto-rows: auto !important;
@@ -3506,11 +3332,8 @@ main {
         overflow-x: visible;
     }
 
-    /* On mobile, the Day view is the only schedule view that shows the
-       procedure hour grid. Week view becomes a summary-only stack of
-       assignment cards — much more scannable on a phone — and users tap
-       the Day tab to see procedures for a specific date. (Month and Year
-       views never had hour grids to begin with.) */
+    /* Mobile: only Day view shows the hour grid; week view becomes a
+       summary-only stack (tap Day for a date's procedures). */
     .week-view .wd-hours {
         display: none !important;
     }
@@ -3519,13 +3342,8 @@ main {
         min-height: 0;
     }
 
-    /* ── Mobile week-view readability ──
-       On phones, each day becomes a full-width stacked card, so we have
-       horizontal room to make each pathologist row genuinely scannable
-       (the whole point of the mobile week view is "what service am I on
-       each day"). We bump up the .wd-head, .wd-row, .pid, and .svc sizes,
-       give .svc room to wrap to two lines if the service name is long
-       rather than ellipsizing down to just initials. */
+    /* ── Mobile week-view readability ── full-width stacked day cards; bigger
+       .wd-head/.wd-row/.pid/.svc, and .svc may wrap to two lines. */
 
     .week-view .wd-head {
         padding: 12px 14px 10px;
@@ -3565,9 +3383,8 @@ main {
 
     .week-view .wd-row .svc {
         font-size: 13px;
-        /* Allow the service name to wrap to a second line rather than
-           ellipsizing — this is the key change for "show me what service
-           I'm on each day". */
+        /* Let the service name wrap instead of ellipsizing — the whole point is
+           "what service am I on each day". */
         white-space: normal;
         overflow: visible;
         text-overflow: clip;
@@ -3590,18 +3407,12 @@ main {
         padding: 3px 6px;
     }
 
-    /* ── Day view: mobile-optimized single-day card ──
-       The whole point of day view on a phone is "I want to see the
-       entire day's procedure schedule at a glance" — so we collapse
-       the layout to exactly the visible viewport and let the hour
-       grid claim all remaining vertical space, distributing the 30-min
-       rows evenly among themselves. No page scroll required. The
-       :has() selector targets only when day view is actually rendered
-       so week / month / year continue to scroll normally on mobile. */
+    /* ── Day view: mobile single-day card ── collapse to exactly the visible
+       viewport; the hour grid claims remaining height with rows distributed
+       evenly — no page scroll. :has() scopes this to day view only. */
 
-    /* Lock the schedule page to the visible viewport when day view is
-       showing. content-area becomes a flex column: toolbar at top
-       (natural height), <main> fills the rest. */
+    /* Lock the schedule page to the viewport in day view: toolbar natural
+       height, <main> fills the rest. */
     .content-area:has(> main > .day-view) {
         height: 100vh;
         height: 100dvh;
@@ -3649,9 +3460,7 @@ main {
         font-size: 22px;
     }
 
-    /* Pathologist assignment rows: compact but still readable.
-       flex-shrink: 0 keeps them sized to content so they don't get
-       squeezed when the hour grid needs height. */
+    /* Assignment rows compact; flex-shrink:0 so the hour grid can't squeeze them. */
     .day-view .wd-rows {
         padding: 5px 6px;
         gap: 3px;
@@ -3664,11 +3473,8 @@ main {
         line-height: 1.2;
     }
 
-    /* The hour grid: re-enable flex layout (the generic mobile rule
-       above sets display:block + overflow:visible for week view; day
-       view needs to fill height and distribute rows). overflow:hidden
-       keeps any pill-driven overflow from triggering page scroll;
-       individual slots can still wrap their pills internally. */
+    /* Re-enable flex for the hour grid (the generic mobile rule set
+       display:block); overflow:hidden keeps pill overflow off the page scroll. */
     .day-view .wd-hours {
         flex: 1 1 0;
         min-height: 0;
@@ -3681,10 +3487,7 @@ main {
         flex-shrink: 0;
     }
 
-    /* Distribute the 20 half-hour rows evenly across whatever height
-       remains in the card. min-height: 0 lets them shrink below the
-       desktop default; flex: 1 1 0 makes every row claim an equal
-       share of the available space. */
+    /* Distribute the 20 half-hour rows evenly (flex:1 1 0; min-height:0). */
     .day-view .wd-hours .hour-row {
         flex: 1 1 0;
         min-height: 0;
@@ -3755,11 +3558,8 @@ main {
         width: auto;
     }
 
-    /* Show the service each pathologist is on in mobile month cells.
-       The renderer emits both a long short-form and a 3-letter abbr in
-       .svc; the long form would overflow narrow cells, so we hide it and
-       show the abbr (CYT, BIG, HUN, WFH, …). Full detail is still one tap
-       away in the day modal. */
+    /* Mobile month cells show the 3-letter .svc-abbr (the full form would
+       overflow); full detail is one tap away in the day modal. */
     .month-view .day .wd-row .svc {
         font-size: 9px;
         min-width: 0;
@@ -3788,11 +3588,8 @@ main {
     }
 
     .month-view .day .wd-row .oc-mark {
-        /* Collapse the "On Call" pill into a compact dot — day cells in
-           the mobile month view are too narrow to spend horizontal space
-           on a text label, and the dot still reads clearly against the
-           pathologist row's background. font-size:0 + line-height:0 hide
-           the text node; width/height + border-radius shape the dot. */
+        /* Collapse the On Call pill to a dot: font-size/line-height 0 hide the
+           text node; width/height + border-radius shape the dot. */
         font-size: 0;
         line-height: 0;
         width: 6px;
@@ -3888,11 +3685,6 @@ main {
         column-gap: 6px;
     }
 
-    .menu-btn {
-        width: 38px;
-        height: 38px;
-    }
-
     .nav-btn {
         width: 36px;
         height: 36px;
@@ -3941,62 +3733,9 @@ main {
     }
 }
 
-/* ─────────────────── SETTINGS GEAR BUTTON ─────────────────── */
-.settings-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    flex-shrink: 0;
-    background: transparent;
-    border: 1px solid var(--rule);
-    border-radius: 6px;
-    color: var(--ink-2);
-    cursor: pointer;
-    transition: all 0.15s ease;
-}
-
-.settings-btn:hover,
-.settings-btn[aria-expanded="true"] {
-    background: var(--paper);
-    border-color: var(--ink-3);
-    color: var(--ink);
-}
-
-/* ─────────────────── SETTINGS DRAWER ─────────────────── */
-.settings-drawer {
-    display: none;
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 20px;
-    z-index: 300;
-    min-width: 270px;
-    background: var(--paper);
-    border: 1px solid var(--rule);
-    border-radius: 10px;
-    box-shadow:
-        0 8px 28px rgba(17, 24, 39, 0.13),
-        0 2px 6px rgba(17, 24, 39, 0.06);
-    padding: 14px 16px 16px;
-    flex-direction: column;
-    gap: 0;
-}
-
 .settings-drawer.open {
     display: flex;
     animation: menu-fade-in 0.14s ease-out;
-}
-
-.settings-drawer-title {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-    color: var(--ink-3);
-    margin-bottom: 12px;
-    padding-bottom: 10px;
-    border-bottom: 1px solid var(--rule-soft);
 }
 
 /* Individual setting row — label on left, toggle on right */
@@ -4082,19 +3821,6 @@ main {
     transform: translateX(16px);
 }
 
-/* Sub-heading inside the drawer (e.g. "Defaults when you open the app") */
-.settings-drawer-subhead {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-    color: var(--ink-3);
-    margin-top: 14px;
-    margin-bottom: 4px;
-    padding-top: 10px;
-    border-top: 1px solid var(--rule-soft);
-}
-
 /* The subhead acts as a section divider; the row right after it shouldn't
    draw its own top border on top of that. */
 .settings-drawer-subhead + .settings-row {
@@ -4149,30 +3875,6 @@ main {
     background: var(--paper);
     color: var(--ink);
     box-shadow: 0 1px 2px rgba(17, 24, 39, 0.08);
-}
-
-.settings-drawer-divider {
-    height: 1px;
-    background: var(--rule-soft);
-    margin: 8px 0 4px;
-}
-
-.settings-signout-btn {
-    width: 100%;
-    padding: 9px 12px;
-    text-align: left;
-    background: transparent;
-    border: none;
-    border-radius: 6px;
-    font-size: 13px;
-    font-weight: 500;
-    color: #b94e2a;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
-}
-
-.settings-signout-btn:hover {
-    background: rgba(185, 78, 42, 0.07);
 }
 
 /* ─────────────────── REQUESTS UI (admin & user) ─────────────────── */
@@ -4331,6 +4033,29 @@ main {
     border-left: 2px solid var(--rule-soft);
 }
 
+/* "Locked on the schedule" confirmation on approved service requests
+   whose lock is still in force. */
+.req-card .req-lock-note {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    color: color-mix(in srgb, var(--accent) 85%, black);
+    background: color-mix(in srgb, var(--accent) 6%, white);
+    border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+    border-radius: 5px;
+    padding: 6px 9px;
+    margin-top: 8px;
+}
+.req-card .req-lock-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px 1px color-mix(in srgb, var(--accent) 55%, transparent);
+    flex-shrink: 0;
+}
+
 .req-card .req-meta {
     font-family: var(--mono);
     font-size: 10px;
@@ -4399,25 +4124,8 @@ main {
     color: #b94e2a;
 }
 
-/* Read-only banner shown inside the standard modals when a non-admin
-   is using them in "request" mode, to make the workflow obvious. */
-.req-mode-banner {
-    background: rgba(216, 163, 42, 0.10);
-    border: 1px solid rgba(216, 163, 42, 0.30);
-    color: #6b4f10;
-    padding: 8px 12px;
-    border-radius: 5px;
-    font-size: 12px;
-    margin: 8px 0 14px;
-    line-height: 1.5;
-}
-
-.req-mode-banner strong { font-weight: 600; }
-
-/* ── Requests PAGE (full-area version, distinct from the modal) ────────
-   Lives inside .page-shell#requestsPage. Uses .req-card / .req-tabs from
-   the modal styles above for the cards and tabs themselves; this block
-   handles the page chrome (header, summary stats, list container). */
+/* ── Requests PAGE (full-area, distinct from the modal) ── page chrome
+   (header, stats, list container); cards/tabs reuse the modal's .req-* styles. */
 
 .requests-page-content {
     max-width: 880px;
@@ -4437,16 +4145,6 @@ main {
 
 .requests-page-heading {
     min-width: 0;
-}
-
-.requests-page-eyebrow {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-    margin-bottom: 8px;
 }
 
 .requests-page-title {
@@ -4553,10 +4251,8 @@ main {
     color: var(--accent);
 }
 
-/* List container on the page: scrolls within itself when long, like the
-   tracker's History list. The header and tabs above stay static; only this
-   list gets a scrollbar once it exceeds the available height. Reverted to
-   natural page scroll on narrow viewports (see the max-width:1100px rule). */
+/* The page list scrolls within itself (header/tabs stay static); natural
+   page scroll below 1100px. */
 .requests-page-list {
     max-height: calc(100vh - 300px);
     overflow-y: auto;
@@ -4637,11 +4333,8 @@ main {
     }
 }
 
-/* ── Changes PAGE (full-area log of every applied schedule change) ─────
-   Lives inside .page-shell#changesPage. Shares the page chrome DNA
-   (header, eyebrow, summary stat) with the requests page, but uses its
-   own card class .chg-card so changes can have a distinct visual identity
-   from request cards (no status pill, no action buttons, just a log). */
+/* ── Changes PAGE ── shares page-chrome DNA with requests but uses its own
+   .chg-card identity (no status pill, no actions — just a log). */
 
 .changes-page-content {
     max-width: 880px;
@@ -4661,16 +4354,6 @@ main {
 
 .changes-page-heading {
     min-width: 0;
-}
-
-.changes-page-eyebrow {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-    margin-bottom: 8px;
 }
 
 .changes-page-title {
@@ -4729,9 +4412,8 @@ main {
     color: var(--ink-3);
 }
 
-/* Tabs on the page: same DNA as the requests-page tabs, with a count chip.
-   "Affecting me" is the default — defaults the audience of the log to the
-   signed-in user's own changes so it isn't drowned in unrelated updates. */
+/* Tabs with a count chip; "Affecting me" is the default so the log isn't
+   drowned in unrelated updates. */
 .changes-page-tabs {
     margin: 0 0 18px;
 }
@@ -4756,18 +4438,16 @@ main {
     gap: 10px;
 }
 
-/* Like the requests list and the tracker's History list: the changes log
-   scrolls within itself when it gets long, keeping the header/tabs static.
-   Reverted to natural page scroll below 1100px. */
+/* The log scrolls within itself like the requests list; natural page
+   scroll below 1100px. */
 .changes-page-content .chg-list {
     max-height: calc(100vh - 300px);
     overflow-y: auto;
     padding-right: 6px;
 }
 
-/* Individual change card. Distinct from request cards: no status pill,
-   no action buttons, narrower vertical padding. Uses a left-edge accent
-   tinted by the change type so categories are scannable at a glance. */
+/* Change card: narrower padding than request cards, left-edge accent
+   tinted by change type for scannability. */
 .chg-card {
     border: 1px solid var(--rule-soft);
     border-radius: 7px;
@@ -4905,23 +4585,11 @@ main {
     }
 }
 
-/* ════════════════════════════════════════════════════════════════════════
-   ╔══════════════════════════════════════════════════════════════════════╗
-   ║                                                                      ║
-   ║         REWORKED LAYOUT — full-height sidebar + content area         ║
-   ║                                                                      ║
-   ╚══════════════════════════════════════════════════════════════════════╝
-
-   Overrides the previous header-on-top + sidebar-below-header layout.
-   New structure:
-
-     .app  (CSS grid: 220px aside | 1fr content-area, single full-height row)
-     ├── aside           — full-height left panel: brand, page-nav, sign-out
-     └── content-area    — full-height flex column on the right
-         ├── schedule-toolbar  (only shown on schedule page)
-         ├── oc-callout        (above the calendar)
-         ├── main              (the calendar / schedule itself)
-         └── page-shell ×3     (requests / tracking / settings — one shown at a time)
+/* ════ REWORKED LAYOUT — full-height sidebar + content area ════
+   Overrides the old header-on-top layout. Structure:
+     .app (grid: 220px aside | 1fr content-area, one full-height row)
+     ├── aside         — brand, page-nav, sign-out
+     └── content-area  — schedule-toolbar, oc-callout, main, page-shell ×3
    ════════════════════════════════════════════════════════════════════════ */
 
 /* ── App grid: aside + content-area, both full height ──────────────── */
@@ -4930,12 +4598,9 @@ main {
     grid-template-rows: 1fr;
 }
 
-/* ── Sidebar collapse: .sidebar-hidden = icon-only rail ─────────────
-   When the user clicks the chevron toggle, the sidebar shrinks down to a
-   narrow column showing only icons. Text labels, the brand subtitle, and
-   section headers all hide; the icons stay centered. This replaces the
-   legacy "fully hide sidebar" behavior — the older 0px-wide rules above
-   are still in the file but are overridden by these. */
+/* ── Sidebar collapse: .sidebar-hidden = icon-only rail ── labels, brand
+   subtitle, and section headers hide; icons stay centered. Replaces the
+   legacy fully-hidden behavior. */
 .app.sidebar-hidden {
     grid-template-columns: 56px 1fr;
 }
@@ -4997,9 +4662,7 @@ main {
 .app.sidebar-hidden .nav-item.active::before {
     left: -6px;
 }
-/* Pending-requests badge: collapse to a small dot in the corner.
-   The #navRequestsBadge is already dot-sized, so this override only
-   needs to reposition it absolutely in the icon-rail. */
+/* Pending badge collapses to a small corner dot in the icon rail. */
 .app.sidebar-hidden .nav-item .nav-badge {
     position: absolute;
     top: 4px;
@@ -5168,9 +4831,8 @@ aside {
     flex-shrink: 0;
 }
 
-/* Sidebar Requests nav dot — always a compact circle, never a numbered pill.
-   Color encodes state: amber = pending, green = approved, red = denied.
-   When an unseen decision arrives the dot pulses once to catch the eye. */
+/* Requests nav dot — compact circle; amber pending / green approved /
+   red denied; pulses once when an unseen decision arrives. */
 #navRequestsBadge {
     min-width: 8px;
     width: 8px;
@@ -5232,14 +4894,9 @@ aside {
     opacity: 1;
 }
 
-/* ── Sidebar collapse/expand toggle ────────────────────────────────
-   A skinny rounded-rectangle button with a chevron, pinned to the right
-   edge of the sidebar. When the sidebar is expanded it sits flush inside
-   the right border; when collapsed it slides just outside the border, so
-   the user always has a visible affordance to bring it back.
-
-   It's a child of .app (not aside) so it isn't clipped by the sidebar's
-   overflow-x: hidden. The chevron rotates 180° when collapsed. */
+/* ── Sidebar collapse/expand toggle ── chevron button pinned at the
+   sidebar's right edge. Child of .app (not aside) so the sidebar's
+   overflow-x:hidden can't clip it; chevron rotates 180° when collapsed. */
 .sidebar-toggle-btn {
     position: absolute;
     top: 50%;
@@ -5282,9 +4939,8 @@ aside {
     transition: none;
 }
 
-/* Collapsed state: button sits just OUTSIDE the (now narrower) sidebar,
-   left edge touching the right border. Chevron flips to point right.
-   Now the LEFT side is flush against the border → flat there, rounded on right. */
+/* Collapsed: button sits just outside the narrower sidebar — flat on the
+   left where it touches the border, rounded right; chevron points right. */
 .app.sidebar-hidden .sidebar-toggle-btn {
     left: 55px;
     border-radius: 0 6px 6px 0;
@@ -5314,13 +4970,11 @@ aside {
     position: relative;
 }
 
-/* When the schedule page is active, the toolbar is shown and main is shown.
-   When other pages are active, the toolbar and oc-callout-wrap are hidden,
-   and the appropriate page-shell is shown. */
+/* Schedule page: toolbar + main shown. Other pages hide those (and the
+   callout) and show their page-shell. */
 
-/* <main> is the root of the vertical fill chain: it takes remaining height
-   after the toolbar and becomes a flex column so .week-view can stretch
-   to fill it. overflow:hidden keeps scrolling inside .wd-hours only. */
+/* <main> roots the vertical fill chain (flex column, remaining height);
+   overflow:hidden keeps scrolling inside .wd-hours only. */
 .content-area > main {
     flex: 1 1 0;
     min-height: 0;
@@ -5368,9 +5022,8 @@ aside {
 .toolbar-left { flex: 0 0 auto; min-width: 0; }
 .toolbar-right { flex: 0 0 auto; margin-left: auto; }
 
-/* Absolutely-positioned center so the period indicator sits at the true
-   horizontal center of the toolbar (and therefore the schedule below),
-   independent of how wide the left/right groups happen to be. */
+/* Absolutely-positioned center so the period indicator sits at the
+   toolbar's true center regardless of side-group widths. */
 .toolbar-center {
     position: absolute;
     left: 50%;
@@ -5449,49 +5102,6 @@ aside {
 }
 .aside-toggle-btn.has-alert .menu-dot { display: block; }
 
-/* ── Kebab menu button (in the toolbar-right) ─────────────────────── */
-.menu-btn {
-    display: inline-flex;
-    position: relative;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    background: transparent;
-    border: 1px solid var(--rule);
-    border-radius: 6px;
-    color: var(--ink-2);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-    margin-left: 4px;
-}
-
-.menu-btn:hover,
-.menu-btn[aria-expanded="true"] {
-    background: var(--paper);
-    border-color: var(--ink-3);
-    color: var(--ink);
-}
-
-.kebab-icon,
-.kebab-icon::before,
-.kebab-icon::after {
-    content: '';
-    display: block;
-    width: 3px;
-    height: 3px;
-    background: currentColor;
-    border-radius: 50%;
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-}
-.kebab-icon { top: 50%; transform: translate(-50%, -50%); }
-.kebab-icon::before { top: -6px; }
-.kebab-icon::after  { top: 6px; }
-
 /* The dropdown anchored to the kebab — re-position to the right side. */
 .menu-dropdown {
     position: absolute;
@@ -5500,23 +5110,13 @@ aside {
     left: auto;
 }
 
-/* Make sure the kebab/menu wrapper holds its dropdown correctly. The button
-   and dropdown sit in toolbar-right; we use the toolbar-right as the
-   positioning context. */
+/* toolbar-right is the positioning context for the kebab dropdown. */
 .toolbar-right { position: relative; }
 
-/* ── Mobile-only compact toolbar controls ─────────────────────────────
-   These selects replace the .path-tabs / .view-tabs button groups on
-   phone-sized viewports and sit to the right of the date in a single
-   toolbar row. The arrow nav buttons are also hidden on mobile (users
-   swipe instead). Hidden on desktop here; revealed in the ≤800px
-   media query below. The selects mirror state with the desktop tabs
-   so the existing navigation logic still drives renders.
-
-   Visual language: each select reads like a single "active" pill tab —
-   matching the .view-tab.active / .path-tab.active treatment (paper
-   background, subtle elevation, no hard border, same typography). A
-   chevron at the trailing edge signals the menu affordance. */
+/* ── Mobile-only compact toolbar controls ── these selects replace the
+   .path-tabs/.view-tabs groups on phones (arrow buttons hidden; swipe
+   navigates) and mirror state with the desktop tabs. Styled to read as a
+   single active pill tab: paper background, soft elevation, trailing chevron. */
 .mobile-toolbar-controls {
     display: none;
 }
@@ -5559,20 +5159,16 @@ aside {
     box-shadow: 0 0 0 2px var(--rule);
 }
 
-/* Wrap the chevron in a subtle .bg-2 pill behind the select so the whole
-   group reads like part of the .view-tabs / .path-tabs family — the
-   select sits on top like an active tab, with the wrap providing the
-   soft container tone. This mirrors how the desktop pill-tabs nest on
-   top of a .bg-2 strip. */
+/* A .bg-2 pill behind the select so the group reads like the desktop
+   pill-tabs nesting on their .bg-2 strip. */
 .mobile-select-wrap {
     background: var(--bg-2);
     border-radius: 10px;
     padding: 2px;
 }
 
-/* Custom chevron — inline SVG via background-image so the select still
-   participates in form styling but loses the platform default arrow.
-   Color matches --ink-3 (the muted accent used elsewhere in the toolbar). */
+/* Custom chevron via inline-SVG background (keeps form styling, drops the
+   platform arrow); color matches --ink-3. */
 .mobile-select-wrap::after {
     content: '';
     position: absolute;
@@ -5586,12 +5182,6 @@ aside {
     background-position: center;
     background-size: contain;
     pointer-events: none;
-}
-
-/* ── On-call callout (re-styled as a horizontal strip above the calendar) ── */
-.oc-callout-wrap {
-    flex-shrink: 0;
-    padding: 10px 24px 0;
 }
 
 .content-area > .oc-callout-wrap > .oc-callout {
@@ -5635,11 +5225,6 @@ aside {
     display: none;
 }
 
-/* Hide on-call wrap when wrap is empty */
-.oc-callout-wrap:has(> .oc-callout:empty) {
-    display: none;
-}
-
 /* ── Main pane — adjust padding for the new toolbar context ────────── */
 .content-area > main {
     padding: 18px 24px 28px;
@@ -5650,32 +5235,6 @@ aside {
 .page-shell {
     padding: 30px 28px;
     background: var(--bg);
-}
-
-.page-placeholder {
-    max-width: 720px;
-    margin: 8vh auto 0;
-    text-align: center;
-    padding: 48px 28px;
-    background: var(--paper);
-    border: 1px dashed var(--rule);
-    border-radius: 12px;
-}
-
-.page-placeholder h2 {
-    font-family: var(--serif);
-    font-size: 30px;
-    font-weight: 400;
-    color: var(--ink);
-    margin: 0 0 10px;
-    letter-spacing: -0.01em;
-}
-
-.page-placeholder p {
-    font-size: 14px;
-    color: var(--ink-3);
-    line-height: 1.6;
-    margin: 0;
 }
 
 /* ── Settings page — full main-area version ────────────────────────── */
@@ -5747,10 +5306,8 @@ aside {
     max-width: 460px;
 }
 
-/* ── PTO allotment section (admin only) ────────────────────────────
-   One row per pathologist with a small number input bound to the
-   `vacationAllotted` field. Changes auto-save on commit. Visual
-   style matches the rest of the settings page. */
+/* ── PTO allotment section (admin only) ── one row per pathologist bound
+   to `vacationAllotted`; auto-saves on commit. */
 
 .settings-section-desc {
     font-family: var(--sans);
@@ -5763,6 +5320,158 @@ aside {
 .pto-allot-list {
     display: flex;
     flex-direction: column;
+}
+
+/* Fiscal-year stepper: ‹ › one year at a time, unbounded forward,
+   bottoming out at "Default — all years". Mirrors the toolbar's controls. */
+.pto-allot-year-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    row-gap: 8px;
+    margin: 2px 0 10px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+.pto-allot-year-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    flex-shrink: 0;
+}
+
+.pto-allot-year-stepper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.pto-allot-year-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    color: var(--ink-2);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+}
+
+.pto-allot-year-btn:hover:not(:disabled) {
+    background: var(--accent-soft);
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+
+.pto-allot-year-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.pto-allot-year-current {
+    min-width: 150px;
+    padding: 5px 12px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    white-space: nowrap;
+}
+
+.pto-allot-year-current:hover {
+    background: var(--accent-soft);
+}
+
+/* Viewing the current fiscal year — the jump target is already here. */
+.pto-allot-year-current.is-current-year {
+    cursor: default;
+}
+
+.pto-allot-year-current .pto-allot-year-now {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-left: 6px;
+    vertical-align: 1px;
+}
+
+/* "2 custom values" / "3 years customized" orientation hint. */
+.pto-allot-year-meta {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.04em;
+    color: var(--ink-3);
+    flex-shrink: 0;
+}
+
+/* Switch between editing a year and editing the all-years default. */
+.pto-allot-default-toggle {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--ink-3);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline dotted;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.pto-allot-default-toggle:hover {
+    color: var(--ink-2);
+}
+
+/* Row inherits the all-years default (no value set for this year). */
+.pto-allot-default-badge {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    background: var(--accent-soft);
+    border: 1px solid var(--rule-soft);
+    border-radius: 3px;
+    padding: 1px 6px;
+    flex-shrink: 0;
+    cursor: default;
+}
+
+/* Row has a year-specific value — link back to the default. */
+.pto-allot-reset {
+    font-size: 11px;
+    color: var(--ink-3);
+    background: none;
+    border: none;
+    cursor: pointer;
+    text-decoration: underline dotted;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.pto-allot-reset:hover {
+    color: var(--ink-2);
 }
 
 .pto-allot-row {
@@ -5892,13 +5601,9 @@ aside {
     pointer-events: auto;
 }
 
-/* ── Body scroll lock while the mobile sidebar is open ──
-   Applied by openMobileSidebar() in schedule.js. position:fixed is
-   the only reliable way to stop iOS Safari from rubber-band scrolling
-   the background page behind the drawer; the saved scroll offset is
-   reapplied via inline `top: -<scrollY>px` so the page doesn't visually
-   jump to the top when the lock engages, and closeMobileSidebar()
-   restores window.scrollTo(0, savedScrollY) before clearing the class. */
+/* ── Body scroll lock (mobile sidebar) ── applied by openMobileSidebar().
+   position:fixed is the only reliable iOS Safari lock; inline top:-scrollY
+   prevents the visual jump and close restores window.scrollTo. */
 body.sidebar-scroll-locked {
     position: fixed;
     left: 0;
@@ -5951,13 +5656,9 @@ body.sidebar-scroll-locked {
         bottom: 0;
         width: 270px;
         max-width: 84vw;
-        /* Explicitly clear the desktop rule's height: 100vh. On mobile
-           browsers 100vh includes the address bar / browser chrome, which
-           makes the sidebar taller than the visible area and pushes the
-           sign-out button off the bottom. Using height: auto lets the
-           top:0 / bottom:0 constraints define the actual height — and the
-           small-viewport units (dvh fallback) match the *visible* viewport
-           as the URL bar shows/hides. */
+        /* Clear the desktop height:100vh — on mobile, 100vh includes browser
+           chrome and pushes sign-out off-screen; top/bottom constraints + the dvh
+           fallback track the *visible* viewport as the URL bar shows/hides. */
         height: auto;
         max-height: 100vh;
         max-height: 100dvh;
@@ -5978,10 +5679,8 @@ body.sidebar-scroll-locked {
         transform: translateX(0);
     }
 
-    /* When the sidebar is open, the backdrop must be visible AND
-       interactive. The base .sidebar-backdrop rule sets pointer-events:none
-       so it doesn't block clicks while hidden — we need to re-enable them
-       here, otherwise tapping outside the drawer does nothing. */
+    /* Re-enable pointer-events while open (the base rule sets none so the
+       hidden backdrop doesn't block clicks) — otherwise tapping outside does nothing. */
     .app.sidebar-open .sidebar-backdrop {
         display: block;
         opacity: 1;
@@ -6004,19 +5703,14 @@ body.sidebar-scroll-locked {
     .content-area > .page-shell {
         overflow: visible;
         min-height: 0;
-        /* Without this, main inherits the desktop `flex: 1 1 0` and caps at
-           viewport height, so day cards below the fold get painted off-screen
-           with no scroll. Sizing to content lets the document scroll naturally.
-           The day view re-enables flex via the higher-specificity
-           `.content-area > main:has(> .day-view)` rule, so it's unaffected. */
+        /* Without this, main inherits the desktop flex:1 1 0 and caps at viewport
+           height (below-fold day cards unreachable). Day view re-enables flex via
+           its higher-specificity `.content-area > main:has(> .day-view)` rule. */
         flex: none;
     }
 
-    /* Mobile toolbar: compact single-row layout.
-       Layout: [hamburger] [date (flex)] [path ▾] [view ▾]
-       Arrow nav buttons and the .path-tabs / .view-tabs button groups
-       are hidden — swipe handles prev/next, and the mobile selects
-       replace the toggles. */
+    /* Mobile toolbar, one row: [hamburger] [date (flex)] [path ▾] [view ▾].
+       Arrow buttons and the tab groups are hidden — swipe + selects replace them. */
     .schedule-toolbar {
         position: sticky;
         top: 0;
@@ -6067,9 +5761,8 @@ body.sidebar-scroll-locked {
         display: none;
     }
 
-    /* Hide the desktop tab groups on mobile — their state is mirrored by
-       the .mobile-toolbar-controls selects below. We keep the buttons in
-       the DOM so existing event handlers and references still work. */
+    /* Hide the desktop tab groups on mobile but keep them in the DOM so
+       existing handlers and mirrored state still work. */
     .toolbar-left,
     .toolbar-right {
         display: none;
@@ -6082,12 +5775,6 @@ body.sidebar-scroll-locked {
         gap: 6px;
         grid-column: 3 / span 2;
         grid-row: 1;
-    }
-
-    .menu-btn {
-        margin-left: 4px;
-        width: 36px;
-        height: 36px;
     }
 
     /* Adjust the kebab dropdown placement on mobile so it doesn't run off-screen */
@@ -6104,10 +5791,6 @@ body.sidebar-scroll-locked {
     /* Mobile padding tweaks */
     .content-area > main {
         padding: 14px 12px 24px;
-    }
-
-    .oc-callout-wrap {
-        padding: 10px 12px 0;
     }
 
     .page-shell {
@@ -6136,10 +5819,6 @@ body.sidebar-scroll-locked {
         font-size: 15px;
         padding: 3px 4px;
     }
-    .menu-btn {
-        width: 34px;
-        height: 34px;
-    }
     .aside-toggle-btn {
         width: 38px;
         height: 38px;
@@ -6163,10 +5842,8 @@ body.sidebar-scroll-locked {
     }
 }
 
-/* ════════════════════════════════════════════════════════════════════════
-   PAGE VISIBILITY — toolbar/oc-callout/main only show on schedule page;
-   page-shells hide via [hidden] attribute.
-   ════════════════════════════════════════════════════════════════════════ */
+/* ════ PAGE VISIBILITY — toolbar/oc-callout/main only on the schedule
+   page; page-shells hide via [hidden] ════ */
 
 /* On non-schedule pages, hide the toolbar, oc-callout, and main calendar. */
 .app[data-page="requests"] .schedule-toolbar,
@@ -6193,15 +5870,11 @@ body.sidebar-scroll-locked {
     padding-top: 30px;
 }
 
-/* ════════════════════════════════════════════════════════════════════════
-   MOBILE: keep the hamburger reachable on non-schedule pages.
-   On desktop, the sidebar is always visible so this isn't needed; on mobile
-   the sidebar is off-canvas, so we need a persistent way to reopen it.
-   ════════════════════════════════════════════════════════════════════════ */
+/* ════ MOBILE: keep the hamburger reachable on non-schedule pages (the
+   sidebar is off-canvas there; on desktop it's always visible) ════ */
 @media (max-width: 800px) {
-    /* Override the desktop "hide toolbar on non-schedule pages" rule on
-       mobile — instead we keep a minimal toolbar that contains just the
-       hamburger button. */
+    /* Keep a minimal hamburger-only toolbar on non-schedule mobile pages
+       (overrides the desktop hide rule). */
     .app[data-page="requests"] .schedule-toolbar,
     .app[data-page="changes"] .schedule-toolbar,
     .app[data-page="tracking"] .schedule-toolbar,
@@ -6224,11 +5897,8 @@ body.sidebar-scroll-locked {
         display: none !important;
     }
 }
-/* ════════════════════════════════════════════════════════════════════
-   TRACKING PAGE — Conference Tracker
-   Lives inside .page-shell#trackingPage. Header DNA shares the family
-   look with .changes-page-* and .requests-page-*. Tracks how many of
-   each conference each pathologist has presented at. */
+/* ════ TRACKING PAGE — Conference Tracker ════
+   Header DNA shared with .changes-page-* / .requests-page-*. */
 
 .tracking-page-content {
     max-width: 1280px;
@@ -6250,16 +5920,6 @@ body.sidebar-scroll-locked {
 .tracking-page-heading {
     min-width: 0;
     flex: 1 1 280px;
-}
-
-.tracking-page-eyebrow {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-    margin-bottom: 8px;
 }
 
 .tracking-page-title {
@@ -6706,11 +6366,8 @@ table.tracking-summary tbody td.t-sum-total {
     font-size: 12px;
 }
 
-/* ── Conference modal: per-day schedule preview ──────────────────────
-   Compact list inside the Add/Edit Conference modal showing who is on
-   which service for the currently selected date. Highlights the
-   currently-selected presenter so the user can sanity-check the choice.
-   Click a row to select that pathologist as the presenter. */
+/* ── Conference modal: per-day schedule preview ── who is on which service
+   for the selected date; highlights the selected presenter, click to select. */
 .conf-day-schedule {
     margin-top: 10px;
     margin-bottom: 4px;
@@ -6867,18 +6524,15 @@ table.tracking-summary tbody td.t-sum-total {
         gap: 14px;
         padding-bottom: 16px;
         margin-bottom: 16px;
-        /* The global `header { position: sticky; top: 0 }` rule (line 108)
-           leaks into this element. On desktop the page-shell scrolls
-           internally so sticky is useful — on mobile the whole document
-           scrolls, and a sticky header pins itself to the viewport top
-           forever, making it look like scrolling isn't working. Reset. */
+        /* The global `header { position: sticky; top: 0 }` leaks here. Desktop
+           page-shells scroll internally (sticky is useful); on mobile the document
+           scrolls and a sticky header pins to the viewport forever. Reset. */
         position: static;
         z-index: auto;
     }
 
-    /* In column flex, the desktop `flex: 1 1 280px` would be read as a
-       min-height of 280px and create a huge empty gap below the title.
-       Reset to auto so the heading just fits its content. */
+    /* In column flex the desktop flex:1 1 280px reads as min-height:280px and
+       opens a huge gap below the title. Reset to auto. */
     .tracking-page-heading {
         flex: 0 0 auto;
         width: 100%;
@@ -6928,12 +6582,9 @@ table.tracking-summary tbody td.t-sum-total {
     .tracking-entry .te-main  { grid-area: main; }
     .tracking-entry .te-edit-btn { grid-area: edit; align-self: start; }
 }
-/* ════════════════════════════════════════════════════════════════════
-   TRACKING PAGE — Two-column layout
-   Left column: per-conference quick-add buttons + presentation-counts
-   table. Right column: history/log (tabs + entries list).
-   Collapses to single column on narrow viewports.
-   ════════════════════════════════════════════════════════════════════ */
+/* ════ TRACKING PAGE — two-column layout ════
+   Left: quick-add buttons + counts (+ PTO / holiday-call trackers).
+   Right: history log. Collapses to a single column on narrow viewports. */
 
 .tracking-grid {
     display: grid;
@@ -6959,12 +6610,125 @@ table.tracking-summary tbody td.t-sum-total {
     margin: 0 0 12px;
 }
 
-/* ── Left column — quick-add buttons ───────────────────────────────
-   Compact on desktop so the PTO tracker fits below without pushing
-   the presentation-counts table off the fold. */
+/* ── Left column quick-add ── compact so the trackers fit below without
+   pushing the counts table off the fold. */
 
 .tracking-conf-add {
     margin-bottom: 24px;
+}
+
+/* ── Consult rotation (left column) ─────────────────────────────── */
+/* "Who takes the next consult" — the full cycle order with the next
+   recipient highlighted, plus the log button for Kathleen / the admin. */
+.tracking-consult-section {
+    margin-bottom: 24px;
+}
+
+.consult-next-card {
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 5px;
+}
+
+.consult-rot-strip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.consult-rot-chip {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: var(--c, var(--ink-2));
+    background: color-mix(in srgb, var(--c, var(--ink-3)) 7%, white);
+    border: 1px solid color-mix(in srgb, var(--c, var(--ink-3)) 28%, transparent);
+    border-radius: 4px;
+    padding: 2px 7px;
+    line-height: 1.4;
+}
+
+/* Next up in the cycle — same soft glow language as locked pills. */
+.consult-rot-chip.is-next {
+    color: #fff;
+    background: var(--c, var(--accent));
+    border-color: var(--c, var(--accent));
+    box-shadow: 0 0 7px 1px color-mix(in srgb, var(--c, var(--accent)) 40%, transparent);
+}
+
+.consult-rot-arrow {
+    color: var(--ink-4);
+    font-size: 11px;
+    line-height: 1;
+}
+
+.consult-next-line {
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px dashed var(--rule-soft);
+    font-size: 12px;
+    color: var(--ink-2);
+}
+
+.consult-next-line .consult-next-arrow {
+    color: var(--ink-4);
+    margin: 0 2px;
+}
+
+.consult-next-line strong {
+    color: var(--c, var(--ink));
+    font-weight: 600;
+}
+
+.consult-add-btn .tcb-dot {
+    background: var(--accent);
+}
+
+/* Rotation hint inside the consult modal (under the pathologist select). */
+.consult-rotation-hint {
+    font-size: 11.5px;
+    color: var(--ink-3);
+    font-style: italic;
+    margin-top: 6px;
+    min-height: 1em;
+}
+
+/* Consult entry meta bits in the history list. */
+.tracking-entry .te-meta .te-case {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    padding: 1px 6px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 3px;
+}
+
+.tracking-entry .te-meta .te-source {
+    font-style: italic;
+    color: var(--ink-2);
+}
+
+/* Consults column in the summary table — separated from the presentation
+   counts (it isn't part of the presentation Total). */
+table.tracking-summary .t-sum-consult-col {
+    border-left: 1px solid var(--rule-soft);
+}
+
+table.tracking-summary tbody td.t-sum-consult {
+    border-left: 1px solid var(--rule-soft);
+    color: var(--ink);
+    font-weight: 600;
+}
+
+table.tracking-summary tbody td.t-sum-consult.t-sum-zero {
+    color: var(--ink-4);
+    font-weight: 400;
 }
 
 .tracking-conf-btn-stack {
@@ -7042,11 +6806,8 @@ table.tracking-summary tbody td.t-sum-total {
 .tracking-conf-btn[data-conf="cdh"]      { --c: #c08840; }
 .tracking-conf-btn[data-conf="other"]    { --c: #6a7d92; }
 
-/* ── PTO tracker (left column, between conf-add and counts) ────────
-   Per-pathologist working-days-of-PTO used in the selected fiscal
-   year (Sept 1 – Aug 31), vs. the allotted amount. Visual style
-   mirrors the surrounding tracking-page sections: clinical, low-
-   chroma, sans-serif name, mono numerals, thin progress bar. */
+/* ── PTO tracker (left column) ── working-days used vs allotted for the
+   selected fiscal year; clinical style, mono numerals, thin progress bar. */
 
 .tracking-pto-section {
     margin-bottom: 24px;
@@ -7146,6 +6907,43 @@ table.tracking-summary tbody td.t-sum-total {
     background: #b94e2a;
 }
 
+/* ── Holiday call tracker (left column) ── cumulative, never resets,
+   ignores the Period selector. A matrix: pathologists as rows, the six
+   federal holidays as columns, on-call counts in the cells. Reuses the
+   .tracking-summary table styling; header + rows render from HOLIDAY_ORDER
+   so columns and headings can't drift out of sync. */
+.tracking-holiday-section {
+    margin-bottom: 24px;
+}
+
+.tracking-holiday-section .tracking-section-label {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.tracking-holiday-period {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    color: var(--ink-4);
+    text-transform: none;
+    font-weight: 400;
+}
+
+/* Departed members still credited by old overrides get a muted row. */
+table.tracking-holiday-table tbody tr.tracking-hc-former .t-sum-name {
+    color: var(--ink-3);
+    font-weight: 400;
+}
+
+/* Empty-state cell (no pathologists loaded yet). */
+table.tracking-summary tbody td.t-sum-empty {
+    color: var(--ink-4);
+    font-style: italic;
+}
+
 .tracking-pto-empty {
     font-family: var(--sans);
     font-size: 12px;
@@ -7153,11 +6951,8 @@ table.tracking-summary tbody td.t-sum-total {
     padding: 6px 2px;
 }
 
-/* ── Stack collapse ──────────────────────────────────────────────────
-   When the viewport is narrow enough that the sidebar eats into the
-   content area (the app sidebar is ~240px wide at viewports >800px),
-   drop to a single column. Buttons stay on top, then counts table,
-   then the log. Threshold roughly matches a 13" laptop with sidebar. */
+/* ── Stack collapse ── below ~1100px (the ~240px sidebar eats content
+   width) drop to one column: buttons, counts, then the log. */
 @media (max-width: 1100px) {
     .tracking-grid {
         grid-template-columns: 1fr;
@@ -7195,12 +6990,8 @@ table.tracking-summary tbody td.t-sum-total {
     }
 }
 
-/* ── History list — internal scroll ──────────────────────────────────
-   When the history is long enough to exceed the viewport in two-column
-   mode, keep the rest of the page static and scroll only the entries
-   list inside its panel. In single-column mode (stacked layout below
-   1100px), the natural page scroll is the right behaviour, so we don't
-   constrain the height there. */
+/* ── History list internal scroll ── two-column mode scrolls only the
+   entries list; single-column (<1100px) keeps natural page scroll. */
 .tracking-entries {
     max-height: calc(100vh - 360px);
     min-height: 240px;
@@ -7227,3 +7018,74 @@ table.tracking-summary tbody td.t-sum-total {
         padding-right: 0;
     }
 }
+/* ════ STICKY PAGE-HEADER FIX (Requests / Changes / Tracking) ════
+   These headers inherit the global sticky rule and pin inside their
+   scrolling .page-shell, but rested 42px below the pin line (30px shell +
+   12px wrapper top padding): they visibly slid before sticking, and content
+   painted in the 30px band above the pinned header (clipping happens at the
+   shell's padding edge, pinning at its content edge).
+   Fix: move that 42px into the header's own top padding — zero travel, and
+   the opaque background reaches the clip edge. Desktop only; on mobile
+   these headers are static. */
+@media (min-width: 801px) {
+    #requestsPage.page-shell,
+    #changesPage.page-shell,
+    #trackingPage.page-shell {
+        padding-top: 0;
+    }
+
+    .requests-page-content,
+    .changes-page-content,
+    .tracking-page-content {
+        padding-top: 0;
+    }
+
+    .requests-page-header,
+    .changes-page-header,
+    .tracking-page-header {
+        padding-top: 60px; /* 18px original + 30px ex-shell + 12px ex-wrapper */
+    }
+}
+
+/* Mobile/narrow (≤800px): the document scrolls, so sticky page headers
+   pin to the viewport and collide with the sticky minimal toolbar. Make
+   all three static — also covers the 721–800px band and Requests/Changes,
+   which the ≤720px tracking-only reset missed. */
+@media (max-width: 800px) {
+    .requests-page-header,
+    .changes-page-header,
+    .tracking-page-header {
+        position: static;
+        z-index: auto;
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   LAKE FOREST GUEST MODE (body.lf-guest, toggled by schedule.js)
+   The 'lakeforest' passwordless account sees only LF sendout days:
+   pathologist rows, the procedure grid, path filters, and every
+   non-schedule page are hidden. Normal accounts are unaffected. */
+
+/* Calendar (week / day / month): keep day chrome + LF banners only */
+.lf-guest .wd-row:not(.lf-sendout) { display: none !important; }
+.lf-guest .wd-hours,
+.lf-guest .wd-hours-head { display: none !important; }
+.lf-guest .week-day,
+.lf-guest .month-view .day { cursor: default; }
+
+/* Toolbar: the path filter is meaningless with no pathologist rows */
+.lf-guest #pathTabs,
+.lf-guest #mobilePathSelectWrap { display: none !important; }
+
+/* Sidebar: Schedule + Sign out only */
+.lf-guest .nav-item[data-page="requests"],
+.lf-guest .nav-item[data-page="changes"],
+.lf-guest .nav-item[data-page="tracking"],
+.lf-guest .nav-item[data-page="settings"] { display: none !important; }
+
+/* Year view: hide the PTO/Call machinery; mark sendout days instead
+   (the .lf class is added per-cell by renderYear for this account) */
+.lf-guest .year-legend { display: none; }
+.lf-guest .year-month .mini-grid .md .md-square { display: none; }
+.lf-guest .year-view .md.lf { background: #4E2E85; border-radius: 4px; }
+.lf-guest .year-view .md.lf .md-num { color: #fff; font-weight: 700; }

@@ -6984,7 +6984,7 @@ function attachPathRowHandlers(date) {
                     </div>
                     <label class="pqp-lock-row" id="pqpLockRow_${pid}">
                         <input type="checkbox" id="pqpLockCb_${pid}" ${lockId ? 'checked' : ''} />
-                        <span class="pqp-lock-text" id="pqpLockText_${pid}">Lock in place — recompute won't move it</span>
+                        <span class="pqp-lock-text" id="pqpLockText_${pid}" title="Recompute won't move a locked assignment">Lock in place</span>
                     </label>
                     ${hasOverride ? `<button class="pqp-reset" id="pqpSvcReset_${pid}">Reset to default rotation</button>` : ''}
                 `;
@@ -7013,7 +7013,7 @@ function attachPathRowHandlers(date) {
                             lockCb.checked = lockCb.dataset.prevManual === '1';
                             delete lockCb.dataset.prevManual;
                         }
-                        lockText.textContent = "Lock in place — recompute won't move it";
+                        lockText.textContent = 'Lock in place';
                     }
                 }
                 svcSel.addEventListener('change', () => {
@@ -7176,7 +7176,7 @@ function attachPathRowHandlers(date) {
                     </div>
                     <label class="pqp-lock-row">
                         <input type="checkbox" id="pqpOffLockCb_${pid}" />
-                        <span class="pqp-lock-text" id="pqpOffLockText_${pid}">Lock in place — recompute won't move it</span>
+                        <span class="pqp-lock-text" id="pqpOffLockText_${pid}" title="Recompute won't move a locked assignment">Lock in place</span>
                     </label>`);
                 }
 
@@ -7219,7 +7219,7 @@ function attachPathRowHandlers(date) {
                                 offLockCb.checked = offLockCb.dataset.prevManual === '1';
                                 delete offLockCb.dataset.prevManual;
                             }
-                            offLockText.textContent = "Lock in place — recompute won't move it";
+                            offLockText.textContent = 'Lock in place';
                         }
                     }
                     offSel.addEventListener('change', () => {

@@ -101,10 +101,7 @@
                 <button id="exportBtn">Export to Outlook</button>
                 <button id="recomputeBtn">Recompute Schedule</button>
                 <button id="todayBtn">Today</button>
-                <!-- Conference-add proxy: kept in the DOM so schedule.js can still toggle
-                     its display based on admin status. The conference-add buttons in the
-                     tracking page's left column mirror that state and click() this to
-                     open the same modal that used to be opened by the header "Add entry" button. -->
+                <!-- Conference-add proxy: kept in the DOM so schedule.js can toggle admin visibility; the tracking-page buttons mirror it and click() it to open the modal. -->
                 <button id="trackingAddBtn" class="tracking-add-btn" style="display:none;" type="button">
                     <span class="tracking-add-plus" aria-hidden="true">+</span>
                     <span>Add entry</span>
@@ -130,10 +127,7 @@
             </div>
         </aside>
 
-        <!-- Skinny rounded toggle that collapses the sidebar to icons-only.
-             Sits at the right edge of the sidebar: inside it when expanded,
-             just outside it when collapsed. Hidden on mobile (where the
-             sidebar is an off-canvas drawer instead). -->
+        <!-- Sidebar collapse toggle — inside the right edge when expanded, just outside when collapsed; hidden on mobile (off-canvas drawer). -->
         <button class="sidebar-toggle-btn" id="sidebarToggleBtn" type="button"
                 aria-label="Collapse sidebar" title="Collapse sidebar">
             <svg class="sidebar-toggle-chevron" viewBox="0 0 16 16" width="10" height="10"
@@ -173,9 +167,7 @@
 
                 <div class="toolbar-right">
                     <div class="view-tabs" id="viewTabs">
-                        <!-- Day view: mobile-first single-day view with the procedure schedule.
-                             Hidden on desktop via CSS — desktop has plenty of room for the full
-                             week view, so the Day tab only appears on phones/narrow tablets. -->
+                        <!-- Day view: mobile-first single-day view with the procedure schedule; hidden on desktop via CSS. -->
                         <button class="view-tab view-tab-day" data-view="day">Day</button>
                         <button class="view-tab active" data-view="week">Week</button>
                         <button class="view-tab" data-view="month">Month</button>
@@ -184,13 +176,7 @@
 
                 </div>
 
-                <!-- Mobile-only compact controls. On phone-sized viewports the toolbar
-                     collapses to a single row [hamburger | date | path ▾ | view ▾],
-                     and the prev/next arrow buttons are hidden in favor of horizontal
-                     swipe gestures on the schedule. These selects mirror the state of
-                     the desktop .path-tabs / .view-tabs buttons so existing logic still
-                     drives navigation; the selects are kept in sync via setPathFilter()
-                     and the view-tabs click handler. Hidden on desktop via CSS. -->
+                <!-- Mobile-only compact controls: single-row toolbar [hamburger | date | path ▾ | view ▾]; arrows replaced by swipe. Selects mirror the desktop tab state (setPathFilter() + the view-tabs handler). Hidden on desktop. -->
                 <div class="mobile-toolbar-controls" id="mobileToolbarControls">
                     <div class="mobile-select-wrap" id="mobilePathSelectWrap">
                         <select id="mobilePathSelect" class="mobile-toolbar-select" aria-label="Filter">
@@ -289,8 +275,8 @@
                 <div class="tracking-page-content">
                     <header class="tracking-page-header">
                         <div class="tracking-page-heading">
-                            <h2 class="tracking-page-title">Conference Tracker</h2>
-                            <p class="tracking-page-subtitle">Track how many of each conference each pathologist has presented at.</p>
+                            <h2 class="tracking-page-title">Conference/Consult Tracker</h2>
+                            <p class="tracking-page-subtitle">Track conference presentations and cycle consult cases through the pathologists.</p>
                         </div>
                         <div class="tracking-page-controls">
                             <div class="tracking-year-wrap">
@@ -322,6 +308,17 @@
 
                         <!-- ── LEFT COLUMN ─────────────────────────────────────── -->
                         <div class="tracking-col tracking-col-left">
+
+                            <!-- Consult rotation — next incoming consult; cycle = pathologist list, next recipient highlighted. "Log a consult" only for Kathleen/admin (renderConsultNext()). -->
+                            <section class="tracking-consult-section" id="trackingConsultSection">
+                                <div class="tracking-section-label">Consult rotation</div>
+                                <div class="consult-next-card" id="consultNextCard"></div>
+                                <button class="tracking-conf-btn consult-add-btn" id="consultAddBtn" type="button" style="display:none;">
+                                    <span class="tcb-dot" aria-hidden="true"></span>
+                                    <span class="tcb-label">Log a consult</span>
+                                    <span class="tcb-plus" aria-hidden="true">+</span>
+                                </button>
+                            </section>
 
                             <!-- Per-conference quick-add buttons (admin only; visibility
                                  mirrors the hidden #trackingAddBtn proxy in .hidden-actions). -->
@@ -356,10 +353,7 @@
                                 </div>
                             </section>
 
-                            <!-- PTO tracker — working days of PTO used in the
-                                 selected fiscal year (Sept 1 – Aug 31), per
-                                 pathologist, vs. their allotted total. Mirrors
-                                 the period selector at the top of the page. -->
+                            <!-- PTO tracker — working days used vs allotted in the selected fiscal year; follows the period selector. -->
                             <section class="tracking-pto-section">
                                 <div class="tracking-section-label">
                                     <span>PTO this fiscal year</span>
@@ -368,9 +362,28 @@
                                 <div class="tracking-pto-list" id="trackingPtoList"></div>
                             </section>
 
-                            <!-- Counts table — each pathologist × each conference type. -->
+                            <!-- Holiday call tracker — on-call for the six federal holidays, cumulative across years (never resets, ignores the Period selector); derived from onCallIdForDay so swaps credit the actual coverer. -->
+                            <section class="tracking-holiday-section">
+                                <div class="tracking-section-label">
+                                    <span>Holiday call</span>
+                                    <span class="tracking-holiday-period" id="trackingHolidayPeriod" aria-hidden="true"></span>
+                                </div>
+                                <div class="tracking-summary-wrap">
+                                    <div class="tracking-summary-scroll">
+                                        <table class="tracking-summary tracking-holiday-table">
+                                            <thead>
+                                                <tr id="trackingHolidayHead"></tr>
+                                            </thead>
+                                            <tbody id="trackingHolidayBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <!-- Counts table — each pathologist × each conference type,
+                                 plus a separate consult tally for rotation fairness. -->
                             <section class="tracking-summary-section">
-                                <div class="tracking-section-label">Presentation counts</div>
+                                <div class="tracking-section-label">Presentation &amp; consult counts</div>
                                 <div class="tracking-summary-wrap">
                                     <div class="tracking-summary-scroll">
                                         <table class="tracking-summary">
@@ -383,6 +396,7 @@
                                                     <th>Morning/CDH</th>
                                                     <th>Other</th>
                                                     <th class="t-sum-total-col">Total</th>
+                                                    <th class="t-sum-consult-col">Consults</th>
                                                 </tr>
                                             </thead>
                                             <tbody id="trackingSummaryBody"></tbody>
@@ -419,6 +433,10 @@
                                 <button class="tracking-tab" data-conf="other" role="tab">
                                     <span>Other</span>
                                     <span class="tracking-tab-count" id="trackingTabCountOther">0</span>
+                                </button>
+                                <button class="tracking-tab tracking-tab-consult" data-conf="consult" role="tab">
+                                    <span>Consults</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountConsult">0</span>
                                 </button>
                             </div>
 
@@ -488,7 +506,17 @@
                          via JS in renderPtoAllotmentSettings(). -->
                     <section class="settings-section" id="ptoAllotmentSection" style="display:none;">
                         <h3 class="settings-section-title">PTO allotments</h3>
-                        <p class="settings-section-desc">Set the number of working days of PTO each pathologist is allotted per fiscal year (Sept 1 – Aug 31). Changes save automatically.</p>
+                        <p class="settings-section-desc">Set the number of working days of PTO each pathologist is allotted per fiscal year (Sept 1 – Aug 31). Each fiscal year can have its own allotment; years without one use the default. Changes save automatically.</p>
+                        <div class="pto-allot-year-row">
+                            <span class="pto-allot-year-label">Fiscal year</span>
+                            <div class="pto-allot-year-stepper" role="group" aria-label="Fiscal year">
+                                <button type="button" class="pto-allot-year-btn" id="ptoAllotYearPrev" aria-label="Previous fiscal year" title="Previous fiscal year (←)">‹</button>
+                                <button type="button" class="pto-allot-year-current" id="ptoAllotYearCurrent" aria-live="polite" title="Jump to the current fiscal year">—</button>
+                                <button type="button" class="pto-allot-year-btn" id="ptoAllotYearNext" aria-label="Next fiscal year" title="Next fiscal year (→)">›</button>
+                            </div>
+                            <span class="pto-allot-year-meta" id="ptoAllotYearMeta" aria-hidden="true"></span>
+                            <button type="button" class="pto-allot-default-toggle" id="ptoAllotDefaultToggle">Edit default (all years)</button>
+                        </div>
                         <div class="pto-allot-list" id="ptoAllotList"></div>
                     </section>
 
@@ -681,7 +709,7 @@
     <div class="modal-back" id="recomputeModalBack">
         <div class="modal">
             <h3>Recompute future schedule</h3>
-            <div class="sub">Recompute the future service schedule for all pathologists using the rotation rules. Pinned service overrides will be respected.</div>
+            <div class="sub">Recompute the future service schedule for all pathologists using the rotation rules. Approved &amp; locked assignments (glowing pills) and pinned service overrides will be respected.</div>
 
             <div class="oc-scope-toggle" style="margin-top:10px;">
                 <label class="oc-scope-opt">
@@ -849,9 +877,7 @@
             <label>Time</label>
             <input type="time" id="confTime" />
 
-            <!-- Live schedule panel: shows who is on which service for the
-                 selected date. Rendered by renderConferenceDaySchedule() in
-                 schedule.js; clicking a row selects that presenter. -->
+            <!-- Live schedule panel for the selected date (renderConferenceDaySchedule()); click a row to pick that presenter. -->
             <div class="conf-day-schedule" id="confDaySchedule"></div>
 
             <label>Presenter</label>
@@ -870,53 +896,40 @@
         </div>
     </div>
 
+    <!-- Consult add/edit modal — date, source, recipient (prefilled from rotation), MHSC<yy>-<nnnn> case number (prefilled next-in-sequence). -->
+    <div class="modal-back" id="consultModalBack">
+        <div class="modal">
+            <h3 id="consultModalTitle">Log a consult</h3>
+            <div class="sub" id="consultModalSub">Record an incoming consult case and who takes it.</div>
+
+            <label>Date received</label>
+            <input type="date" id="consultDate" />
+
+            <label>Received from</label>
+            <input type="text" id="consultSource" placeholder="e.g. Northwestern Medicine, outside hospital…" maxlength="80" />
+
+            <label>Pathologist</label>
+            <select id="consultPathologist"></select>
+            <div class="consult-rotation-hint" id="consultRotationHint"></div>
+
+            <label>Case number</label>
+            <input type="text" id="consultCaseNumber" placeholder="MHSC26-0001" maxlength="20" autocomplete="off" spellcheck="false" />
+            <div class="sub" id="consultCaseHint" style="margin-top:6px;">Numbered automatically from the date — the next in sequence for that year.</div>
+
+            <div class="conf-form-error" id="consultFormError" style="display:none;"></div>
+
+            <div class="modal-actions">
+                <button id="consultDelete" class="danger" style="display:none;" type="button">Delete</button>
+                <button id="consultCancel" type="button">Cancel</button>
+                <button id="consultSave" class="primary" type="button">Add consult</button>
+            </div>
+        </div>
+    </div>
+
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics-compat.js"></script>
-
-    <script>
-        (function () {
-            function init() {
-                var addBtn = document.getElementById('trackingAddBtn');
-                var section = document.getElementById('trackingConfAdd');
-                if (!addBtn || !section) return;
-
-                // Mirror admin-only visibility from the hidden proxy button to our section.
-                // schedule.js toggles addBtn.style.display = 'none' / '' / 'inline-flex'.
-                function syncVisibility() {
-                    section.style.display = (addBtn.style.display === 'none') ? 'none' : '';
-                }
-                syncVisibility();
-                new MutationObserver(syncVisibility).observe(addBtn, {
-                    attributes: true,
-                    attributeFilter: ['style']
-                });
-
-                // Wire each per-conference button: open the modal via the proxy,
-                // then pre-select the matching conference type and dispatch 'change'
-                // so any dependent fields (CDH subtype, Other title) render correctly.
-                var btns = section.querySelectorAll('.tracking-conf-btn');
-                for (var i = 0; i < btns.length; i++) {
-                    btns[i].addEventListener('click', function () {
-                        var conf = this.getAttribute('data-conf');
-                        addBtn.click();
-                        var sel = document.getElementById('confType');
-                        if (sel && conf) {
-                            sel.value = conf;
-                            sel.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    });
-                }
-            }
-
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', init);
-            } else {
-                init();
-            }
-        })();
-    </script>
 
     <script src="schedule.js"></script>
     <script src="recompute.js"></script>

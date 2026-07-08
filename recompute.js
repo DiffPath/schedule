@@ -21,7 +21,7 @@
 //
 // Globals this file reads from schedule.js:
 //   state:    pathologists, vacations, requests, requestsReady,
-//             loggedInPathId, today, db
+//             serviceOverrides, serviceLocks, loggedInPathId, today, db
 //   const:    SERVICE_BY_ID, EARLIEST_DATE
 //   helpers:  isOffSiteServiceId, isBeforeEarliest, fmt, parseDate, addDays,
 //             isWeekend, getFederalHoliday, prevWorkday, nextWorkday,
@@ -64,8 +64,10 @@
 // pinnedByDay[dayKey] = {pid: serviceId} locks specific paths to specific
 // services. Pins come from two sources, auto-merged on entry:
 //   • Caller-supplied (the admin's just-made change) — these win on conflict.
-//   • Previously-approved service_change requests within the recompute window
-//     (rule 2: an approved service can't be moved by a later recompute).
+//   • Approved-and-locked assignments from scheduler/serviceLocks (written
+//     when the admin approves a service_change request, released only by an
+//     explicit admin action). A locked assignment can't be moved by any
+//     recompute — the optimizer rotates everyone else around it.
 // Pins are honored even when they break coverage — the red-flag layer
 // surfaces those cases for review.
 //
@@ -420,45 +422,49 @@ function _computeOptimalDay(date, pins, prevAssign, nextAssign) {
     return count > 0 ? clean : null;
 }
 
-// Build pin entries from already-approved service_change requests within
-// the recompute window. DISABLED — returns an empty map.
+// Build pin entries from the serviceLocks store (scheduler/serviceLocks).
 //
-// Why disabled
-// ------------
-// This used to walk every approved service_change request inside the
-// recompute window and treat the approved {pid, serviceId} as a HARD LOCK,
-// so the optimizer couldn't move that pathologist off that service.  The
-// intent (old "rule 2") was that an admin-approved service change should
-// survive a later recompute.
+// History
+// -------
+// An earlier version pinned from the approved-request LOG itself: every
+// approved service_change inside the recompute window became a hard lock.
+// That caused stacked week-scope approvals to permanently pin one
+// pathologist to one service for weeks (the "Michael Moravek on M Bigs for
+// six straight weeks" symptom), because stale approvals could never be
+// released — the log is immutable.
 //
-// In practice this caused the opposite of what the rules call for: stacked
-// week-scope approvals would permanently pin one pathologist to one
-// service for weeks at a time, even when the rotation rules clearly say
-// they should advance.  The exact symptom that prompted this fix was
-// Michael Moravek showing as M Bigs continuously from Sept 14 through
-// Oct 22 — six weeks on the same service — because each of those weeks
-// had a stale approved week-scope service_change pinning him there, and
-// every recompute auto-re-applied those pins instead of rotating him.
+// Current contract
+// ----------------
+// Locks now live in a dedicated, explicitly-managed store:
+//   scheduler/serviceLocks/{dayKey}/{pathId} = serviceId
+// written when the admin APPROVES a service_change request, and released
+// when the admin explicitly edits/clears that slot, resets the day,
+// approves PTO on top, revokes the approval, or clicks "Unlock" in the
+// day-detail quick panel. Locked slots render with a glow on the schedule,
+// so — unlike the old log-derived pins — they are always visible and
+// always releasable.
 //
-// New contract (what the user actually wants)
-// -------------------------------------------
-// 1. Approved service_change requests still WRITE to scheduler/serviceOverrides
-//    at approval time (in approveRequest), so they take effect immediately
-//    and are visible on the calendar until something else touches them.
-// 2. They are NOT permanent locks against later recomputes.  When the admin
-//    runs Recompute, the rotation rules win.  If the rotation can place the
-//    pathologist on the previously-approved service without breaking any
-//    rule, it will — otherwise the optimizer is free to rearrange.
-// 3. The admin's JUST-MADE change still pins for the immediate recompute
-//    offered right after save/approval, because that change is passed
-//    explicitly through `pinnedByDay` (caller-supplied) and merged below.
-//    Only stale approved requests from prior sessions are released.
-//
-// If you ever need a specific assignment to survive every future recompute,
-// the right mechanism is a dedicated "locked" flag on the override entry,
-// not the approved-request log.
-function _pinsFromApprovedRequests(fromDate, horizonDays) {
-    return {};
+// The optimizer treats each lock as a hard pin: the locked pathologist
+// stays on the locked service for that day, and everyone else rotates
+// around them. Pins are honored even when they break coverage — the
+// red-flag layer surfaces those cases for review.
+function _pinsFromServiceLocks() {
+    const pins = {};
+    const locks = (typeof serviceLocks === 'object' && serviceLocks) ? serviceLocks : {};
+    for (const dayKey in locks) {
+        const dayLocks = locks[dayKey];
+        if (!dayLocks) continue;
+        for (const pid in dayLocks) {
+            const sid = dayLocks[pid];
+            if (!sid || !SERVICE_BY_ID[sid]) continue;   // ignore malformed entries
+            if (!pins[dayKey]) pins[dayKey] = {};
+            pins[dayKey][pid] = sid;
+        }
+    }
+    // Returning ALL locks (not just the window) is safe: recomputeFutureSchedule
+    // only visits days inside its window, so extra keys are simply never read.
+    // This also covers the day-before-fromDate pass without window math.
+    return pins;
 }
 
 async function recomputeFutureSchedule(pinnedByDay, opts) {
@@ -470,13 +476,16 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
     const dayBeforeFix = opts.dayBeforeFix !== false;
 
     // ── Merge pin sources ───────────────────────────────────────────────
-    // Approved-request pins enforce rule 2 across the whole window, even
-    // for approvals from prior sessions. Caller-supplied pins (the admin's
-    // just-made change) win on direct conflict at the same {date, pid}.
-    const approvedPins = _pinsFromApprovedRequests(fromDate, horizonDays);
+    // Lock pins (approved-and-locked assignments from scheduler/serviceLocks)
+    // enforce the "approved = locked" rule across the whole window, even for
+    // approvals from prior sessions. Caller-supplied pins (the admin's
+    // just-made change) win on direct conflict at the same {date, pid} —
+    // by the time a caller pin conflicts with a lock, the save handler has
+    // already released that lock in Firebase anyway.
+    const lockPins = _pinsFromServiceLocks();
     const mergedPins = {};
-    for (const k in approvedPins) {
-        mergedPins[k] = Object.assign({}, approvedPins[k]);
+    for (const k in lockPins) {
+        mergedPins[k] = Object.assign({}, lockPins[k]);
     }
     for (const k in pinnedByDay) {
         if (!pinnedByDay[k]) continue;
@@ -581,7 +590,19 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
     for (const k in snapshot) {
         const base = baseline[k] || {};
         if (_sameServiceMap(snapshot[k], base)) continue;
-        writes['scheduler/serviceOverrides/' + k] = snapshot[k];
+        // The snapshot only covers WORKING pathologists (the optimizer never
+        // considers anyone else), but the day's override map in Firebase may
+        // also hold entries for non-working paths — off-site overrides like
+        // Director Retreat / Lab Inspection / Off Service (possibly locked
+        // via an approved request). Writing the snapshot wholesale would
+        // silently wipe those, so merge them back in before writing.
+        const dbDay = (typeof serviceOverrides === 'object' && serviceOverrides && serviceOverrides[k]) || {};
+        const preserved = {};
+        for (const pid in dbDay) {
+            if (!(pid in snapshot[k])) preserved[pid] = dbDay[pid];
+        }
+        writes['scheduler/serviceOverrides/' + k] =
+            Object.assign({}, preserved, snapshot[k]);
         processed++;
         if (prevWd && k === fmt(prevWd)) dayBeforeProcessed = true;
     }

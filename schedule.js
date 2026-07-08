@@ -16,25 +16,16 @@ const auth = firebase.auth();
 const analytics = firebase.analytics();
 
 // ────────────── AUTH MAPPING ──────────────
-// Authentication moved from a homegrown plaintext-password node in the DB
-// to Firebase Authentication. Each account signs in with a "fake" email of
-// the form <local-part>@scheduler.local. These accounts must be created
-// once, by hand, in the Firebase console (Authentication → Users).
-//
-// The local-part is derived from the account id:
-//   • pathologists  → 'p<id>'  e.g. p1@scheduler.local
-//   • gross room    → 'grossroom@scheduler.local'
-//   • Kathleen      → 'kathleen@scheduler.local'
-//   • histology     → 'histology@scheduler.local'
+// Firebase Auth accounts use fake emails <local>@scheduler.local, created by
+// hand in the console: pathologists → 'p<id>', plus grossroom / kathleen / histology / lakeforest.
 const AUTH_EMAIL_DOMAIN = '@scheduler.local';
 
-// Histology is the read-only guest. It still needs a real Auth session to
-// satisfy the ".read": "auth != null" rule, so the app holds a fixed
-// credential and signs in behind the scenes (the password field stays
-// hidden; the user never sees or types this). It is NOT a secret — it ships
-// in client code — but histology cannot write, so that's acceptable for this
-// app's threat model.
+// Histology is the read-only guest: a fixed credential signs in behind the
+// scenes to satisfy '.read: auth != null'. Not a secret — it ships in client
+// code — acceptable because histology cannot write.
 const HISTOLOGY_PW = 'histology-guest';
+// Lake Forest is the same kind of passwordless read-only guest as histology.
+const LAKE_FOREST_PW = 'lakeforest-guest';
 
 // Map an app account id (number for pathologists, or one of the string ids)
 // to its Firebase Auth email.
@@ -42,6 +33,7 @@ function authEmailForId(id) {
     if (id === GROSS_ROOM_ID) return 'grossroom' + AUTH_EMAIL_DOMAIN;
     if (id === MANAGER_ID)    return 'kathleen' + AUTH_EMAIL_DOMAIN;
     if (id === HISTOLOGY_ID)  return 'histology' + AUTH_EMAIL_DOMAIN;
+    if (id === LAKE_FOREST_ID) return 'lakeforest' + AUTH_EMAIL_DOMAIN;
     return 'p' + id + AUTH_EMAIL_DOMAIN; // pathologist
 }
 
@@ -53,17 +45,15 @@ function idForAuthEmail(email) {
     if (local === 'grossroom') return GROSS_ROOM_ID;
     if (local === 'kathleen')  return MANAGER_ID;
     if (local === 'histology') return HISTOLOGY_ID;
+    if (local === 'lakeforest') return LAKE_FOREST_ID;
     const m = local.match(/^p(\d+)$/);
     if (m) return parseInt(m[1], 10);
     return null;
 }
 
 // ────────────── DEFERRED DATA LISTENERS ──────────────
-// Under the new rules, EVERY read requires an authenticated session. The
-// data listeners must therefore NOT attach until after sign-in. We collect
-// each (path, callback, errorCallback) via regListener() at module-load time
-// and only attach them when startDataListeners() runs (called from the auth
-// state handler once a user is signed in).
+// Every read requires auth, so listeners registered via regListener() at load
+// are only attached by startDataListeners() after sign-in.
 const _pendingListeners = [];
 let _listenersStarted = false;
 
@@ -118,10 +108,49 @@ const OFF_SERVICES = [
     { id: 'off_service_lab', name: 'Off Service – Lab Inspection', short: 'Off Service - Lab Inspect', abbr: 'LAB', cssVar: '--svc-off-service-lab' },
 ];
 
-// Returns true when a service id represents an off-site assignment
-// (excluded from coverage rotation but rendered as a service, not as PTO).
+// ── Freetext / non-standard services ─────────────────────────────────────
+// Custom typed-in services are encoded as 'ft:' + text so they flow through
+// overrides/locks/recompute unchanged. Like off-site: excluded from the
+// coverage rotation, and always LOCKED when added.
+const FREETEXT_SERVICE_PREFIX = 'ft:';
+
+function isFreetextServiceId(id) {
+    return typeof id === 'string' && id.indexOf(FREETEXT_SERVICE_PREFIX) === 0
+        && id.length > FREETEXT_SERVICE_PREFIX.length;
+}
+
+// Build a freetext id from admin input: trim, collapse whitespace, cap the
+// length. Returns null when nothing usable remains.
+function makeFreetextServiceId(text) {
+    const clean = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, 40);
+    return clean ? FREETEXT_SERVICE_PREFIX + clean : null;
+}
+
+// Synthesize a service object for a freetext id, shaped exactly like the
+// built-in SERVICES entries so every renderer/consumer works unchanged.
+function freetextServiceFor(id) {
+    const name = String(id).slice(FREETEXT_SERVICE_PREFIX.length);
+    const letters = name.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    return {
+        id: id,
+        name: name,
+        short: name,
+        abbr: (letters.slice(0, 3) || 'CST'),
+        cssVar: '--svc-freetext',
+    };
+}
+
+// True for NON-ROTATION assignments (off-site or freetext): excluded from
+// the coverage rotation like PTO, but rendered as a service.
 function isOffSiteServiceId(id) {
-    return OFF_SERVICES.some(s => s.id === id);
+    return OFF_SERVICES.some(s => s.id === id) || isFreetextServiceId(id);
+}
+
+// Standard = the four rotation services (+ 2-path combo); anything else is
+// non-standard and always locked when assigned.
+function isNonStandardServiceId(id) {
+    if (!id) return false;
+    return isOffSiteServiceId(id);
 }
 
 // Special combined state when only 2 pathologists are working
@@ -133,9 +162,25 @@ const COMBO_SVC = {
     cssVar: '--svc-cyto' // reusing cyto's color theme
 };
 
-const SERVICE_BY_ID = Object.fromEntries(SERVICES.map(s => [s.id, s]));
-SERVICE_BY_ID['cytobigs'] = COMBO_SVC; // Register the combo service
-OFF_SERVICES.forEach(s => { SERVICE_BY_ID[s.id] = s; }); // Register off-site services
+const _SERVICE_BY_ID_BASE = Object.fromEntries(SERVICES.map(s => [s.id, s]));
+_SERVICE_BY_ID_BASE['cytobigs'] = COMBO_SVC; // Register the combo service
+OFF_SERVICES.forEach(s => { _SERVICE_BY_ID_BASE[s.id] = s; }); // Register off-site services
+
+// Proxy so freetext ids resolve everywhere a built-in id would, without
+// touching call sites.
+const SERVICE_BY_ID = new Proxy(_SERVICE_BY_ID_BASE, {
+    get(target, key) {
+        if (key in target) return target[key];
+        if (typeof key === 'string' && isFreetextServiceId(key)) {
+            return freetextServiceFor(key);
+        }
+        return undefined;
+    },
+    has(target, key) {
+        return (key in target)
+            || (typeof key === 'string' && isFreetextServiceId(key));
+    },
+});
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -155,6 +200,16 @@ let onCallOverrides = {};            // { weekKey: pathologistId }
 let onCallDayOverrides = {};         // { dayKey: pathologistId }
 let serviceOverrides = {};           // { weekKey: { pathId: serviceId } }
 
+// Approved-and-locked service assignments; recompute treats these as hard
+// pins. Cleared on admin edit/clear, conflicting PTO approval, or revocation.
+//   serviceLocks → { dayKey: { pathId: serviceId } }
+let serviceLocks = {};
+
+// Per-fiscal-year PTO allotments (working days); years without an entry fall
+// back to the legacy `vacationAllotted` default. Read via ptoAllotmentFor().
+//   ptoAllotments → { startYear: { pathId: workingDays } }
+let ptoAllotments = {};
+
 // Lake Forest sendout flags. When set, an "LF sendout" row is rendered above
 // the first pathologist on the matching day(s).
 //   lfSendoutDays  → { 'YYYY-MM-DD': true }     individual day
@@ -162,19 +217,14 @@ let serviceOverrides = {};           // { weekKey: { pathId: serviceId } }
 let lfSendoutDays = {};
 let lfSendoutWeeks = {};
 
-// Gross-room PTO flags. When set, a "Natalie PTO" banner row is rendered
-// above the hourly procedure grid on the matching day(s). This is separate
-// from pathologist `vacations` — it does not affect the rotation, coverage
-// cascade, or PTO allotment math; it is a display-only marker on the
-// procedure schedule that the Gross Room (and admin) can manage.
-//   nataliePtoDays → { 'YYYY-MM-DD': true }     individual day
+// Gross-room PTO flags: display-only "Natalie PTO" banner on the procedure
+// grid; no effect on rotation/coverage/allotments.
+//   nataliePtoDays → { 'YYYY-MM-DD': true }
 let nataliePtoDays = {};
 
-// Procedures: an hourly schedule independent of the pathologist rotation.
-// Shape: { 'YYYY-MM-DD': { pushKey: { time: 'HH:MM', type: 'procedure',
-//                                     createdAt: <ms>, createdBy: <pid> } } }
-// `type` is fixed to 'procedure' for now but is stored so future versions can
-// support other procedure types without a data migration.
+// Procedures: hourly schedule independent of the rotation. Shape:
+// { 'YYYY-MM-DD': { pushKey: { time:'HH:MM', type:'procedure', createdAt,
+// createdBy } } } — `type` stored for future variants.
 let procedures = {};
 
 let pathologistsReady = false;
@@ -187,9 +237,8 @@ let currentPathFilter = 'all';
 const HOURS_START = 7;   // 7 AM
 const HOURS_END = 16;  // last hour shown (so last slot is HOURS_END:30 = 4:30 PM)
 
-// Available procedure types shown in the "Add procedure" modal. Easy to
-// extend — just add another string. The pill on the schedule renders as
-// "<location> - <name>" (e.g. "HH - CT Random Kidney bx").
+// Procedure types for the "Add procedure" modal; pills render as
+// "<location> - <name>".
 const PROCEDURE_TYPES = [
     'EUS',
     'EBUS',
@@ -206,12 +255,8 @@ const PROCEDURE_TYPES = [
     'FS Parathyroid',   
 ];
 
-// Some procedure types act as expandable parents: clicking the little
-// chevron on the right of the button reveals sub-options (variants) that can
-// be selected instead of the base name. The variant strings are stored as the
-// procedureName verbatim, so they flow through saving / colouring exactly like
-// any other name (they inherit the same colour category as the base item).
-// To give an item variants, add an entry here keyed by the base name.
+// Expandable parents: chevron reveals variant sub-options; the chosen
+// variant string is stored verbatim as procedureName (inherits the base colour).
 const PROCEDURE_VARIANTS = {
     'EUS': ['EUS/ERCP'],
     'EBUS': ['EBUS/ION'],
@@ -224,18 +269,17 @@ const PROCEDURE_VARIANTS = {
 const PROCEDURE_LOCATIONS = ['HH', 'MH'];
 
 // ────────────── ADMIN / REQUESTS ──────────────
-// The admin user is identified by name (more robust than relying on a
-// numeric id which could change if the seed is regenerated).
+// Admin identified by name (robust across id reseeds).
 const ADMIN_NAME_RE = /Michael\s+Moravek/i;
 // Special non-pathologist user that can only edit the procedure schedule
 const GROSS_ROOM_ID = 'gross_room';
 // Conference-tracker manager: can view the full schedule and edit the
 // conference tracking page, but cannot manage pathologist assignments or PTO.
 const MANAGER_ID = 'kathleen';
-// Read-only guest account for the histology team. Can view the full schedule
-// but has no edit privileges anywhere (no PTO, no on-call changes, no
-// procedure edits, no conference edits). No password is required to sign in.
+// Read-only histology guest: full view, zero edit privileges, no password.
 const HISTOLOGY_ID = 'histology';
+// Read-only Lake Forest guest: sees only LF sendout days, no password.
+const LAKE_FOREST_ID = 'lakeforest';
 let requests = {};            // { reqKey: { ...request fields } } from Firebase
 let requestsReady = false;    // becomes true after first snapshot resolves
 let _seenRequestKeys = null;  // for "new request arrived" detection
@@ -263,11 +307,20 @@ function isManager() {
     return loggedInPathId === MANAGER_ID;
 }
 
-// Returns true when the histology guest account is signed in. Histology is
-// strictly read-only — every editing affordance in the app must be hidden
-// or short-circuited when this returns true.
+// True when histology is signed in — every editing affordance must be
+// hidden or short-circuited.
 function isHistology() {
     return loggedInPathId === HISTOLOGY_ID;
+}
+
+function isLakeForest() {
+    return loggedInPathId === LAKE_FOREST_ID;
+}
+
+// Read-only guest accounts: full UI lockdown (histology sees everything,
+// Lake Forest additionally sees only LF sendout days via body.lf-guest CSS).
+function isReadOnlyGuest() {
+    return isHistology() || isLakeForest();
 }
 
 // Update the path-tab toggle to reflect val ('all' or a stringified pathId)
@@ -277,9 +330,7 @@ function setPathFilter(val) {
         const wantsAll = btn.dataset.filter === 'all';
         btn.classList.toggle('active', wantsAll ? val === 'all' : val !== 'all');
     });
-    // Mirror to the mobile select (single-row toolbar on phone viewports).
-    // The select only has 'all' and 'me' as values; any non-'all' filter is
-    // the user's own id, which the mobile UI represents as 'me'.
+    // Mirror to the mobile select ('all'/'me'; any non-'all' filter shows as 'me').
     const mobileSel = document.getElementById('mobilePathSelect');
     if (mobileSel) mobileSel.value = (val === 'all') ? 'all' : 'me';
 }
@@ -287,10 +338,8 @@ let view;                             // 'day' | 'week' | 'month' | 'year' — a
 let today;
 let cursor;
 
-// Viewport helper — true when we're on a phone-sized screen. Kept in sync
-// with the @media (max-width: 800px) breakpoint used throughout the CSS.
-// Used by the initial-view selection (mobile gets Day by default) and by
-// the resize handler so the active view stays sensible across rotations.
+// Phone-sized viewport? Kept in sync with the CSS 800px breakpoint; drives
+// initial Day view + the resize fallback.
 const MOBILE_BREAKPOINT_PX = 800;
 function isMobileViewport() {
     return typeof window !== 'undefined' && window.innerWidth <= MOBILE_BREAKPOINT_PX;
@@ -307,9 +356,7 @@ const DEFAULT_SETTINGS = {
     hideSidebar: false,
     // What view to show when the app opens. 'week' preserves prior behavior.
     defaultView: 'week',
-    // Which pathologists to show on launch: 'all' or 'me' (your own schedule).
-    // 'me' preserves prior behavior for individual pathologists. Gross-room
-    // is always forced to 'all' regardless of this setting.
+    // Launch filter: 'all' or 'me'. Gross-room is always forced to 'all'.
     defaultPathFilter: 'me',
     // Which page to land on when the app opens. 'schedule' preserves prior behavior.
     defaultPage: 'schedule',
@@ -326,16 +373,9 @@ if (!VALID_DEFAULT_VIEWS.includes(settings.defaultView)) settings.defaultView = 
 if (!VALID_DEFAULT_FILTERS.includes(settings.defaultPathFilter)) settings.defaultPathFilter = 'me';
 if (!VALID_DEFAULT_PAGES.includes(settings.defaultPage)) settings.defaultPage = 'schedule';
 
-// Now that settings is loaded, seed the active view from the user's
-// default-view preference (falls back to 'week' if invalid).
-//
-// Mobile override: on phone-sized viewports we always start in Day view
-// since that's the only mobile view that shows the procedure schedule
-// (week/month/year on mobile are summary-only). Desktop users get their
-// saved preference unchanged. We don't persist this override — switching
-// to a phone for one session shouldn't overwrite a deliberate desktop
-// default. The user can still tap Week / Month / Year on mobile within
-// the session if they want.
+// Seed active view from the saved default (fallback 'week'). Mobile always
+// starts in Day view (only mobile view with the procedure schedule) — not
+// persisted, so a phone session never overwrites a desktop default.
 view = settings.defaultView;
 if (isMobileViewport()) view = 'day';
 else if (view === 'day') view = 'week'; // 'day' saved but desktop loaded → fall back
@@ -389,11 +429,10 @@ function applySettings() {
             b.setAttribute('aria-checked', isActive ? 'true' : 'false');
         });
     }
-    // Gross-room / manager / histology are always forced to "All" regardless
-    // of the default-filter setting, so hide that row to avoid showing a
-    // control that has no effect.
+    // Gross-room / manager / histology are forced to "All" — hide the
+    // pointless row.
     const dfRow = document.getElementById('defaultFilterRow');
-    if (dfRow) dfRow.style.display = (isGrossRoom() || isManager() || isHistology()) ? 'none' : '';
+    if (dfRow) dfRow.style.display = (isGrossRoom() || isManager() || isReadOnlyGuest()) ? 'none' : '';
 
     // Sync sidebar arrow button aria-label
     const stb = document.getElementById('sidebarToggleBtn');
@@ -410,10 +449,35 @@ function applySettings() {
 }
 
 // ── PTO allotments (Settings page, admin-only) ──────────────────────────
-// Renders one row per pathologist with a number input bound to their
-// `vacationAllotted` field. Edits save to Firebase on commit (change/blur),
-// then propagate back to all clients via the pathologists listener (which
-// triggers renderAll → renderPtoAllotmentSettings for any non-focused row).
+// Fiscal-year stepper + one number input per pathologist. Forward stepping is
+// unbounded; below the earliest year sits "Default — all years", which edits
+// the legacy `vacationAllotted` fallback. Year values write to
+// scheduler/ptoAllotments/<startYear>/<pathId>; edits save on change/blur.
+const PTO_ALLOT_DEFAULT_MODE = 'default';
+let ptoAllotSettingsYear = null;      // 'default' | 'YYYY' string; null until first render
+let _ptoAllotYearBeforeDefault = null; // year to return to when leaving default mode
+
+// The earliest fiscal year the stepper can reach — the fiscal year of the
+// app's earliest schedule date. Nothing exists before it to allot for.
+function ptoAllotYearFloor() {
+    return getAcademicYearOfDate(EARLIEST_DATE);
+}
+
+// Pure stepping logic (unit-testable): Default ↔ floor ↔ floor+1 ↔ …
+// (no upper bound).
+function stepPtoAllotYear(state, delta) {
+    const floor = ptoAllotYearFloor();
+    if (state === PTO_ALLOT_DEFAULT_MODE) {
+        // Nothing before Default; stepping forward enters the first year.
+        return delta > 0 ? String(floor) : PTO_ALLOT_DEFAULT_MODE;
+    }
+    let y = parseInt(state, 10);
+    if (!Number.isFinite(y)) y = getAcademicYearOfDate(new Date());
+    y += delta;
+    if (y < floor) return PTO_ALLOT_DEFAULT_MODE;
+    return String(y);
+}
+
 function renderPtoAllotmentSettings() {
     const section = document.getElementById('ptoAllotmentSection');
     const list = document.getElementById('ptoAllotList');
@@ -431,24 +495,97 @@ function renderPtoAllotmentSettings() {
     }
     section.style.display = '';
 
-    // If the admin is currently editing an input in this section, skip the
-    // re-render so we don't yank focus mid-type. The next change/blur will
-    // commit and a subsequent listener tick will refresh the list.
+    // Skip re-render while an input here has focus (don't yank mid-type); the
+    // next commit refreshes. Stepper buttons are static DOM — no guard needed.
     const active = document.activeElement;
-    if (active && active.classList && active.classList.contains('pto-allot-input')
-        && list.contains(active)) {
+    if (active && list.contains(active)
+        && active.classList && active.classList.contains('pto-allot-input')) {
         return;
     }
 
+    // First render defaults the stepper to the current fiscal year, the
+    // one the admin most likely wants to adjust.
+    const currentAy = getAcademicYearOfDate(new Date());
+    if (ptoAllotSettingsYear === null) {
+        ptoAllotSettingsYear = String(currentAy);
+    }
+
+    const isDefaultMode = ptoAllotSettingsYear === PTO_ALLOT_DEFAULT_MODE;
+    const yr = isDefaultMode ? null : parseInt(ptoAllotSettingsYear, 10);
+
+    // ── Fiscal-year stepper (static elements; update state only) ──
+    const prevBtn = document.getElementById('ptoAllotYearPrev');
+    const nextBtn = document.getElementById('ptoAllotYearNext');
+    const centerBtn = document.getElementById('ptoAllotYearCurrent');
+    const metaEl = document.getElementById('ptoAllotYearMeta');
+    const toggleBtn = document.getElementById('ptoAllotDefaultToggle');
+
+    if (prevBtn) {
+        // Disabling a focused button drops keyboard focus (breaking further
+        // arrow-key stepping) — hand focus to the period label first.
+        const prevHadFocus = document.activeElement === prevBtn;
+        prevBtn.disabled = isDefaultMode;   // nothing before Default
+        if (isDefaultMode && prevHadFocus && centerBtn) centerBtn.focus();
+    }
+    if (nextBtn) nextBtn.disabled = false;           // no upper bound
+    if (centerBtn) {
+        if (isDefaultMode) {
+            centerBtn.innerHTML = 'Default — all years';
+            centerBtn.title = 'Click to jump to the current fiscal year';
+            centerBtn.classList.remove('is-current-year');
+        } else {
+            const isNow = yr === currentAy;
+            centerBtn.innerHTML = escapeHtml(academicYearLabel(yr))
+                + (isNow ? ' <span class="pto-allot-year-now">current</span>' : '');
+            centerBtn.title = 'Sep ' + yr + ' – Aug ' + (yr + 1)
+                + (isNow ? '' : ' · Click to jump to the current fiscal year');
+            centerBtn.classList.toggle('is-current-year', isNow);
+        }
+    }
+    if (toggleBtn) {
+        toggleBtn.textContent = isDefaultMode ? 'Back to fiscal years' : 'Edit default (all years)';
+    }
+    if (metaEl) {
+        if (isDefaultMode) {
+            // Orientation: how many fiscal years carry any override?
+            const yearsCustomized = Object.keys(ptoAllotments || {}).filter(k => {
+                const y = parseInt(k, 10);
+                return Number.isFinite(y)
+                    && pathologists.some(p => explicitPtoAllotment(p.id, y) !== null);
+            }).length;
+            metaEl.textContent = yearsCustomized > 0
+                ? yearsCustomized + ' year' + (yearsCustomized === 1 ? '' : 's') + ' customized'
+                : '';
+        } else {
+            const customCount = pathologists.filter(p => explicitPtoAllotment(p.id, yr) !== null).length;
+            metaEl.textContent = customCount > 0
+                ? customCount + ' custom value' + (customCount === 1 ? '' : 's')
+                : '';
+        }
+    }
+
     list.innerHTML = pathologists.map(p => {
-        const allot = Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0;
+        const defaultAllot = Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0;
+        const explicit = isDefaultMode ? null : explicitPtoAllotment(p.id, yr);
+        const shown = isDefaultMode ? defaultAllot : (explicit !== null ? explicit : defaultAllot);
         const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
+
+        // Year mode only: tag inherited rows; offer a reset on overridden rows.
+        let stateHtml = '';
+        if (!isDefaultMode) {
+            stateHtml = explicit !== null
+                ? `<button type="button" class="pto-allot-reset" data-path-id="${p.id}"
+                       title="Remove this year's value — Dr. ${escapeHtml(lastName)} goes back to the default (${defaultAllot})">Use default</button>`
+                : `<span class="pto-allot-default-badge" title="No value set for ${academicYearLabel(yr)} — using the all-years default">default</span>`;
+        }
+
         return `
             <div class="pto-allot-row" data-path-id="${p.id}">
                 <div class="pto-allot-who">
                     <span class="pto-allot-dot" style="--c:${p.color};" aria-hidden="true"></span>
                     <span class="pto-allot-name">Dr. ${escapeHtml(lastName)}</span>
                     <span class="pto-allot-initials">${escapeHtml(p.initials || '')}</span>
+                    ${stateHtml}
                 </div>
                 <div class="pto-allot-controls">
                     <input
@@ -459,23 +596,48 @@ function renderPtoAllotmentSettings() {
                         max="365"
                         step="1"
                         inputmode="numeric"
-                        value="${allot}"
-                        aria-label="PTO days allotted for Dr. ${escapeHtml(lastName)}" />
+                        value="${shown}"
+                        aria-label="PTO days allotted for Dr. ${escapeHtml(lastName)}${isDefaultMode ? ' (default, all years)' : ' for ' + academicYearLabel(yr)}" />
                     <span class="pto-allot-unit">days</span>
                 </div>
             </div>`;
     }).join('');
 }
 
-// Wire input handlers via delegation once on first opportunity. We attach
-// to the list container (created at DOM-parse time, before any data loads),
-// so this runs harmlessly even when the section is hidden.
+// Delegated input handlers, attached once to the always-present container.
 (function wirePtoAllotmentInputs() {
     const list = document.getElementById('ptoAllotList');
     if (!list) return;
 
-    // Commit a value to Firebase, validating + clamping first. Returns the
-    // sanitized value that was saved, or null if validation failed.
+    // The effective value currently shown for a pathologist under the
+    // selected mode — used for skip-if-unchanged and Escape-revert.
+    function effectiveShownValue(p) {
+        const defaultAllot = Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0;
+        if (ptoAllotSettingsYear === PTO_ALLOT_DEFAULT_MODE) return defaultAllot;
+        const yr = parseInt(ptoAllotSettingsYear, 10);
+        const explicit = explicitPtoAllotment(p.id, yr);
+        return explicit !== null ? explicit : defaultAllot;
+    }
+
+    function markSaving(input) {
+        input.classList.remove('is-saved');
+        input.classList.add('is-saving');
+    }
+    function markSaved(input) {
+        input.classList.remove('is-saving');
+        input.classList.add('is-saved');
+        setTimeout(() => { input.classList.remove('is-saved'); }, 1200);
+    }
+    function markFailed(input, err) {
+        input.classList.remove('is-saving');
+        console.error('Failed to save PTO allotment:', err);
+        if (typeof showToast === 'function') {
+            showToast('Could not save PTO allotment — please try again.', { type: 'error' });
+        }
+    }
+
+    // Validate + clamp, then write to the default field or the selected year's
+    // node per mode. Returns the sanitized value saved, or null.
     function commitAllotment(input) {
         const pathId = parseInt(input.dataset.pathId, 10);
         if (!Number.isFinite(pathId)) return null;
@@ -483,44 +645,55 @@ function renderPtoAllotmentSettings() {
         if (!p) return null;
 
         // Parse + clamp. Empty string and non-numeric reset to the current
-        // server value (don't silently save 0).
+        // effective value (don't silently save 0).
         let v = parseInt(input.value, 10);
         if (!Number.isFinite(v)) {
-            input.value = String(Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0);
+            input.value = String(effectiveShownValue(p));
             return null;
         }
         if (v < 0) v = 0;
         if (v > 365) v = 365;
         input.value = String(v);
 
-        // Skip the round-trip if nothing actually changed.
-        if (v === p.vacationAllotted) return v;
-
         // Only admins can save (defence in depth — UI is already gated).
         if (!isAdmin()) return null;
 
-        input.classList.remove('is-saved');
-        input.classList.add('is-saving');
-        db.ref('scheduler/pathologists/' + pathId + '/vacationAllotted').set(v)
+        if (ptoAllotSettingsYear === PTO_ALLOT_DEFAULT_MODE) {
+            // ── Default (all years): edit the legacy field, as before ──
+            if (v === p.vacationAllotted) return v;   // no round-trip needed
+            markSaving(input);
+            db.ref('scheduler/pathologists/' + pathId + '/vacationAllotted').set(v)
+                .then(() => {
+                    markSaved(input);
+                    // Update the local cache immediately so allotment
+                    // displays reflect the change before Firebase echoes.
+                    p.vacationAllotted = v;
+                })
+                .catch(err => markFailed(input, err));
+            return v;
+        }
+
+        // ── Specific fiscal year: edit scheduler/ptoAllotments/<yr>/<pid> ──
+        const yr = parseInt(ptoAllotSettingsYear, 10);
+        if (!Number.isFinite(yr)) return null;
+        const explicit = explicitPtoAllotment(pathId, yr);
+        const defaultAllot = Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0;
+        // Skip no-op writes (same explicit value, or typed == inherited default).
+        if (explicit !== null ? v === explicit : v === defaultAllot) return v;
+
+        markSaving(input);
+        db.ref('scheduler/ptoAllotments/' + yr + '/' + pathId).set(v)
             .then(() => {
-                input.classList.remove('is-saving');
-                input.classList.add('is-saved');
-                // Brief visual confirmation, then fade back to default.
+                markSaved(input);
+                if (!ptoAllotments[yr] && !ptoAllotments[String(yr)]) ptoAllotments[yr] = {};
+                (ptoAllotments[yr] || ptoAllotments[String(yr)])[pathId] = v;
+                // Row state changed (default badge → reset link) — repaint
+                // once the input loses focus so we don't fight the cursor.
                 setTimeout(() => {
-                    input.classList.remove('is-saved');
-                }, 1200);
-                // Update the local cache immediately so the tracking-page
-                // PTO tracker reflects the change before Firebase echoes
-                // back (avoids a flicker if both pages are open).
-                p.vacationAllotted = v;
+                    if (document.activeElement !== input) renderPtoAllotmentSettings();
+                }, 0);
             })
-            .catch(err => {
-                input.classList.remove('is-saving');
-                console.error('Failed to save PTO allotment:', err);
-                if (typeof showToast === 'function') {
-                    showToast('Could not save PTO allotment — please try again.', { type: 'error' });
-                }
-            });
+            .catch(err => markFailed(input, err));
         return v;
     }
 
@@ -528,6 +701,32 @@ function renderPtoAllotmentSettings() {
         const input = e.target.closest('.pto-allot-input');
         if (!input) return;
         commitAllotment(input);
+    });
+
+    // "Use default" — remove the selected year's override for this row.
+    list.addEventListener('click', e => {
+        const btn = e.target.closest('.pto-allot-reset');
+        if (!btn) return;
+        if (!isAdmin()) return;
+        if (ptoAllotSettingsYear === PTO_ALLOT_DEFAULT_MODE) return;
+        const pathId = parseInt(btn.dataset.pathId, 10);
+        const yr = parseInt(ptoAllotSettingsYear, 10);
+        if (!Number.isFinite(pathId) || !Number.isFinite(yr)) return;
+        db.ref('scheduler/ptoAllotments/' + yr + '/' + pathId).remove()
+            .then(() => {
+                const yearMap = ptoAllotments[yr] || ptoAllotments[String(yr)];
+                if (yearMap) {
+                    delete yearMap[pathId];
+                    delete yearMap[String(pathId)];
+                }
+                renderPtoAllotmentSettings();
+            })
+            .catch(err => {
+                console.error('Failed to reset PTO allotment:', err);
+                if (typeof showToast === 'function') {
+                    showToast('Could not reset to default — please try again.', { type: 'error' });
+                }
+            });
     });
 
     // Enter commits + blurs (so the value visibly settles). Escape reverts.
@@ -541,7 +740,7 @@ function renderPtoAllotmentSettings() {
             e.preventDefault();
             const pathId = parseInt(input.dataset.pathId, 10);
             const p = pathologists.find(x => x.id === pathId);
-            if (p) input.value = String(Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0);
+            if (p) input.value = String(effectiveShownValue(p));
             input.blur();
         }
     });
@@ -552,18 +751,72 @@ function renderPtoAllotmentSettings() {
         if (!input) return;
         input.select();
     });
+
+    // ── Fiscal-year stepper wiring ──
+    // ‹/› step ±1 (unbounded forward); label click jumps to the current year;
+    // arrow keys work inside the group.
+    const yearPrevBtn = document.getElementById('ptoAllotYearPrev');
+    const yearNextBtn = document.getElementById('ptoAllotYearNext');
+    const yearCenterBtn = document.getElementById('ptoAllotYearCurrent');
+    const defaultToggleBtn = document.getElementById('ptoAllotDefaultToggle');
+    const stepperEl = document.querySelector('.pto-allot-year-stepper');
+
+    function setPtoAllotYear(next) {
+        const prev = ptoAllotSettingsYear;
+        if (next === prev) return;
+        // Remember the year we left when entering default mode so "Back to fiscal
+        // years" returns there.
+        if (next === PTO_ALLOT_DEFAULT_MODE && prev !== PTO_ALLOT_DEFAULT_MODE) {
+            _ptoAllotYearBeforeDefault = prev;
+        }
+        ptoAllotSettingsYear = next;
+        renderPtoAllotmentSettings();
+    }
+
+    if (yearPrevBtn) {
+        yearPrevBtn.addEventListener('click', () => {
+            setPtoAllotYear(stepPtoAllotYear(ptoAllotSettingsYear, -1));
+        });
+    }
+    if (yearNextBtn) {
+        yearNextBtn.addEventListener('click', () => {
+            setPtoAllotYear(stepPtoAllotYear(ptoAllotSettingsYear, +1));
+        });
+    }
+    if (yearCenterBtn) {
+        yearCenterBtn.addEventListener('click', () => {
+            setPtoAllotYear(String(getAcademicYearOfDate(new Date())));
+        });
+    }
+    if (defaultToggleBtn) {
+        defaultToggleBtn.addEventListener('click', () => {
+            if (ptoAllotSettingsYear === PTO_ALLOT_DEFAULT_MODE) {
+                setPtoAllotYear(_ptoAllotYearBeforeDefault
+                    || String(getAcademicYearOfDate(new Date())));
+            } else {
+                setPtoAllotYear(PTO_ALLOT_DEFAULT_MODE);
+            }
+        });
+    }
+    if (stepperEl) {
+        stepperEl.addEventListener('keydown', e => {
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                setPtoAllotYear(stepPtoAllotYear(ptoAllotSettingsYear, -1));
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                setPtoAllotYear(stepPtoAllotYear(ptoAllotSettingsYear, +1));
+            }
+        });
+    }
 })();
 
 // Year view mode: 'pto' shows PTO schedule, 'call' shows on-call schedule
 let yearMode = 'pto';
 
 // ────────────── AUTH STATE ──────────────
-// Authenticated pathologist id (number) or null when nobody is signed in on
-// this device. We persist this in localStorage so users only see the login
-// screen on first use of a given browser.
-// The signed-in account id. Resolved by the onAuthStateChanged handler from
-// the Firebase Auth session (Firebase persists the session itself, so we no
-// longer track it in localStorage). null means signed out.
+// Signed-in account id, resolved by onAuthStateChanged (Firebase persists the
+// session itself). null = signed out.
 const AUTH_STORAGE_KEY = 'schedCurrentPathId'; // retained: legacy cleanup only
 let loggedInPathId = null;
 
@@ -584,13 +837,9 @@ const daysBetween = (a, b) => Math.round((b - a) / 86400000);
 const isWeekend = d => d.getDay() === 0 || d.getDay() === 6;
 const weekKey = d => fmt(startOfWeek(d));
 
-// Next/previous workday — skips weekends AND federal holidays. Used by
-// hard-rule and soft-rule logic so "the day before" correctly resolves
-// across holiday weekends:
-//   - prevWorkday(Tuesday after Memorial Day) → Friday (skips Sat/Sun/Mon)
-//   - nextWorkday(Friday before July 4 weekend) → Monday after July 4
-// This means Bigs-on-Friday + WFH-on-Tuesday (with a holiday Monday) is
-// correctly detected as a soft-rule conflict, just like Friday + Monday.
+// Next/previous workday — skips weekends AND federal holidays, so "the day
+// before" resolves across holiday weekends (Bigs-on-Friday + WFH-on-Tuesday
+// with a holiday Monday is still a soft-rule conflict).
 function nextWorkday(date) {
     let d = addDays(date, 1);
     while (isWeekend(d) || getFederalHoliday(d)) d = addDays(d, 1);
@@ -636,13 +885,9 @@ function getActualFederalHoliday(date) {
     return null;
 }
 
-// Returns the holiday name for the given date, or null if not a federal
-// holiday. Applies federal observation rules: when a holiday lands on a
-// Saturday, the prior Friday is the *true* holiday (everyone off service);
-// when it lands on a Sunday, the following Monday is the true holiday.
-// The actual Sat/Sun still returns its calendar name for display, but
-// it's already a non-working day by virtue of being a weekend, so the
-// behavior change only kicks in on the observed weekday.
+// Holiday name for the date, or null. Federal observation: Sat holiday →
+// the prior Friday is the true holiday; Sun → the following Monday. The
+// actual Sat/Sun still returns its name for display (already non-working).
 function getFederalHoliday(date) {
     const dow = date.getDay();
 
@@ -729,15 +974,6 @@ function callCycleIndex(cycleStart) {
 }
 
 // Workday index — counts weekdays since WORK_ANCHOR (Mon Jan 1 2024 = 0).
-function workDayIndex(date) {
-    if (isWeekend(date)) return null;
-    const ds = daysBetween(WORK_ANCHOR, date);
-    const fullWeeks = Math.floor(ds / 7);
-    const remainder = ((ds % 7) + 7) % 7;
-    return fullWeeks * 5 + remainder;
-}
-
-// Workday index — counts weekdays since WORK_ANCHOR (Mon Jan 1 2024 = 0).
 // Returns null for weekend dates (no service).
 function workDayIndex(date) {
     if (isWeekend(date)) return null;
@@ -778,11 +1014,8 @@ function onCallIdForDay(date) {
     return onCallIdForCycle(getCallCycleStart(date));
 }
 
-// Returns true if a Lake Forest sendout row should be rendered for this date.
-// Either a per-day flag is set, or the day's call-cycle week has the flag set.
-// Pre-cutoff dates always return false.
-// When the full-week flag is set it only applies to working days (weekdays that
-// are not federal holidays); weekends and holidays are always excluded.
+// True if an "LF sendout" row renders for this date: per-day flag, or the
+// call-cycle week flag (working days only). Pre-cutoff dates → false.
 function isLfSendoutDay(date) {
     if (isBeforeEarliest(date)) return false;
     const dk = fmt(date);
@@ -795,10 +1028,8 @@ function isLfSendoutDay(date) {
     return false;
 }
 
-// Returns true if a "Natalie PTO" banner should be rendered on this date.
-// Pre-cutoff dates always return false. Day/week/range adds all resolve to
-// individual day flags (see saveNataliePto), so a single per-day lookup is
-// all that's needed here.
+// True if a "Natalie PTO" banner renders on this date. Day/week/range adds
+// all resolve to per-day flags (see saveNataliePto), so one lookup suffices.
 function isNataliePtoDay(date) {
     if (isBeforeEarliest(date)) return false;
     return !!nataliePtoDays[fmt(date)];
@@ -813,19 +1044,13 @@ function isOnPto(pathId, date) {
     );
 }
 
-// Compute the NATURAL service assignments for ALL pathologists on a single date —
-// i.e. plain rotation + PTO cascade + manual overrides, BEFORE the hard-rule swap
-// pass. Hard-rule fix-ups happen in getDayAssignments() (the public function) so
-// that look-ahead/look-back logic can use this natural baseline as input.
-// Returns: { [pathId]: { type: 'service'|'pto'|'off', service, onCall } }
-//
-// Rules:
-//   - Weekends: no service (all pathologists "off"); on-call still applies (weekly).
-//   - Weekdays: each pathologist rotates daily through cyto → bigs → huntley → wfh.
-//   - When ANY pathologist is on PTO, WFH is unstaffed; whoever was on WFH steps in
-//     to cover the PTO pathologist's slot. With multiple PTO, drop services from the
-//     bottom of the priority list (wfh, then huntley, then bigs).
-//   - Manual day-level service overrides are applied last (overrides win).
+// NATURAL assignments for all pathologists on a date — rotation + PTO
+// cascade + manual overrides, BEFORE the hard-rule swap pass (which
+// getDayAssignments adds). Returns { [pathId]: { type:'service'|'pto'|'off',
+// service, onCall } }. Weekends: everyone "off", weekly on-call still applies.
+// Weekdays: rotate cyto → bigs → huntley → wfh; PTO pulls WFH in as cover,
+// dropping services bottom-up (wfh, huntley, bigs) as more people are out.
+// Manual day-level overrides win last.
 const _naturalCache = new Map();
 function getNaturalDayAssignments(date) {
     const cacheKey = fmt(date) + '|' + pathologists.length;
@@ -859,13 +1084,9 @@ function getNaturalDayAssignments(date) {
     }));
 
     // ── Pre-cascade: resolve all service overrides ──────────────────────────
-    // This pass runs BEFORE the PTO cascade so:
-    //   • A regular service override (cyto, huntley, wfh, …) brings a
-    //     pathologist back to duty even if they have a PTO vacation entry.
-    //     Their service is "locked" — the cascade will not reassign it.
-    //   • An off-site override (Off Service, Director Retreat, Lab Inspection)
-    //     removes the pathologist from the rotation (like PTO) and renders
-    //     their assigned label instead of the generic PTO stripe.
+    // Runs BEFORE the PTO cascade: a regular override brings a PTO pathologist
+    // back on duty (locked from reassignment); an off-site override removes them
+    // from the rotation but renders its own label instead of the PTO stripe.
     const dayKey = fmt(date);
     const dayOv = serviceOverrides[dayKey] || {};
     slots.forEach(s => {
@@ -960,38 +1181,19 @@ function getNaturalDayAssignments(date) {
 }
 
 // ────────────── HARD-RULE LAYER ──────────────
-//
-// After computing the natural rotation, we enforce two cross-day constraints:
-//   Rule 1: A pathologist cannot be on McH Bigs the workday before they begin
-//           PTO of more than 1 (work)day.
-//   Rule 2: A pathologist cannot be on Bigs or Breast Bx/WFH the workday before
-//           they are on Breast Bx/WFH service.
-//
-// "The day before" is the previous *workday* (so Monday's day-before is the
-// previous Friday). Multi-day PTO is 2+ workdays in a row (a Fri+Mon range
-// counts as multi-day even though there's a weekend in between).
-//
-// When a violation exists, we swap the offending pathologist's service with
-// another pathologist's service for that same day, picking a partner whose
-// post-swap services don't introduce new violations. If no clean swap exists
-// we apply the best-effort swap and flag the day so it's visibly marked.
+// Cross-day constraints applied after the natural rotation:
+//   Rule 1: no McH Bigs the workday before starting multi-day PTO
+//           (2+ workdays; Fri+Mon counts).
+//   Rule 2: no Bigs or Breast Bx/WFH the workday before a Breast Bx/WFH day.
+// "Day before" = previous workday. Violations are fixed by swapping services
+// with a partner whose post-swap services stay clean; if no clean swap
+// exists, best-effort swap + flag the day.
 
 const _dayCache = new Map();
 const _violationFlags = new Map();   // dayKey → array of issue strings (display only)
 
-// True iff `pathId` has PTO on `tomorrow` AND on the workday after that —
-// i.e. the start of "more than 1 day" of PTO. Skips weekends so a Fri→Mon
-// PTO range counts as multi-day.
-function isMultiDayPtoStartingOn(pathId, tomorrow) {
-    if (!isOnPto(pathId, tomorrow)) return false;
-    const dayAfter = nextWorkday(tomorrow);
-    return !!isOnPto(pathId, dayAfter);
-}
-
-// Reasons a pathologist's assignment on `date` would be a hard-rule violation.
-// Uses naturalToday (today's services) and naturalTomorrow / naturalYesterday
-// to look across days. Returns an array of human-readable issue strings; empty
-// array = no violation.
+// Human-readable hard-rule violations for `date` (empty array = none);
+// looks across days via naturalToday / naturalTomorrow / naturalYesterday.
 function violationsFor(pId, todaySvcId, date, naturalTomorrow, naturalYesterday) {
     if (!todaySvcId) return [];
     const issues = [];
@@ -1032,9 +1234,8 @@ function violationsFor(pId, todaySvcId, date, naturalTomorrow, naturalYesterday)
 
     return issues;
 }
-// Apply hard-rule swaps to today's natural assignments.
-// Pathologists with a manual day-level service override on this date are
-// "locked" — the rule pass won't move them. (They CAN still be flagged.)
+// Apply hard-rule swaps to today's natural assignments. Day-level override
+// → "locked": the rule pass won't move them (they can still be flagged).
 function applyHardRules(date, naturalToday, naturalTomorrow, naturalYesterday) {
     const result = {};
     const working = [];
@@ -1156,19 +1357,13 @@ function getDayAssignments(date) {
     return result;
 }
 
-// Returns the array of unfixable-violation messages for the given date, or
-// null if the day has no flagged issues. The hard-rule pass populates this
-// map as a side effect, so we make sure the day has been computed first.
+// Unfixable-violation messages for the date, or null. Populated as a side
+// effect of the hard-rule pass, so compute the day first.
 function violationsForDay(date) {
     getDayAssignments(date);   // ensure flags map is populated for this date
     const list = _violationFlags.get(fmt(date));
     return (list && list.length > 0) ? list : null;
 }
-
-function getAssignment(pathId, date) {
-    return getDayAssignments(date)[pathId];
-}
-
 
 function clearDayCache() {
     _dayCache.clear();
@@ -1179,10 +1374,7 @@ function clearDayCache() {
 // (recompute code moved to recompute.js)
 
 function ptoDaysScheduled(pathId, opts) {
-    // Optional range to scope the count to (e.g. a fiscal year). Defaults
-    // clamp at EARLIEST_DATE (no schedule data exists before that) and
-    // leave the upper end unbounded (count everything onwards). Callers
-    // pass { start, end } as Date objects to limit the window.
+    // Optional {start,end} range; start clamps at EARLIEST_DATE, end unbounded.
     const rangeStart = (opts && opts.start instanceof Date) ? opts.start : EARLIEST_DATE;
     const rangeEnd = (opts && opts.end instanceof Date) ? opts.end : null;
 
@@ -1222,10 +1414,25 @@ function ptoDaysScheduled(pathId, opts) {
     return count;
 }
 
-// Helper: returns { start, end } Date objects for the fiscal year that
-// begins on Sept 1 of `startYear` and ends on Aug 31 of the next year.
-// Matches the academic-year convention used throughout the tracking
-// page (see getAcademicYearOfDate).
+// ── Per-fiscal-year PTO allotments ───────────────────────────────────────
+// Explicit per-year value, or null when the default applies.
+function explicitPtoAllotment(pathId, fiscalStartYear) {
+    const yearMap = (ptoAllotments || {})[fiscalStartYear];
+    if (!yearMap) return null;
+    const v = (yearMap[pathId] !== undefined) ? yearMap[pathId] : yearMap[String(pathId)];
+    return Number.isFinite(v) ? v : null;
+}
+
+// Effective allotment: year-specific value, else legacy `vacationAllotted`,
+// else 0.
+function ptoAllotmentFor(pathId, fiscalStartYear) {
+    const explicit = explicitPtoAllotment(pathId, fiscalStartYear);
+    if (explicit !== null) return explicit;
+    const p = pathologists.find(x => String(x.id) === String(pathId));
+    return (p && Number.isFinite(p.vacationAllotted)) ? p.vacationAllotted : 0;
+}
+
+// { start, end } for the fiscal year Sept 1 <startYear> – Aug 31 next year.
 function getFiscalYearRange(startYear) {
     const start = new Date(startYear, 8, 1);   // Sept 1 (month is 0-indexed)
     start.setHours(0, 0, 0, 0);
@@ -1248,21 +1455,15 @@ function hideLoading() {
 function checkReady() {
     if (pathologistsReady && vacationsReady) {
         hideLoading();
-        // Data only loads once a user is authenticated (listeners are not
-        // started until sign-in), so loggedInPathId is already resolved by
-        // the onAuthStateChanged handler before we get here.
-        //
-        // Guard: if somehow the signed-in account maps to a pathologist id
-        // that no longer exists, sign out and force a clean re-login.
-        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && loggedInPathId !== HISTOLOGY_ID && !pathologists.find(p => p.id === loggedInPathId)) {
+        // Listeners only start after sign-in, so loggedInPathId is already
+        // resolved. Guard: an account mapping to a missing pathologist forces re-login.
+        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && loggedInPathId !== HISTOLOGY_ID && loggedInPathId !== LAKE_FOREST_ID && !pathologists.find(p => p.id === loggedInPathId)) {
             auth.signOut();
             return;
         }
-        // Default the filter based on who is signed in and their saved
-        // preference. Gross room / manager / histology are always forced
-        // to all pathologists. Otherwise, honor the user's defaultPathFilter
-        // setting ('all' or 'me').
-        if (isGrossRoom() || isManager() || isHistology()) {
+        // Default filter by role: gross room / manager / histology forced to all;
+        // otherwise honor the user's defaultPathFilter ('all' or 'me').
+        if (isGrossRoom() || isManager() || isReadOnlyGuest()) {
             setPathFilter('all');
         } else if (settings.defaultPathFilter === 'all') {
             setPathFilter('all');
@@ -1273,23 +1474,19 @@ function checkReady() {
     }
 }
 
-// Show/hide the "Me" tab and set the active filter appropriately.
-// - When signed in:  show "Me", default to the user's own id (or preserve a
-//                    previously valid choice).
-// - When signed out: hide "Me", force "All".
+// Signed in: show "Me", default to own id (or keep a valid prior choice).
+// Signed out: hide "Me", force "All".
 function populatePathFilter() {
     const meTab = document.getElementById('pathTabMe');
     if (!meTab) return;
 
-    // Mirror visibility on the mobile select: when "Me" isn't available there's
-    // only one option, so we just hide the whole select rather than show a
-    // pointless one-item dropdown.
+    // Without "Me" the mobile select has one option — hide it entirely.
     const mobileSel = document.getElementById('mobilePathSelect');
     const mobileWrap = document.getElementById('mobilePathSelectWrap');
     const mobileMeOpt = mobileSel ? mobileSel.querySelector('option[value="me"]') : null;
 
     // Gross room / manager / histology: always show all pathologists with no option to switch
-    if (isGrossRoom() || isManager() || isHistology()) {
+    if (isGrossRoom() || isManager() || isReadOnlyGuest()) {
         meTab.style.display = 'none';
         if (mobileMeOpt) mobileMeOpt.hidden = true;
         if (mobileWrap) mobileWrap.style.display = 'none';
@@ -1323,11 +1520,9 @@ function showLoginOverlay() {
     const pwInput = document.getElementById('loginPassword');
     const errEl = document.getElementById('loginError');
 
-    // The login screen renders BEFORE sign-in, but the live `pathologists`
-    // array is only readable AFTER sign-in (reads require auth now). So at
-    // login time it's empty — use the hardcoded SEED_PATHOLOGISTS for the
-    // name list instead. If live data is already loaded (e.g. re-login after
-    // sign-out without a reload), prefer it so any name edits show through.
+    // The login screen renders before sign-in but live `pathologists` needs
+    // auth, so use SEED_PATHOLOGISTS for the name list; prefer live data when
+    // already loaded (re-login without reload).
     const nameList = (pathologists && pathologists.length)
         ? pathologists
         : SEED_PATHOLOGISTS;
@@ -1337,7 +1532,8 @@ function showLoginOverlay() {
         '<option value="" disabled>──────────────</option>' +
         `<option value="${GROSS_ROOM_ID}">Gross Room</option>` +
         `<option value="${MANAGER_ID}">Kathleen</option>` +
-        `<option value="${HISTOLOGY_ID}">Histology</option>`;
+        `<option value="${HISTOLOGY_ID}">Histology</option>` +
+        `<option value="${LAKE_FOREST_ID}">Lake Forest</option>`;
     pwInput.value = '';
     errEl.textContent = '';
     overlay.style.display = 'flex';
@@ -1355,7 +1551,7 @@ function updateLoginPasswordVisibility() {
     const pwInput = document.getElementById('loginPassword');
     if (!sel || !pwInput) return;
     const pwLabel = pwInput.previousElementSibling; // the <label>Password</label>
-    const isHisto = sel.value === HISTOLOGY_ID;
+    const isHisto = sel.value === HISTOLOGY_ID || sel.value === LAKE_FOREST_ID;
     pwInput.style.display = isHisto ? 'none' : '';
     if (pwLabel && pwLabel.tagName === 'LABEL') {
         pwLabel.style.display = isHisto ? 'none' : '';
@@ -1383,10 +1579,11 @@ async function attemptLogin() {
     const isGrossRoomLogin = pidRaw === GROSS_ROOM_ID;
     const isManagerLogin = pidRaw === MANAGER_ID;
     const isHistologyLogin = pidRaw === HISTOLOGY_ID;
+    const isLakeForestLogin = pidRaw === LAKE_FOREST_ID;
 
     // Histology is a passwordless guest account. Every other account
     // requires a password.
-    if (!isHistologyLogin && !pwAttempt) {
+    if (!isHistologyLogin && !isLakeForestLogin && !pwAttempt) {
         errEl.textContent = 'Please enter your password.';
         return;
     }
@@ -1394,24 +1591,24 @@ async function attemptLogin() {
     const pid = isGrossRoomLogin ? GROSS_ROOM_ID
         : isManagerLogin ? MANAGER_ID
         : isHistologyLogin ? HISTOLOGY_ID
+        : isLakeForestLogin ? LAKE_FOREST_ID
         : parseInt(pidRaw, 10);
 
     // Histology signs in behind the scenes with a fixed credential the app
     // holds; every other account uses the password the user typed.
     const email = authEmailForId(pid);
-    const password = isHistologyLogin ? HISTOLOGY_PW : pwAttempt;
+    const password = isHistologyLogin ? HISTOLOGY_PW
+        : isLakeForestLogin ? LAKE_FOREST_PW
+        : pwAttempt;
 
     btn.disabled = true;
     btn.textContent = 'Signing in…';
     try {
-        // Firebase Auth is the single source of truth now. On success the
-        // onAuthStateChanged handler (see below) does all post-login setup:
-        // resolving loggedInPathId, starting the data listeners, hiding the
-        // overlay, and rendering. We don't touch loggedInPathId here.
+        // Firebase Auth is the source of truth; onAuthStateChanged does all
+        // post-login setup (loggedInPathId, listeners, overlay, render).
         await auth.signInWithEmailAndPassword(email, password);
-        // Note: do NOT hideLoginOverlay() or renderAll() here — the auth
-        // state handler owns that, and runs for both fresh logins and
-        // session resumes.
+        // Do NOT hideLoginOverlay()/renderAll() here — the auth state handler owns
+        // that for fresh logins and session resumes alike.
     } catch (err) {
         // Map the common Firebase Auth error codes to friendly messages.
         const code = err && err.code ? err.code : '';
@@ -1431,7 +1628,6 @@ async function attemptLogin() {
     }
 }
 
-
 // Wire up login form events (the elements always exist in the DOM)
 document.getElementById('loginSubmit').addEventListener('click', attemptLogin);
 document.getElementById('loginPassword').addEventListener('keydown', e => {
@@ -1444,14 +1640,11 @@ document.getElementById('loginPath').addEventListener('keydown', e => {
 document.getElementById('loginPath').addEventListener('change', updateLoginPasswordVisibility);
 
 // ────────────── AUTH STATE → APP STATE ──────────────
-// Single source of truth for "who is signed in". Fires on:
-//   • initial page load (resuming a persisted Firebase session, or not)
-//   • a successful attemptLogin() sign-in
-//   • sign-out
-// On sign-in it resolves loggedInPathId and starts the data listeners (which
-// in turn drive checkReady → render). On sign-out it tears the listeners
-// down and shows the login overlay.
+// Fires on initial load, attemptLogin() success, and sign-out. Sign-in:
+// resolve loggedInPathId + start listeners (→ checkReady → render).
+// Sign-out: tear listeners down, show the login overlay.
 auth.onAuthStateChanged(user => {
+    document.body.classList.toggle('lf-guest', user ? idForAuthEmail(user.email) === LAKE_FOREST_ID : false);
     if (user) {
         const id = idForAuthEmail(user.email);
         if (id === null) {
@@ -1470,12 +1663,11 @@ auth.onAuthStateChanged(user => {
         // Start the data listeners now that reads are permitted. When data
         // arrives, checkReady() handles filter defaults + render.
         startDataListeners();
-        // If data already loaded once this page-life (e.g. re-login after
-        // sign-out without a reload), listeners are cached-warm and may not
-        // re-fire; refresh the filter + view directly.
+        // After re-login without reload, cached-warm listeners may not re-fire —
+        // refresh filter + view directly.
         if (pathologistsReady && vacationsReady) {
             populatePathFilter();
-            if (isGrossRoom() || isManager() || isHistology()) {
+            if (isGrossRoom() || isManager() || isReadOnlyGuest()) {
                 setPathFilter('all');
             } else {
                 setPathFilter(settings.defaultPathFilter === 'all' ? 'all' : String(id));
@@ -1556,6 +1748,24 @@ regListener('scheduler/serviceOverrides', snap => {
     if (pathologistsReady && vacationsReady) renderAll();
 });
 
+// Locks only mark slots as protected (the matching serviceOverride moves
+// people), so no day-cache clear — just repaint for the glow.
+regListener('scheduler/serviceLocks', snap => {
+    serviceLocks = snap.exists() ? snap.val() : {};
+    if (pathologistsReady && vacationsReady) renderAll();
+}, err => {
+    console.error('Firebase serviceLocks error:', err);
+});
+
+// Allotments don't affect assignments (no day-cache clear); renderAll()
+// refreshes every surface showing allotted totals.
+regListener('scheduler/ptoAllotments', snap => {
+    ptoAllotments = snap.exists() ? snap.val() : {};
+    if (pathologistsReady && vacationsReady) renderAll();
+}, err => {
+    console.error('Firebase ptoAllotments error:', err);
+});
+
 // Lake Forest sendout flags — see isLfSendoutDay() for how they're consumed.
 regListener('scheduler/lfSendoutDays', snap => {
     lfSendoutDays = snap.exists() ? snap.val() : {};
@@ -1567,18 +1777,10 @@ regListener('scheduler/lfSendoutWeeks', snap => {
     if (pathologistsReady && vacationsReady) renderAll();
 });
 
-// Procedures: hourly entries for the week-view grid (and the mobile day
-// view, which uses the same hourly grid). Independent of the pathologist
-// rotation, so we don't need to clear the day cache or wait on it to
-// render the rest of the calendar — just re-render the main view when
-// this changes, but only if we're on a view that actually shows the
-// procedure schedule (week or day). Skipping month/year avoids a wasted
-// render on views that don't display procedures.
-//
-// NOTE: this re-render is required for the case where the procedures
-// snapshot arrives AFTER pathologists + vacations have already triggered
-// the initial renderAll(); without it, the day/week view paints with an
-// empty `procedures` global and stays blank until the user changes view.
+// Procedures are rotation-independent: no day-cache clear; re-render only
+// week/day (the views that show them). The re-render is REQUIRED when the
+// procedures snapshot lands after the initial renderAll(), or the grid
+// stays blank until the user changes view.
 regListener('scheduler/procedures', snap => {
     procedures = snap.exists() ? snap.val() : {};
     if (pathologistsReady && vacationsReady && (view === 'week' || view === 'day')) renderMain();
@@ -1586,9 +1788,7 @@ regListener('scheduler/procedures', snap => {
     console.error('Firebase procedures error:', err);
 });
 
-// Gross-room "Natalie PTO" flags — see isNataliePtoDay() for how they're
-// consumed. Display-only, so (like procedures) only the procedure-bearing
-// views need to re-render when this changes.
+// Natalie PTO flags — display-only; only procedure-bearing views re-render.
 regListener('scheduler/natalieptoDays', snap => {
     nataliePtoDays = snap.exists() ? snap.val() : {};
     if (pathologistsReady && vacationsReady && (view === 'week' || view === 'day')) renderMain();
@@ -1638,6 +1838,9 @@ regListener('scheduler/requests', snap => {
 
 // ────────────── SIDEBAR ──────────────
 function renderSidebar() {
+    // Lake Forest guest mode: body class drives the CSS that strips the
+    // calendar down to LF sendout days and hides non-schedule chrome.
+    document.body.classList.toggle('lf-guest', isLakeForest());
     // Show/hide admin-only controls based on signed-in user's role
     const admin = isAdmin();
     const grossRoom = isGrossRoom();
@@ -1650,7 +1853,7 @@ function renderSidebar() {
 
     // Gross room / manager / histology cannot manage PTO or view requests at all — hide those buttons
     const addPtoBtnEl = document.getElementById('addPtoBtn');
-    if (addPtoBtnEl) addPtoBtnEl.style.display = (grossRoom || isManager() || isHistology()) ? 'none' : '';
+    if (addPtoBtnEl) addPtoBtnEl.style.display = (grossRoom || isManager() || isReadOnlyGuest()) ? 'none' : '';
 
     // The "Manage PTO" label changes to "Request PTO" for non-admins (not gross room)
     const ptoBtnLabel = document.getElementById('addPtoBtnLabel');
@@ -1679,11 +1882,14 @@ function renderSidebar() {
       `;
     }
 
-    // Pathologist list (compact)
+    // Pathologist list (compact) — used/allotted for the CURRENT fiscal
+    // year, honoring any year-specific allotment.
     const list = document.getElementById('pathList');
+    const sidebarAy = getAcademicYearOfDate(today);
+    const sidebarFy = getFiscalYearRange(sidebarAy);
     list.innerHTML = pathologists.map(p => {
-        const used = ptoDaysScheduled(p.id);
-        const allot = p.vacationAllotted;
+        const used = ptoDaysScheduled(p.id, { start: sidebarFy.start, end: sidebarFy.end });
+        const allot = ptoAllotmentFor(p.id, sidebarAy);
         return `<div class="path-card" style="--c:${p.color}">
         <div class="dot"></div>
         <div class="info">
@@ -1703,6 +1909,9 @@ function renderSidebar() {
         } else if (isManager()) {
             sWho.textContent = 'Signed in · Kathleen';
             sInfo.style.display = 'flex';
+        } else if (isLakeForest()) {
+            sWho.textContent = 'Signed in · Lake Forest (read-only)';
+            sInfo.style.display = 'flex';
         } else if (isHistology()) {
             sWho.textContent = 'Signed in · Histology (read-only)';
             sInfo.style.display = 'flex';
@@ -1721,8 +1930,7 @@ function renderSidebar() {
 }
 
 // ────────────── TOAST (non-blocking notifications) ──────────────
-// Lightweight one-line message that floats in from the top-right and
-// auto-dismisses. Used for "new request" alerts and confirmations.
+// One-line float-in message, auto-dismisses.
 function showToast(msg, opts) {
     opts = opts || {};
     const wrap = (() => {
@@ -1812,9 +2020,8 @@ function getVisiblePendingCount() {
     return arr.filter(([, r]) => r.requesterId === loggedInPathId).length;
 }
 
-// Show / hide the sidebar Requests button and its red badge.
-// Also drives the mobile hamburger menu's red alert dot and its
-// in-menu Requests badge so phone users get notified the same way.
+// Sidebar Requests button + badge; also drives the mobile hamburger's
+// alert dot and in-menu badge.
 function updateRequestsBadge() {
     const btn = document.getElementById('requestsBtn');
     const badge = document.getElementById('requestsBadge');
@@ -1833,7 +2040,7 @@ function updateRequestsBadge() {
     const menuRcItem = document.getElementById('menuRecomputeItem');
 
     // Hide entirely if not signed in OR if gross room / manager / histology (who cannot manage requests or PTO)
-    if (loggedInPathId === null || isGrossRoom() || isManager() || isHistology()) {
+    if (loggedInPathId === null || isGrossRoom() || isManager() || isReadOnlyGuest()) {
         if (btn) btn.style.display = 'none';
         if (menuBtn) menuBtn.classList.remove('has-alert');
         if (menuReqItem) menuReqItem.style.display = 'none';
@@ -1841,7 +2048,7 @@ function updateRequestsBadge() {
         if (menuRcItem) menuRcItem.style.display = 'none';
         // Also hide the PTO menu item for gross room / manager / histology
         const menuPtoItem = document.querySelector('.menu-item[data-action="pto"]');
-        if (menuPtoItem) menuPtoItem.style.display = (isGrossRoom() || isManager() || isHistology()) ? 'none' : '';
+        if (menuPtoItem) menuPtoItem.style.display = (isGrossRoom() || isManager() || isReadOnlyGuest()) ? 'none' : '';
         return;
     }
 
@@ -1881,14 +2088,9 @@ function updateRequestsBadge() {
 }
 
 // ────────────── SIDEBAR NAV DOT INDICATOR ──────────────
-// Shows a small colored dot on the "Requests" sidebar nav item:
-//   amber  — pending requests (waiting for admin decision)
-//   green  — one or more requests were approved since the user last
-//            visited the Requests page
-//   red    — one or more requests were denied since the last visit
-// Clearing logic: visiting the Requests page saves a timestamp
-// (reqDecisionAck_{pathId}) in localStorage. Decisions older than
-// that timestamp are considered "seen" and don't trigger the dot.
+// Dot on "Requests": amber = pending, green = approved since last visit,
+// red = denied since last visit. Visiting the page stamps
+// reqDecisionAck_{pathId} in localStorage; older decisions count as seen.
 function _getAckTs() {
     if (!loggedInPathId) return Date.now();
     const key = 'reqDecisionAck_' + loggedInPathId;
@@ -1908,7 +2110,7 @@ function updateNavRequestsIndicator() {
     const dot = document.getElementById('navRequestsBadge');
     if (!dot) return;
 
-    if (!loggedInPathId || isGrossRoom() || isManager() || isHistology()) {
+    if (!loggedInPathId || isGrossRoom() || isManager() || isReadOnlyGuest()) {
         dot.style.display = 'none';
         return;
     }
@@ -1951,9 +2153,8 @@ function updateNavRequestsIndicator() {
     }
 }
 
-// Helper: apply a tone class to the dot, optionally triggering the pop
-// animation (used when a new decision has just arrived so the dot is
-// clearly noticeable without being disruptive).
+// Apply a tone class to the dot, optionally with the pop animation for
+// newly-arrived decisions.
 function _setNavDot(dot, toneClass, pop) {
     const wasHidden = dot.style.display === 'none' || !dot.style.display;
     const prev = [...dot.classList].find(c => c.startsWith('tone-'));
@@ -1969,9 +2170,8 @@ function _setNavDot(dot, toneClass, pop) {
     }
 }
 
-// Called whenever the user navigates to the Requests page.
-// Stamps the current time so subsequent updateNavRequestsIndicator()
-// calls know which decisions are "new" vs already acknowledged.
+// Stamp the visit time so later updateNavRequestsIndicator() calls know
+// which decisions are "new".
 function markRequestsPageSeen() {
     if (!loggedInPathId || isAdmin()) return;
     const key = 'reqDecisionAck_' + loggedInPathId;
@@ -1997,6 +2197,7 @@ function _pathName(id) {
     if (id === MANAGER_ID) return 'Kathleen';
     if (id === GROSS_ROOM_ID) return 'Gross Room';
     if (id === HISTOLOGY_ID) return 'Histology';
+    if (id === LAKE_FOREST_ID) return 'Lake Forest';
     return `(unknown #${id})`;
 }
 
@@ -2062,17 +2263,10 @@ function describeRequest(req) {
     }
 }
 
-// When PTO is added (request approved, admin direct save, or PTO range
-// extended), strip any pre-existing REGULAR service override for that
-// pathologist on the affected days.  Without this, the natural-assignment
-// rule "regular service override beats PTO" (see getNaturalDayAssignments)
-// would silently keep the pathologist on duty, defeating the just-added
-// PTO entry — the symptom is "I approved his PTO but he's still showing
-// as working that week."
-//
-// Off-site overrides (Director Retreat, Lab Inspection, Off Service) are
-// left alone: they already keep s.onPto true, so they don't conflict with
-// the PTO state; only the rendered label differs.
+// When PTO is added (any path), strip pre-existing REGULAR service
+// overrides on those days — otherwise "override beats PTO" keeps the person
+// working ("approved his PTO but he's still showing as working"). Off-site
+// overrides stay: they already read as onPto, only the label differs.
 async function clearConflictingServiceOverridesForPto(pathId, startDateStr, endDateStr) {
     const start = parseDate(startDateStr);
     const end = parseDate(endDateStr);
@@ -2082,20 +2276,108 @@ async function clearConflictingServiceOverridesForPto(pathId, startDateStr, endD
     for (let d = new Date(start); d <= end; d = addDays(d, 1)) {
         const k = fmt(d);
         const dayOv = serviceOverrides[k];
-        if (!dayOv) continue;
-        const ovId = dayOv[pathId];
-        if (!ovId) continue;
-        // Off-site overrides don't conflict with PTO — leave them.
-        if (isOffSiteServiceId(ovId)) continue;
+        const ovId = dayOv ? dayOv[pathId] : null;
+        const lockId = getServiceLock(k, pathId);
 
-        const updated = Object.assign({}, dayOv);
-        delete updated[pathId];
-        writes['scheduler/serviceOverrides/' + k] =
-            Object.keys(updated).length === 0 ? null : updated;
+        if (ovId && !isOffSiteServiceId(ovId)) {
+            // Regular override conflicts with PTO — remove it and its lock (approving
+            // PTO over an approved service is itself an admin decision).
+            const updated = Object.assign({}, dayOv);
+            delete updated[pathId];
+            writes['scheduler/serviceOverrides/' + k] =
+                Object.keys(updated).length === 0 ? null : updated;
+            if (lockId) {
+                writes['scheduler/serviceLocks/' + k + '/' + pathId] = null;
+            }
+        } else if (!ovId && lockId) {
+            // Stale lock with no matching override — clean it up so it
+            // can't silently pin a future recompute.
+            writes['scheduler/serviceLocks/' + k + '/' + pathId] = null;
+        }
+        // Off-site overrides (and their locks) don't conflict with PTO —
+        // leave both alone.
     }
     if (Object.keys(writes).length > 0) {
         await db.ref().update(writes);
     }
+}
+
+// ────────────── SERVICE LOCK HELPERS ──────────────
+// A lock marks a {day, pathologist} assignment as approved: renders with a
+// glow, recompute treats it as a hard pin, released only by admin edit,
+// PTO approval on top, revocation, or explicit unlock.
+
+// Returns the locked serviceId for this {dayKey, pid}, or null.
+function getServiceLock(dayKey, pid) {
+    const day = serviceLocks[dayKey];
+    if (!day) return null;
+    const v = (day[pid] !== undefined) ? day[pid] : day[String(pid)];
+    return v === undefined || v === null ? null : v;
+}
+
+// True when the lock matches what's actually rendered — no misleading
+// glow if data drifted.
+function isLockActiveForRender(dayKey, pid, assignment) {
+    if (!assignment || !assignment.service) return false;
+    if (assignment.type !== 'service' && assignment.type !== 'off_site') return false;
+    const lockId = getServiceLock(dayKey, pid);
+    return !!lockId && lockId === assignment.service.id;
+}
+
+// Multi-path write fragment that clears the lock for {dayKey, pid}.
+// Merge into a db.ref().update(writes) payload.
+function _lockClearWrite(writes, dayKey, pid) {
+    writes['scheduler/serviceLocks/' + dayKey + '/' + pid] = null;
+}
+
+// True while an approved service_change's lock still holds on ≥1 affected
+// day (drives the "locked on the schedule" note).
+function _requestLockActive(req) {
+    if (!req || req.type !== 'service_change' || req.status !== 'approved') return false;
+    if (!req.payload || !req.payload.serviceId || !req.payload.date) return false;
+    const scope = req.payload.scope || 'day';
+    let dayKeys;
+    try {
+        dayKeys = scope === 'week'
+            ? workdaysInCallCycle(parseDate(req.payload.date)).map(d => fmt(d))
+            : [req.payload.date];
+    } catch (e) {
+        return false;
+    }
+    return dayKeys.some(k => getServiceLock(k, req.requesterId) === req.payload.serviceId);
+}
+
+// Every distinct freetext service name currently in use (overrides + locks),
+// for the "Custom service…" input's autocomplete suggestions.
+function collectFreetextServiceNames() {
+    const names = new Set();
+    const scan = store => {
+        Object.values(store || {}).forEach(dayMap => {
+            if (!dayMap || typeof dayMap !== 'object') return;
+            Object.values(dayMap).forEach(sid => {
+                if (isFreetextServiceId(sid)) {
+                    names.add(String(sid).slice(FREETEXT_SERVICE_PREFIX.length));
+                }
+            });
+        });
+    };
+    scan(serviceOverrides);
+    scan(serviceLocks);
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+}
+
+// (Re)build the shared <datalist> the custom-service text inputs point at.
+// Called whenever a surface with such an input opens.
+function renderFreetextDatalist() {
+    let dl = document.getElementById('ftServiceNames');
+    if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = 'ftServiceNames';
+        document.body.appendChild(dl);
+    }
+    dl.innerHTML = collectFreetextServiceNames()
+        .map(n => `<option value="${escapeHtml(n)}"></option>`)
+        .join('');
 }
 
 // ────────────── ADMIN ACTIONS: APPROVE / DENY ──────────────
@@ -2118,9 +2400,7 @@ async function approveRequest(reqKey) {
                 start: req.payload.start,
                 end: req.payload.end,
             });
-            // Strip any stale regular service overrides for the requester
-            // on these days, so the new PTO actually takes effect instead
-            // of being silently overridden.
+            // Strip stale regular overrides so the new PTO takes effect.
             await clearConflictingServiceOverridesForPto(
                 req.requesterId, req.payload.start, req.payload.end);
             rcFromDate = parseDate(req.payload.start);
@@ -2150,9 +2430,7 @@ async function approveRequest(reqKey) {
             const pid = req.requesterId;
             const scope = req.payload.scope || 'day';   // back-compat: old reqs default to 'day'
 
-            // Build the list of day-keys we need to touch.  For 'day' it's
-            // just the requested date; for 'week' it's every workday in
-            // the call cycle that contains that date.
+            // Day-keys to touch: the date itself, or every workday in its call cycle.
             let dayKeys;
             if (scope === 'week') {
                 dayKeys = workdaysInCallCycle(parseDate(dKey)).map(d => fmt(d));
@@ -2167,6 +2445,10 @@ async function approveRequest(reqKey) {
                     const existing = serviceOverrides[k] || {};
                     writes['scheduler/serviceOverrides/' + k] =
                         Object.assign({}, existing, { [pid]: req.payload.serviceId });
+                    // LOCK the approved assignment (hard pin + glow) until admin edit/clear,
+                    // PTO on top, revocation, or a newer approval.
+                    writes['scheduler/serviceLocks/' + k + '/' + pid] =
+                        req.payload.serviceId;
                     // Pin ONLY the just-approved path; pre-existing overrides
                     // shouldn't lock the recompute against fixing flags.
                     rcPinnedByDay[k] = { [pid]: req.payload.serviceId };
@@ -2176,6 +2458,9 @@ async function approveRequest(reqKey) {
                     delete existing[pid];
                     writes['scheduler/serviceOverrides/' + k] =
                         Object.keys(existing).length === 0 ? null : existing;
+                    // An approved "clear my service" also releases any lock
+                    // this pathologist held on the day.
+                    writes['scheduler/serviceLocks/' + k + '/' + pid] = null;
                     // Override removed — nothing for the admin's edit locks.
                     rcPinnedByDay[k] = {};
                 }
@@ -2200,10 +2485,8 @@ async function approveRequest(reqKey) {
         });
         showToast('Request approved.');
 
-        // ── Change log ──
-        // The schedule was just mutated; record one entry summarizing
-        // what got applied. Source flag distinguishes these from direct
-        // admin edits in the Changes log.
+        // ── Change log ── one entry summarizing what was applied; source flag
+        // distinguishes request approvals from direct admin edits.
         try {
             const reqPid = req.requesterId;
             if (req.type === 'pto_add') {
@@ -2370,6 +2653,8 @@ async function revokeApproval(reqKey) {
                 delete existing[pid];
                 writes['scheduler/serviceOverrides/' + k] =
                     Object.keys(existing).length === 0 ? null : existing;
+                // Release the approval lock along with the override.
+                writes['scheduler/serviceLocks/' + k + '/' + pid] = null;
                 rcPinnedByDay[k] = {};
             });
             if (Object.keys(writes).length > 0) await db.ref().update(writes);
@@ -2389,10 +2674,8 @@ async function revokeApproval(reqKey) {
         });
         showToast('Approval revoked — request marked as denied.');
 
-        // ── Change log ──
-        // Revoking an approval reverses the previously-applied change.
-        // Log the *reversal*, not the original — what actually mutated
-        // the schedule just now is the inverse of what was approved.
+        // ── Change log ── revocation logs the *reversal* (what actually mutated
+        // the schedule now), not the original.
         try {
             const reqPid = req.requesterId;
             if (req.type === 'pto_add') {
@@ -2482,9 +2765,8 @@ function openRequestsModal() {
 }
 
 function renderRequestsList(targetEl, tabState) {
-    // Backwards-compatible defaults: when called with no args, write to the
-    // modal's list using the modal's tab state. When called with explicit
-    // arguments (from the Requests page), write into that surface instead.
+    // No args → modal list + modal tab state; explicit args → that surface
+    // (Requests page).
     const listEl = targetEl || document.getElementById('requestsList');
     if (!listEl) return;
     const tab = tabState || activeRequestsTab;
@@ -2574,6 +2856,12 @@ function renderRequestsList(targetEl, tabState) {
             'service_change': 'SERVICE',
         })[req.type] || req.type;
 
+        // Approved service changes that are still locked on the schedule get
+        // a callout, so both sides can see the assignment is protected.
+        const lockLine = _requestLockActive(req)
+            ? `<div class="req-lock-note"><span class="req-lock-dot" aria-hidden="true"></span>Locked on the schedule — recompute won't move this assignment.</div>`
+            : '';
+
         return `
                     <div class="req-card status-${req.status}">
                         <div class="req-card-head">
@@ -2586,6 +2874,7 @@ function renderRequestsList(targetEl, tabState) {
                         <div class="req-detail">${desc.body}</div>
                         ${noteLine}
                         ${decisionLine}
+                        ${lockLine}
                         <div class="req-meta">${when}</div>
                         ${actions}
                     </div>`;
@@ -2605,15 +2894,6 @@ function renderRequestsList(targetEl, tabState) {
 }
 
 // Tiny HTML escape used in request descriptions / notes
-function escapeHtml(s) {
-    return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-}
-
 // Wire up the requests modal
 document.getElementById('requestsBtn').addEventListener('click', openRequestsModal);
 document.getElementById('requestsClose').addEventListener('click', () => {
@@ -2654,10 +2934,8 @@ function renderRequestsPage() {
             : 'Track the status of changes you have requested.';
     }
 
-    // Inject (once) a "New Request" button so non-admins can start a request
-    // directly from this page. It opens the PTO modal — the same flow the
-    // sidebar/kebab uses — which auto-detects non-admin and renders as
-    // "Request PTO". Admins don't make requests, so it's hidden for them.
+    // Inject (once) a "New Request" button for non-admins: opens the same PTO
+    // modal flow, which renders as "Request PTO". Hidden for admins.
     let newBtn = document.getElementById('requestsPageNewBtn');
     if (!newBtn) {
         newBtn = document.createElement('button');
@@ -2744,9 +3022,8 @@ if (_reqPageTabsEl) {
     });
 }
 
-// When the Requests sidebar nav item is clicked, the page-nav IIFE at the
-// bottom of this file calls setPage('requests') which hides/shows the right
-// surfaces. We piggy-back on the same click to (re)render the page contents.
+// Nav click already calls setPage('requests'); piggy-back to (re)render
+// the page contents.
 document.querySelectorAll('.nav-item[data-page="requests"]').forEach(btn => {
     btn.addEventListener('click', () => {
         // Mark decisions seen before re-rendering so the dot clears
@@ -2758,36 +3035,16 @@ document.querySelectorAll('.nav-item[data-page="requests"]').forEach(btn => {
     });
 });
 
-// ════════════════════════════════════════════════════════════════════════
-//                          CHANGE LOG SUBSYSTEM
-// ════════════════════════════════════════════════════════════════════════
-// Whenever an applied schedule change happens (PTO add/remove/edit, on-call
-// override, service override, recompute, or an approved request being
-// applied/revoked), we push a summarized entry into `scheduler/changes`.
-// The Changes page in the sidebar reads from that path and renders a
-// reverse-chronological log so the team can see at a glance what shifted
-// and when.
-//
-// Denied requests are NOT logged here — they don't change the schedule.
-// Only actions that actually mutate scheduler state get a change entry.
-//
-// Each entry shape:
-//   {
-//     kind:    'pto' | 'oncall' | 'service' | 'recompute',
-//     type:    'pto_add' | 'pto_remove' | 'pto_edit'
-//            | 'oncall_set' | 'oncall_clear'
-//            | 'service_set' | 'service_reset'
-//            | 'recompute',
-//     byPathId:   number,           // who triggered the change
-//     byName:     string,           // pre-rendered "Dr. X" snapshot
-//     at:         timestamp (ms),
-//     summary:    string,           // pre-rendered headline (frozen at write time)
-//     details:    string,           // optional secondary line
-//     source:     'direct' | 'request_approved' | 'request_revoked' | 'recompute',
-//     requestKey: string | null,    // when source !== 'direct'
-//     forPathId:  number | null,    // who the change affects (if applicable)
-//     // Plus type-specific structured fields (date, scope, serviceId, etc.)
-//   }
+// ════ CHANGE LOG SUBSYSTEM ════
+// Applied schedule changes (PTO, on-call/service overrides, recompute,
+// request approve/revoke) push a summarized entry into scheduler/changes;
+// the Changes page renders them newest-first. Denied requests are NOT
+// logged — only actions that mutate scheduler state. Entry shape:
+// { kind:'pto'|'oncall'|'service'|'recompute', type:'pto_add'|'pto_remove'|
+// 'pto_edit'|'oncall_set'|'oncall_clear'|'service_set'|'service_reset'|
+// 'recompute', byPathId, byName, at, summary, details,
+// source:'direct'|'request_approved'|'request_revoked'|'recompute',
+// requestKey|null, forPathId|null, + type-specific fields (date, scope, …) }
 
 let changes = {};                  // { pushKey: change-entry } from Firebase
 let changesReady = false;
@@ -2807,9 +3064,8 @@ regListener('scheduler/changes', snap => {
     console.error('Firebase changes error:', err);
 });
 
-// ── Summary helpers ──────────────────────────────────────────────────────
-// Pre-render human-readable summaries at write time so the log stays
-// readable even if e.g. a pathologist's name later changes.
+// ── Summary helpers ── pre-render summaries at write time so the log
+// stays readable even if names later change.
 
 function _chgFmtDate(s) {
     if (!s) return '?';
@@ -2926,10 +3182,8 @@ function _chgSummaryServiceReset(dateKey, scope) {
 }
 // (recompute code moved to recompute.js)
 
-// ── Core writer ──────────────────────────────────────────────────────────
-// Pushes one change-log entry to Firebase. Non-fatal: if it fails (network
-// hiccup, perms, etc.) we just console.error — never block or alert the
-// user, since the underlying schedule change has already happened.
+// ── Core writer ── push one entry; non-fatal on failure (console.error
+// only — the schedule change already happened).
 async function logChange(entry) {
     if (loggedInPathId === null) return;
     if (!entry || !entry.summary) return;
@@ -2948,17 +3202,13 @@ async function logChange(entry) {
 
 // ── Renderer ─────────────────────────────────────────────────────────────
 
-// ── Scope filter (Mine vs All) ───────────────────────────────────────────
-// The Changes page defaults to showing only entries that affect the signed-
-// in user, rephrased in personal language. The user can toggle to "All
-// changes" to see the full team-wide log.
+// ── Scope filter (Mine vs All) ── default: only entries affecting the
+// signed-in user, phrased personally; toggle shows the full log.
 
 let activeChangesScope = 'mine'; // 'mine' | 'all'
 
-// Does change entry `c` affect the user with pathId `pid`?
-// Conservative: when we can't tell from the entry alone (e.g. service_reset
-// has no per-user breakdown), we treat it as not personally affecting them
-// so it only appears in the "All changes" view.
+// Does entry `c` affect `pid`? Conservative: if the entry can't say (e.g.
+// service_reset), treat as not-personal so it shows only under "All".
 function _chgAffectsUser(c, pid) {
     if (pid === null || pid === undefined) return false;
     if (!c) return false;
@@ -3089,9 +3339,7 @@ function renderChangesPage() {
     const countAllEl = document.getElementById('changesTabCountAll');
     if (!listEl) return;
 
-    // Non-pathologist accounts (gross room, manager) can't be the target of
-    // PTO / on-call / service / conference changes, so the "mine" view is
-    // structurally empty for them. Quietly default them to "all".
+    // Non-pathologist accounts can't be change targets — default them to "all".
     const meIsPath = (typeof loggedInPathId === 'number');
     if (!meIsPath && activeChangesScope === 'mine') {
         activeChangesScope = 'all';
@@ -3230,31 +3478,13 @@ document.querySelectorAll('.nav-item[data-page="changes"]').forEach(btn => {
     });
 });
 
-// ════════════════════════════════════════════════════════════════════════
-//                          CONFERENCE TRACKER SUBSYSTEM
-// ════════════════════════════════════════════════════════════════════════
-// Tracks how many of each conference each pathologist has presented at.
-// Entries live in scheduler/conferenceLog. Each entry is shaped:
-//   {
-//     pathologistId: <number>,
-//     type: 'breast' | 'lung' | 'thoracic' | 'cdh' | 'other',
-//     date: 'YYYY-MM-DD',
-//     subtype: 'GI' | 'Heme' | 'Thoracic' | 'Neuro',  // cdh only
-//     otherTitle: <string>,                            // other only
-//     note: <string>,                                  // optional
-//     createdAt: <ms>,
-//     createdBy: <pathId>,
-//   }
-//
-// Editing privileges: admin OR any pathId in scheduler/conferencePresenters
-// (a small allow-list the admin populates to grant non-admin users the
-// ability to log conferences).
-//
-// The page shows:
-//   1. A summary count grid (rows = pathologists, cols = conference types)
-//   2. Tabs to drill into each conference type
-//   3. An entries list for the active tab
-// All views respect the selected academic-year period.
+// ════ CONFERENCE TRACKER SUBSYSTEM ════
+// Counts conference presentations per pathologist. scheduler/conferenceLog
+// entries: { pathologistId, type:'breast'|'lung'|'thoracic'|'cdh'|'other',
+// date:'YYYY-MM-DD', subtype (cdh only), otherTitle (other only), note?,
+// createdAt, createdBy }. Editing: admin or anyone in
+// scheduler/conferencePresenters. Page = summary grid + per-type tabs +
+// entries list, all scoped to the selected academic-year period.
 
 // Conference type metadata. Keep keys in sync with HTML/CSS hooks.
 const CONF_TYPES = [
@@ -3272,6 +3502,11 @@ let conferenceLog = {};               // { pushKey: entry }
 let conferenceLogReady = false;
 let conferencePresenters = {};        // { pathId: true } — allow-list
 
+// Consult rotation log; "next up" cycles past the most recent entry's
+// recipient. Shape: { date, source, pathologistId,
+// caseNumber:'MHSC26-0001', createdAt, createdBy }
+let consultLog = {};                  // { pushKey: entry }
+
 // ── UI state ─────────────────────────────────────────────────────────────
 let activeTrackingTab = 'breast';
 // Period filter: '<startYearShort>' string like '2025' (= academic year
@@ -3287,9 +3522,8 @@ regListener('scheduler/conferenceLog', snap => {
         && typeof renderTrackingPage === 'function') {
         renderTrackingPage();
     }
-    // Conferences also render on the procedure grid (week/day views), so a
-    // change to the log must repaint those views too. Only the procedure-
-    // bearing views show them; month/year are summary-only.
+    // Conferences also render on week/day procedure grids — repaint those on
+    // log changes (month/year are summary-only).
     if (pathologistsReady && vacationsReady
         && (typeof view !== 'undefined') && (view === 'week' || view === 'day')
         && typeof renderMain === 'function') {
@@ -3297,6 +3531,19 @@ regListener('scheduler/conferenceLog', snap => {
     }
 }, err => {
     console.error('Firebase conferenceLog error:', err);
+});
+
+// Consult log — only the tracking page shows consults, so a change just
+// repaints that page when it's active.
+regListener('scheduler/consultLog', snap => {
+    consultLog = snap.exists() ? snap.val() : {};
+    const _appEl = document.getElementById('app');
+    if (_appEl && _appEl.getAttribute('data-page') === 'tracking'
+        && typeof renderTrackingPage === 'function') {
+        renderTrackingPage();
+    }
+}, err => {
+    console.error('Firebase consultLog error:', err);
 });
 
 regListener('scheduler/conferencePresenters', snap => {
@@ -3311,18 +3558,87 @@ regListener('scheduler/conferencePresenters', snap => {
     console.error('Firebase conferencePresenters error:', err);
 });
 
-// ── Permission helper ────────────────────────────────────────────────────
-// Admin always qualifies. Otherwise the signed-in user must be in the
-// conferencePresenters allow-list (managed manually for now). Gross room
-// never qualifies (it's the procedure-only account).
+// ── Permission helper ── admin, or in the conferencePresenters
+// allow-list; gross room never.
 function canEditConferences(pathId) {
     const id = (pathId !== undefined && pathId !== null) ? pathId : loggedInPathId;
     if (id === null || id === undefined) return false;
     if (id === GROSS_ROOM_ID) return false;
     if (id === HISTOLOGY_ID) return false;
+    if (id === LAKE_FOREST_ID) return false;
     if (id === MANAGER_ID) return true;
     if (isAdmin(id)) return true;
     return !!(conferencePresenters && conferencePresenters[id]);
+}
+
+// ── Consult rotation helpers ── tighter gate: only Kathleen or the admin.
+function canEditConsults(pathId) {
+    const id = (pathId !== undefined && pathId !== null) ? pathId : loggedInPathId;
+    if (id === null || id === undefined) return false;
+    if (id === MANAGER_ID) return true;
+    return isAdmin(id);
+}
+
+// Case numbers look like MHSC26-0001: 'MHSC' + 2-digit calendar year of
+// the date received + a 4-digit sequence that starts at 0001 each year
+// and goes up by one per logged consult.
+const CONSULT_CASE_RE = /^MHSC(\d{2})-(\d{4})$/;
+
+function consultCaseYearDigits(dateKey) {
+    const d = parseDate(dateKey);
+    const y = (d && !isNaN(d)) ? d.getFullYear() : new Date().getFullYear();
+    return String(y % 100).padStart(2, '0');
+}
+
+// Next case number for the year: one past the highest logged sequence (no
+// reuse after deletions). `excludeKey` skips the entry being edited.
+function suggestConsultCaseNumber(dateKey, excludeKey) {
+    const yy = consultCaseYearDigits(dateKey);
+    let maxN = 0;
+    Object.entries(consultLog || {}).forEach(([key, e]) => {
+        if (!e || (excludeKey && key === excludeKey)) return;
+        const m = CONSULT_CASE_RE.exec(String(e.caseNumber || '').trim().toUpperCase());
+        if (m && m[1] === yy) {
+            const n = parseInt(m[2], 10);
+            if (Number.isFinite(n) && n > maxN) maxN = n;
+        }
+    });
+    return 'MHSC' + yy + '-' + String(maxN + 1).padStart(4, '0');
+}
+
+// Next up = whoever follows the most recent consult's recipient in
+// `pathologists` order (no entries → first). A suggestion only — the logger
+// can pick someone else and the pointer continues from there.
+function nextConsultPathologist() {
+    if (!pathologists || pathologists.length === 0) return null;
+    const entries = Object.values(consultLog || {})
+        .filter(e => e && e.date && e.pathologistId !== undefined);
+    if (entries.length === 0) return pathologists[0];
+    entries.sort((a, b) => {
+        if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+        return (b.createdAt || 0) - (a.createdAt || 0);
+    });
+    const lastPid = entries[0].pathologistId;
+    const idx = pathologists.findIndex(p => String(p.id) === String(lastPid));
+    return pathologists[(idx + 1) % pathologists.length];   // idx -1 → [0]
+}
+
+// Consults matching the tracking-page period filter (same fiscal-year
+// semantics as conferences), newest first.
+function getFilteredConsults() {
+    const entries = Object.entries(consultLog || {})
+        .filter(([, e]) => !!e && e.date && e.pathologistId !== undefined);
+    let filtered = entries;
+    if (trackingPeriod !== null && trackingPeriod !== 'all') {
+        const yr = parseInt(trackingPeriod, 10);
+        if (Number.isFinite(yr)) {
+            filtered = entries.filter(([, e]) => getAcademicYearOfKey(e.date) === yr);
+        }
+    }
+    return filtered.sort((a, b) => {
+        if (a[1].date !== b[1].date) return a[1].date < b[1].date ? 1 : -1;
+        return (b[1].createdAt || 0) - (a[1].createdAt || 0);
+    });
 }
 
 // ── Period helpers ───────────────────────────────────────────────────────
@@ -3345,9 +3661,8 @@ function academicYearLabel(startYear) {
     return startYear + '–' + (startYear + 1);
 }
 
-// ── Filtered-entries cache ───────────────────────────────────────────────
-// Returns the array of {key, entry} pairs matching the current period
-// filter, sorted by date descending (most recent first).
+// ── Filtered-entries cache ── {key, entry} pairs for the current period,
+// newest first.
 function getFilteredEntries() {
     const period = trackingPeriod;
     const entries = Object.entries(conferenceLog || {})
@@ -3403,12 +3718,9 @@ function populateTrackingYearSelect() {
     }
 }
 
-// ── PTO usage tracker (left column, between conf-add and counts) ─────────
-// Renders a small per-pathologist list of working-days-of-PTO used in the
-// selected fiscal year (Sept 1 – Aug 31) vs. their allotted amount.
-// Honors the period dropdown: a year like '2025' scopes to that fiscal year;
-// 'all' shows lifetime usage with no allotment denominator (since allotments
-// are per-year, the ratio doesn't make sense across "all time").
+// ── PTO usage tracker (left column) ── per-pathologist working days used
+// in the selected fiscal year vs allotted; 'all' shows lifetime with no
+// denominator (allotments are per-year).
 function renderTrackingPto() {
     const listEl = document.getElementById('trackingPtoList');
     const periodLabelEl = document.getElementById('trackingPtoPeriod');
@@ -3423,6 +3735,7 @@ function renderTrackingPto() {
     // Determine the range to count over from the active period filter.
     // For 'all', leave the range unbounded and skip the allotted denominator.
     let range = null;
+    let fiscalYear = null;
     let periodLabel = '';
     let showAllotted = true;
     if (trackingPeriod === 'all') {
@@ -3432,6 +3745,7 @@ function renderTrackingPto() {
         const yr = parseInt(trackingPeriod, 10);
         if (Number.isFinite(yr)) {
             range = getFiscalYearRange(yr);
+            fiscalYear = yr;
             periodLabel = 'Sep ' + yr + ' – Aug ' + (yr + 1);
         }
     }
@@ -3439,7 +3753,9 @@ function renderTrackingPto() {
 
     listEl.innerHTML = pathologists.map(p => {
         const used = ptoDaysScheduled(p.id, range ? { start: range.start, end: range.end } : undefined);
-        const allot = Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0;
+        // Allotments are per fiscal year (legacy value = fallback default) —
+        // resolve against the selected period.
+        const allot = fiscalYear !== null ? ptoAllotmentFor(p.id, fiscalYear) : 0;
         const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
 
         let pctRaw = (showAllotted && allot > 0) ? (used / allot) : 0;
@@ -3473,8 +3789,115 @@ function renderTrackingPto() {
     }).join('');
 }
 
+// ── Holiday call tracker ─────────────────────────────────────────────────
+// Who was on call for each of the six federal holidays, cumulative across
+// years — never resets, independent of the Period selector. Derived from
+// onCallIdForDay (rotation + overrides), so swaps credit the actual coverer;
+// nothing is logged by hand. Counted from HOLIDAY_CALL_START_YEAR (2024,
+// when the rotation anchors begin) through today, on the true calendar date
+// (July 4 even on a Saturday — weekly call covers weekends).
+const HOLIDAY_CALL_START_YEAR = 2024;
+
+// Six federal holidays in calendar order (Jan → Dec). `name` matches what
+// getActualFederalHoliday returns; `label` is the column heading. Single
+// source of truth for both the header row and the per-holiday columns, so a
+// count can never land under the wrong holiday.
+const HOLIDAY_ORDER = [
+    { name: "New Year's Day",   label: 'New Year' },
+    { name: 'Memorial Day',     label: 'Memorial' },
+    { name: 'Independence Day', label: 'July 4' },
+    { name: 'Labor Day',        label: 'Labor Day' },
+    { name: 'Thanksgiving',     label: 'Thanksgiving' },
+    { name: 'Christmas Day',    label: 'Christmas' },
+];
+
+// Every actual federal holiday from HOLIDAY_CALL_START_YEAR through today,
+// resolved to whoever is on call that date: [{ date, name, pathId }].
+// `now` is injectable for tests; omit it in app code.
+function holidayCallEntries(now) {
+    const today = now ? new Date(now) : new Date();
+    today.setHours(0, 0, 0, 0);
+    const out = [];
+    for (let y = HOLIDAY_CALL_START_YEAR; y <= today.getFullYear(); y++) {
+        for (let d = new Date(y, 0, 1); d.getFullYear() === y && d <= today; d = addDays(d, 1)) {
+            const name = getActualFederalHoliday(d);
+            if (name) out.push({ date: new Date(d), name: name, pathId: onCallIdForDay(d) });
+        }
+    }
+    return out;
+}
+
+// Matrix view: one row per pathologist, one column per holiday, each cell a
+// count of holidays that person has covered. A trailing Total sums the row.
+// Header and columns both come from HOLIDAY_ORDER (see above).
+function renderTrackingHolidayCall() {
+    const headEl = document.getElementById('trackingHolidayHead');
+    const bodyEl = document.getElementById('trackingHolidayBody');
+    const capEl = document.getElementById('trackingHolidayPeriod');
+    if (!bodyEl) return;
+
+    if (capEl) capEl.textContent = HOLIDAY_CALL_START_YEAR + ' \u2013 present \u00b7 never resets';
+
+    // Header row: Pathologist | <each holiday> | Total.
+    if (headEl) {
+        headEl.innerHTML =
+            '<th class="t-sum-name-col">Pathologist</th>' +
+            HOLIDAY_ORDER.map(h => `<th>${escapeHtml(h.label)}</th>`).join('') +
+            '<th class="t-sum-total-col">Total</th>';
+    }
+
+    if (!pathologists || pathologists.length === 0) {
+        bodyEl.innerHTML = `<tr><td class="t-sum-empty" colspan="${HOLIDAY_ORDER.length + 2}">No pathologists loaded.</td></tr>`;
+        return;
+    }
+
+    const entries = holidayCallEntries();
+
+    // (pathId → { holidayName → count, total }); a separate `former` bucket
+    // collects holidays credited to ids no longer in the roster (departed
+    // staff still named by old overrides) so the tally is surfaced, not lost.
+    const counts = {};
+    pathologists.forEach(p => { counts[p.id] = { total: 0 }; });
+    const former = { total: 0 };
+    entries.forEach(e => {
+        const bucket = counts[e.pathId] || former;
+        bucket[e.name] = (bucket[e.name] || 0) + 1;
+        bucket.total += 1;
+    });
+
+    const rowFor = (label, initials, color, bucket, extraCls) => {
+        const cells = HOLIDAY_ORDER.map(h => {
+            const n = bucket[h.name] || 0;
+            return `<td class="${n === 0 ? 't-sum-zero' : ''}">${n}</td>`;
+        }).join('');
+        const initialsHtml = initials
+            ? `<span class="t-sum-initials">${escapeHtml(initials)}</span>` : '';
+        return `
+            <tr class="${extraCls}">
+                <td class="t-sum-name" style="--c:${color};">
+                    <span class="t-sum-dot"></span>
+                    <span>${escapeHtml(label)}</span>
+                    ${initialsHtml}
+                </td>
+                ${cells}
+                <td class="t-sum-total">${bucket.total}</td>
+            </tr>`;
+    };
+
+    let html = pathologists.map(p => {
+        const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
+        return rowFor('Dr. ' + lastName, p.initials || '', p.color, counts[p.id], '');
+    }).join('');
+
+    if (former.total > 0) {
+        html += rowFor('Former staff', '', 'var(--rule)', former, 'tracking-hc-former');
+    }
+
+    bodyEl.innerHTML = html;
+}
+
 // ── Summary count grid ───────────────────────────────────────────────────
-function renderTrackingSummary(filteredEntries) {
+function renderTrackingSummary(filteredEntries, filteredConsults) {
     const body = document.getElementById('trackingSummaryBody');
     if (!body) return;
 
@@ -3486,7 +3909,7 @@ function renderTrackingSummary(filteredEntries) {
     // Build a (pathId, type) → count map
     const counts = {};
     pathologists.forEach(p => {
-        counts[p.id] = { breast: 0, lung: 0, thoracic: 0, cdh: 0, other: 0, total: 0 };
+        counts[p.id] = { breast: 0, lung: 0, thoracic: 0, cdh: 0, other: 0, total: 0, consult: 0 };
     });
     filteredEntries.forEach(([, e]) => {
         const c = counts[e.pathologistId];
@@ -3495,6 +3918,12 @@ function renderTrackingSummary(filteredEntries) {
             c[e.type] = (c[e.type] || 0) + 1;
             c.total += 1;
         }
+    });
+    // Consults tally separately (they aren't presentations, so they don't
+    // feed the presentation Total — the column shows rotation fairness).
+    (filteredConsults || []).forEach(([, e]) => {
+        const c = counts[e.pathologistId];
+        if (c) c.consult += 1;
     });
 
     body.innerHTML = pathologists.map(p => {
@@ -3515,12 +3944,13 @@ function renderTrackingSummary(filteredEntries) {
                 ${cell(c.cdh)}
                 ${cell(c.other)}
                 <td class="t-sum-total">${c.total}</td>
+                <td class="t-sum-consult${c.consult === 0 ? ' t-sum-zero' : ''}">${c.consult}</td>
             </tr>`;
     }).join('');
 }
 
 // ── Tab counts ───────────────────────────────────────────────────────────
-function renderTrackingTabCounts(filteredEntries) {
+function renderTrackingTabCounts(filteredEntries, consultCount) {
     const counts = { breast: 0, lung: 0, thoracic: 0, cdh: 0, other: 0 };
     filteredEntries.forEach(([, e]) => {
         if (counts[e.type] !== undefined) counts[e.type] += 1;
@@ -3534,12 +3964,71 @@ function renderTrackingTabCounts(filteredEntries) {
     set('trackingTabCountThoracic', counts.thoracic);
     set('trackingTabCountCdh', counts.cdh);
     set('trackingTabCountOther', counts.other);
+    set('trackingTabCountConsult', consultCount || 0);
 }
 
 // ── Entries list (per active tab) ────────────────────────────────────────
 function renderTrackingEntries(filteredEntries) {
     const listEl = document.getElementById('trackingEntries');
     if (!listEl) return;
+
+    // ── Consults tab: its own entry shape (case number + source) ──
+    if (activeTrackingTab === 'consult') {
+        const consults = getFilteredConsults();
+        const editable = canEditConsults();
+
+        if (consults.length === 0) {
+            listEl.innerHTML = `
+                <div class="empty">
+                    <span class="empty-headline">No consults yet.</span>
+                    Logged consult cases will appear here.
+                </div>`;
+            return;
+        }
+
+        listEl.innerHTML = consults.map(([key, e]) => {
+            const p = pathologists.find(x => String(x.id) === String(e.pathologistId));
+            const dateLabel = (function () {
+                try {
+                    const d = parseDate(e.date);
+                    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+                } catch (_) {
+                    return e.date;
+                }
+            })();
+            const who = p ? p.name : 'Unknown pathologist';
+            const color = p ? p.color : 'var(--ink-3)';
+
+            const metaParts = [];
+            if (e.caseNumber) {
+                metaParts.push(`<span class="te-case">${escapeHtml(e.caseNumber)}</span>`);
+            }
+            if (e.source) {
+                metaParts.push(`<span class="te-source">from ${escapeHtml(e.source)}</span>`);
+            }
+            const metaHtml = metaParts.length
+                ? `<div class="te-meta">${metaParts.join(' ')}</div>`
+                : '';
+
+            const editBtn = editable
+                ? `<button class="te-edit-btn" data-consult-edit="${escapeHtml(key)}" type="button">Edit</button>`
+                : '';
+
+            return `
+                <div class="tracking-entry" style="--c:${color};">
+                    <div class="te-date">${escapeHtml(dateLabel)}</div>
+                    <div class="te-main">
+                        <div class="te-presenter">
+                            <span class="te-dot"></span>
+                            <span>${escapeHtml(who)}</span>
+                        </div>
+                        ${metaHtml}
+                    </div>
+                    ${editBtn}
+                </div>`;
+        }).join('');
+        return;
+    }
 
     const tabEntries = filteredEntries.filter(([, e]) => e.type === activeTrackingTab);
     const editable = canEditConferences();
@@ -3604,6 +4093,45 @@ function renderTrackingEntries(filteredEntries) {
     }).join('');
 }
 
+// ── Consult rotation card (left column) ── full cycle order, next
+// recipient highlighted; "Log a consult" only for Kathleen / admin.
+function renderConsultNext() {
+    const card = document.getElementById('consultNextCard');
+    const addBtn = document.getElementById('consultAddBtn');
+    if (!card) return;
+
+    if (addBtn) addBtn.style.display = canEditConsults() ? '' : 'none';
+
+    if (!pathologists || pathologists.length === 0) {
+        card.innerHTML = '';
+        return;
+    }
+
+    const next = nextConsultPathologist();
+    const nextId = next ? next.id : null;
+
+    const chips = pathologists.map((p, i) => {
+        const isNext = String(p.id) === String(nextId);
+        const arrow = i < pathologists.length - 1
+            ? '<span class="consult-rot-arrow" aria-hidden="true">›</span>'
+            : '';
+        return `<span class="consult-rot-chip${isNext ? ' is-next' : ''}"
+                    style="--c:${p.color};"
+                    title="${escapeHtml(p.name)}${isNext ? ' — next up' : ''}">${escapeHtml(p.initials || '')}</span>${arrow}`;
+    }).join('');
+
+    const nextLine = next
+        ? `<div class="consult-next-line">Next consult
+               <span class="consult-next-arrow" aria-hidden="true">→</span>
+               <strong style="--c:${next.color};">${escapeHtml(next.name)}</strong>
+           </div>`
+        : '';
+
+    card.innerHTML = `
+        <div class="consult-rot-strip" title="Rotation order — cycles back to the start after the last pathologist">${chips}</div>
+        ${nextLine}`;
+}
+
 // ── Master renderer ──────────────────────────────────────────────────────
 function renderTrackingPage() {
     const pg = document.getElementById('trackingPage');
@@ -3633,10 +4161,13 @@ function renderTrackingPage() {
     });
 
     const filtered = getFilteredEntries();
-    renderTrackingSummary(filtered);
-    renderTrackingTabCounts(filtered);
+    const filteredConsults = getFilteredConsults();
+    renderConsultNext();
+    renderTrackingSummary(filtered, filteredConsults);
+    renderTrackingTabCounts(filtered, filteredConsults.length);
     renderTrackingEntries(filtered);
     renderTrackingPto();
+    renderTrackingHolidayCall();
 }
 
 // Expose for any caller that needs to refresh the page (e.g. after sign-in)
@@ -3676,11 +4207,183 @@ document.querySelectorAll('.nav-item[data-page="tracking"]').forEach(btn => {
     const listEl = document.getElementById('trackingEntries');
     if (!listEl) return;
     listEl.addEventListener('click', e => {
+        const consultBtn = e.target.closest('[data-consult-edit]');
+        if (consultBtn) {
+            if (!canEditConsults()) return;
+            openConsultModal(consultBtn.getAttribute('data-consult-edit'));
+            return;
+        }
         const btn = e.target.closest('[data-conf-edit]');
         if (!btn) return;
         if (!canEditConferences()) return;
         openConferenceModal(btn.getAttribute('data-conf-edit'));
     });
+})();
+
+// ── Consult modal (add/edit/delete) ── pathologist prefilled from the
+// rotation; case number prefilled with the next MHSC<yy>-<nnnn> for the
+// date's year, regenerated on date change until hand-edited.
+let _editingConsultKey = null;
+
+function openConsultModal(editKey) {
+    if (!canEditConsults()) return;
+
+    const back = document.getElementById('consultModalBack');
+    if (!back) return;
+
+    const titleEl = document.getElementById('consultModalTitle');
+    const subEl = document.getElementById('consultModalSub');
+    const dateInput = document.getElementById('consultDate');
+    const sourceInput = document.getElementById('consultSource');
+    const pathSel = document.getElementById('consultPathologist');
+    const hintEl = document.getElementById('consultRotationHint');
+    const caseInput = document.getElementById('consultCaseNumber');
+    const deleteBtn = document.getElementById('consultDelete');
+    const saveBtn = document.getElementById('consultSave');
+    const errEl = document.getElementById('consultFormError');
+
+    if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+
+    // Fresh pathologist options each open
+    pathSel.innerHTML = pathologists
+        .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
+        .join('');
+
+    if (editKey && consultLog[editKey]) {
+        // ── Edit an existing consult ──
+        _editingConsultKey = editKey;
+        const e = consultLog[editKey];
+        titleEl.textContent = 'Edit consult';
+        if (subEl) subEl.textContent = 'Update or remove this consult case.';
+        saveBtn.textContent = 'Save changes';
+        deleteBtn.style.display = '';
+
+        dateInput.value = e.date || '';
+        sourceInput.value = e.source || '';
+        pathSel.value = String(e.pathologistId);
+        caseInput.value = e.caseNumber || '';
+        caseInput.dataset.userEdited = '1';   // don't overwrite on date change
+        if (hintEl) hintEl.textContent = '';
+    } else {
+        // ── Log a new consult ──
+        _editingConsultKey = null;
+        titleEl.textContent = 'Log a consult';
+        if (subEl) subEl.textContent = 'Record an incoming consult case and who takes it.';
+        saveBtn.textContent = 'Add consult';
+        deleteBtn.style.display = 'none';
+
+        const todayKey = fmt(new Date());
+        dateInput.value = todayKey;
+        sourceInput.value = '';
+        const next = nextConsultPathologist();
+        if (next) pathSel.value = String(next.id);
+        if (hintEl) {
+            hintEl.textContent = next
+                ? 'Rotation suggests ' + next.name + ' — pick someone else to skip them this round.'
+                : '';
+        }
+        caseInput.value = suggestConsultCaseNumber(todayKey, null);
+        delete caseInput.dataset.userEdited;
+    }
+
+    back.classList.add('open');
+    setTimeout(() => sourceInput.focus(), 50);
+}
+
+// Date changed → refresh the suggested case number for that year, unless
+// the admin already typed their own.
+document.getElementById('consultDate').addEventListener('change', () => {
+    const caseInput = document.getElementById('consultCaseNumber');
+    const dateVal = document.getElementById('consultDate').value;
+    if (!dateVal || !caseInput || caseInput.dataset.userEdited === '1') return;
+    caseInput.value = suggestConsultCaseNumber(dateVal, _editingConsultKey);
+});
+document.getElementById('consultCaseNumber').addEventListener('input', e => {
+    e.target.dataset.userEdited = '1';
+});
+
+document.getElementById('consultSave').addEventListener('click', async () => {
+    if (!canEditConsults()) return;
+
+    const dateVal = document.getElementById('consultDate').value;
+    const sourceVal = (document.getElementById('consultSource').value || '').trim();
+    const pidVal = parseInt(document.getElementById('consultPathologist').value, 10);
+    const caseInput = document.getElementById('consultCaseNumber');
+    const caseVal = String(caseInput.value || '').trim().toUpperCase();
+    const errEl = document.getElementById('consultFormError');
+
+    function fail(msg) {
+        if (errEl) { errEl.textContent = msg; errEl.style.display = ''; }
+    }
+
+    if (!dateVal) { fail('Please pick the date the consult was received.'); return; }
+    if (!Number.isFinite(pidVal)) { fail('Please pick a pathologist.'); return; }
+    if (!CONSULT_CASE_RE.test(caseVal)) {
+        fail('Case number must look like MHSC26-0001 (MHSC + 2-digit year + dash + 4-digit number).');
+        return;
+    }
+    // No two consults may share a case number.
+    const dup = Object.entries(consultLog || {}).find(([key, e]) =>
+        e && key !== _editingConsultKey
+        && String(e.caseNumber || '').trim().toUpperCase() === caseVal);
+    if (dup) { fail('Case number ' + caseVal + ' is already logged.'); return; }
+
+    caseInput.value = caseVal;   // reflect normalization (uppercasing)
+
+    try {
+        if (_editingConsultKey) {
+            await db.ref('scheduler/consultLog/' + _editingConsultKey).update({
+                date: dateVal,
+                source: sourceVal || null,
+                pathologistId: pidVal,
+                caseNumber: caseVal,
+            });
+            showToast('Consult updated.');
+        } else {
+            await db.ref('scheduler/consultLog').push({
+                date: dateVal,
+                source: sourceVal || null,
+                pathologistId: pidVal,
+                caseNumber: caseVal,
+                createdAt: Date.now(),
+                createdBy: loggedInPathId,
+            });
+            showToast('Consult logged — ' + caseVal + '.');
+        }
+        document.getElementById('consultModalBack').classList.remove('open');
+    } catch (err) {
+        console.error('consult save error:', err);
+        fail('Save failed: ' + (err.message || err));
+    }
+});
+
+document.getElementById('consultDelete').addEventListener('click', async () => {
+    if (!canEditConsults() || !_editingConsultKey) return;
+    const e = consultLog[_editingConsultKey];
+    const label = e && e.caseNumber ? e.caseNumber : 'this consult';
+    if (!confirm('Delete ' + label + '? This cannot be undone.')) return;
+    try {
+        await db.ref('scheduler/consultLog/' + _editingConsultKey).remove();
+        showToast('Consult deleted.');
+        document.getElementById('consultModalBack').classList.remove('open');
+    } catch (err) {
+        console.error('consult delete error:', err);
+        showToast('Delete failed: ' + (err.message || err), { type: 'error' });
+    }
+});
+
+document.getElementById('consultCancel').addEventListener('click', () => {
+    document.getElementById('consultModalBack').classList.remove('open');
+});
+document.getElementById('consultModalBack').addEventListener('click', e => {
+    if (e.target.id === 'consultModalBack') e.target.classList.remove('open');
+});
+
+// "Log a consult" button in the tracking page's left column
+(function wireConsultAddBtn() {
+    const btn = document.getElementById('consultAddBtn');
+    if (!btn) return;
+    btn.addEventListener('click', () => openConsultModal(null));
 })();
 
 // ── Conference autofill helpers ──────────────────────────────────────────
@@ -3764,17 +4467,10 @@ function getBigsPathForDate(date) {
     return null;
 }
 
-// ── Conference time helpers ───────────────────────────────────────────────
-// Default start time ("HH:MM", 24h) for a conference, given its type and the
-// calendar date it falls on. Rules:
-//   • Breast Conference        → 12:00 PM  (held Fridays)
-//   • Lung Conference          → 12:00 PM  (held on its designated day)
-//   • Morning / CDH (Heme)     →  7:00 AM  on Fridays
-//   • All other conferences    →  7:30 AM
-//   • There are NO 7:30 AM conferences on Fridays, so any non-breast
-//     conference that lands on a Friday defaults to 7:00 AM instead.
-// `dateStr` is a 'YYYY-MM-DD' string (may be empty/invalid → treated as a
-// non-Friday weekday so the generic 7:30 AM default applies).
+// ── Conference time helpers ── default start ("HH:MM") by type + date:
+// breast/lung → 12:00; Morning/CDH → 7:00 Fri; others 7:30 — except no 7:30
+// conferences exist on Fridays, so non-breast Friday conferences default to
+// 7:00. Invalid/empty dateStr → treated as a non-Friday weekday.
 function defaultConfTime(type, dateStr) {
     if (type === 'breast' || type === 'lung') return '12:00';
 
@@ -3791,10 +4487,8 @@ function defaultConfTime(type, dateStr) {
     return '07:30';
 }
 
-// Returns the effective start time for a stored conference entry: its own
-// `time` field when present and valid, otherwise the default derived from its
-// type and date. Lets historical entries (logged before times were tracked)
-// still render on the schedule at a sensible hour.
+// Effective start time: the entry's own valid `time`, else the type+date
+// default (keeps pre-time-tracking entries rendering sensibly).
 function effectiveConfTime(entry) {
     if (entry && typeof entry.time === 'string' && /^\d{2}:\d{2}$/.test(entry.time)) {
         return entry.time;
@@ -3802,20 +4496,10 @@ function effectiveConfTime(entry) {
     return defaultConfTime(entry && entry.type, entry && entry.date);
 }
 
-// Returns a flat array of conference entries scheduled for the given day key,
-// each shaped { key, time, type, subtype, otherTitle, note, pathologistId,
-// label }. Only entries whose presenter matches the current path filter are
-// returned: conferences live on the presenter's OWN schedule, so they appear
-// in an individual pathologist's view but never in the all-group view (where
-// they would clutter every column with one person's commitment).
-// Returns a flat array of conference entries scheduled for the given day key,
-// each shaped { key, time, type, subtype, otherTitle, note, pathologistId,
-// label }. A conference is a personal commitment of its presenter, so it is
-// shown ONLY on the signed-in pathologist's own schedule — i.e. when the
-// logged-in user IS the presenter. It appears in both the Group and the
-// Individual views (it's their commitment either way) but is never visible to
-// any other user, and the non-pathologist accounts (gross room, manager,
-// histology) never have personal conferences so they see none.
+// Flat array of the day's conference entries { key, time, type, subtype,
+// otherTitle, note, pathologistId, label }. Personal to the presenter:
+// shown only on the signed-in presenter's own schedule (Group AND
+// Individual views), never to other users; non-pathologist accounts see none.
 function getConferencesForDay(dayKey) {
     // Resolve the signed-in pathologist. Special non-pathologist accounts
     // (string ids) have no personal conferences.
@@ -3861,12 +4545,10 @@ function confScheduleLabel(e) {
 // Track which entry is being edited (null when adding a new one)
 let _editingConferenceKey = null;
 
-// Renders the "Schedule for this day" panel inside the conference modal.
-// Reads the current value of #confDate and #confPathologist, then paints
-// one row per pathologist showing their service (or PTO/Off/Off-Site/On
-// Call decorations) for that date. The currently-selected presenter row
-// is highlighted; clicking any row selects that pathologist.
-// Handles weekend, federal holiday, and pre-cutoff dates gracefully.
+// Paints the "Schedule for this day" panel in the conference modal: one
+// row per pathologist with their service/PTO/on-call for #confDate;
+// selected presenter highlighted; rows clickable. Handles
+// weekend/holiday/pre-cutoff dates.
 function renderConferenceDaySchedule() {
     const panel = document.getElementById('confDaySchedule');
     const dateInput = document.getElementById('confDate');
@@ -3950,9 +4632,7 @@ function renderConferenceDaySchedule() {
         <div class="conf-day-schedule-list">${rows}</div>
     `;
 
-    // Click a row to set that pathologist as the presenter. Dispatching the
-    // 'change' event lets the existing change listener re-paint the panel
-    // with the new highlight.
+    // Row click sets the presenter; dispatching 'change' re-paints the panel.
     panel.querySelectorAll('.conf-day-schedule-row').forEach(row => {
         row.addEventListener('click', () => {
             const pid = row.getAttribute('data-pid');
@@ -4029,9 +4709,7 @@ function openConferenceModal(editKey) {
         // pathologist who will be on McH Bigs service that day.
         const _predDate = predictedConferenceDate(_confType);
         dateInput.value = fmt(_predDate);
-        // Autopopulate the time placeholder for this conference + date per the
-        // standing conference schedule (breast/lung noon, Friday non-breast
-        // 7 AM, everything else 7:30 AM).
+        // Autofill the time placeholder per the standing conference schedule.
         if (timeInput) {
             const _t = defaultConfTime(_confType, fmt(_predDate));
             timeInput.value = _t;
@@ -4048,13 +4726,9 @@ function openConferenceModal(editKey) {
 
     syncConferenceTypeFields();
 
-    // Final guarantee: make sure the time field holds a valid HH:MM value
-    // before the modal is shown. This runs regardless of which branch above
-    // executed and regardless of how the modal was opened (direct add button,
-    // edit, or the tracking-page per-conference buttons that set the type and
-    // dispatch a change event after this function returns). For edits we keep
-    // the entry's stored time; for new entries we derive the standing default
-    // from the currently-selected type + date.
+    // Final guarantee of a valid HH:MM before the modal shows, however it was
+    // opened: edits keep the stored time; new entries derive the standing
+    // default from type + date.
     if (timeInput) {
         if (_editingConferenceKey && conferenceLog[_editingConferenceKey]) {
             timeInput.value = effectiveConfTime(conferenceLog[_editingConferenceKey]);
@@ -4243,17 +4917,14 @@ function _confChangeSummary(verb, type, dateKey, pathObj, payload) {
     if (saveBtn) saveBtn.addEventListener('click', saveConferenceEntry);
     if (deleteBtn) deleteBtn.addEventListener('click', deleteConferenceEntry);
 
-    // Live-update the "Schedule for this day" panel as the user changes the
-    // date or the selected presenter. Listeners attach once at startup;
-    // openConferenceModal() handles the initial paint.
+    // Live-update the panel on date/presenter change (listeners attach once;
+    // openConferenceModal paints first).
     const confDateEl = document.getElementById('confDate');
     const confPathEl = document.getElementById('confPathologist');
     const confTimeEl = document.getElementById('confTime');
 
-    // Re-apply the standing default time for the currently-selected type +
-    // date. Skipped while editing an existing entry (its stored time stands)
-    // and skipped once the user has manually touched the time field, so we
-    // never clobber a deliberate choice.
+    // Re-apply the standing default on type/date change — skipped for edits
+    // and once the user touches the time field.
     function reapplyDefaultConfTime() {
         if (_editingConferenceKey) return;
         if (confTimeEl && confTimeEl.dataset.userEdited === '1') return;
@@ -4318,16 +4989,10 @@ function _confChangeSummary(verb, type, dateKey, pathObj, payload) {
     });
 })();
 
-// ── Historical data import (one-time) ────────────────────────────────────
-// The 2025–2026 academic-year spreadsheet is reproduced here as a seed
-// dataset. Only entries with date ≤ today's parse cutoff (May 11, 2026)
-// are included — future scheduled presentations are intentionally
-// excluded as the user requested. Cancelled spreadsheet rows are skipped.
-//
-// Once imported, scheduler/conferenceLogImported is set to a record of
-// the import; that flag hides the banner permanently. Keys are
-// deterministic ("hist_<type>_<date>[_<subtypeOrTitle>]") so re-clicking
-// produces an idempotent overwrite, not duplicates.
+// ── Historical data import (one-time) ── the 2025–26 spreadsheet as seed
+// data (entries ≤ May 11 2026; cancelled rows skipped). Import stamps
+// scheduler/conferenceLogImported (hides the banner); deterministic
+// hist_<type>_<date>[_<subtypeOrTitle>] keys make re-clicks idempotent.
 
 const HISTORICAL_CONFERENCE_DATA = [
     // ── Breast Conference (31 entries) ───────────────────────────────
@@ -4456,9 +5121,7 @@ function _historicalKey(e) {
     return key;
 }
 
-// Update the import-banner visibility / disabled state. Called from
-// renderTrackingPage and from the click handler during the in-flight
-// save so the button shows "Importing…".
+// Sync banner visibility/disabled state (also mid-save: "Importing…").
 function syncImportBanner() {
     const banner = document.getElementById('trackingImportBanner');
     const btn = document.getElementById('trackingImportBtn');
@@ -4481,9 +5144,8 @@ function syncImportBanner() {
     if (btn) btn.disabled = false;
 }
 
-// Run the import. Validates that every initials referenced in the seed
-// data resolves to a current pathologist, builds one multi-path update,
-// and writes everything atomically.
+// Validate every initials → current pathologist, build one multi-path
+// update, write atomically.
 async function importHistoricalConferenceData() {
     if (!isAdmin()) return;
     if (conferenceLogImported) return;
@@ -4692,9 +5354,7 @@ function periodContainsToday() {
 function renderPeriodLabel() {
     const el = document.getElementById('currentPeriod');
     if (view === 'day') {
-        // Single-day label: weekday + month + day, with year separated so it
-        // can be styled (and dropped to a second line on narrow screens).
-        // e.g. "Tue, May 12 2026"
+        // Single-day label, year separated for styling (e.g. "Tue, May 12 2026").
         el.innerHTML = `${DOW[cursor.getDay()]}, ${MONTHS_SHORT[cursor.getMonth()]} ${cursor.getDate()} <span class="year">${cursor.getFullYear()}</span>`;
     } else if (view === 'week') {
         const s = startOfWeek(cursor);
@@ -4716,12 +5376,9 @@ function renderPeriodLabel() {
 }
 
 // ────────────── DAY VIEW ──────────────
-// Mobile-first single-day view. Reuses the same .week-day card structure
-// as the week view (header / pathologist rows / hour grid) so all existing
-// CSS, click handlers, drag-and-drop, and procedure pill logic Just Works
-// — the only difference is we render one day at full width instead of a
-// grid of seven narrow columns. This is the only mobile view that shows
-// the procedure schedule (week/month/year on mobile are summary-only).
+// Mobile-first single-day view reusing the week-view .week-day card so all
+// CSS/handlers/DnD Just Work — one full-width day instead of seven columns.
+// The only mobile view with the procedure schedule.
 function renderDay() {
     const main = document.getElementById('main');
     // Normalize cursor to midnight so date math/comparisons are stable.
@@ -4732,6 +5389,7 @@ function renderDay() {
     const we = isWeekend(d);
     const holiday = getFederalHoliday(d);
     const dayAssign = getDayAssignments(d);
+    const dayKey = fmt(d);
 
     const activePathologists = currentPathFilter === 'all'
         ? pathologists
@@ -4751,6 +5409,9 @@ function renderDay() {
         const a = dayAssign[p.id];
         if (a.type === 'blank') return; // pre-cutoff date — render no rows
         const oc = a.onCall ? `<span class="oc-mark" title="On call this week">On Call</span>` : '';
+        const locked = isLockActiveForRender(dayKey, p.id, a);
+        const lockCls = locked ? ' locked' : '';
+        const lockTitle = locked ? ` title="${p.name} — ${a.service.name} · Approved & locked (protected from recompute)"` : '';
         if (a.type === 'pto') {
             rows += `<div class="wd-row pto" style="--c:${p.color}">
           <span class="pid">${p.initials}</span>
@@ -4759,7 +5420,7 @@ function renderDay() {
         </div>`;
         } else if (a.type === 'off_site') {
             const cbg = pathBgColor(p.color);
-            rows += `<div class="wd-row off-site" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+            rows += `<div class="wd-row off-site${lockCls}"${lockTitle} style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
           <span class="pid">${p.initials}</span>
           <span class="svc"><span class="swatch"></span>${a.service.short}</span>
           ${oc}
@@ -4772,7 +5433,7 @@ function renderDay() {
         </div>`;
         } else {
             const cbg = pathBgColor(p.color);
-            rows += `<div class="wd-row" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+            rows += `<div class="wd-row${lockCls}"${lockTitle} style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
           <span class="pid">${p.initials}</span>
           <span class="svc"><span class="swatch"></span>${a.service.short}</span>
           ${oc}
@@ -4783,10 +5444,8 @@ function renderDay() {
     const holidayBadge = holiday ? `<span class="holiday-badge" title="${holiday}">${holiday}</span>` : '';
     const hoursHtml = renderHourGrid(d);
 
-    // The .day-view wrapper is just a layout container — the actual card
-    // uses the same .week-day class as week view so all styling/handlers
-    // line up. The .day-view-card modifier lets CSS opt into the wider,
-    // mobile-optimized treatment (bigger header, full-width hour grid).
+    // Wrapper is layout-only; the card reuses .week-day, with .day-view-card
+    // opting into the wider mobile treatment.
     const html = `<div class="day-view">
       <div class="week-day day-view-card ${td ? 'today' : ''} ${we ? 'weekend' : ''} ${holiday ? 'holiday' : ''}" data-date="${fmt(d)}">
         <div class="wd-head day-view-head">
@@ -4821,6 +5480,7 @@ function renderWeek() {
         const we = isWeekend(d);
         const holiday = getFederalHoliday(d);
         const dayAssign = getDayAssignments(d);
+        const dayKey = fmt(d);
         let rows = '';
         const activePathologists = currentPathFilter === 'all'
             ? pathologists
@@ -4837,6 +5497,9 @@ function renderWeek() {
             const a = dayAssign[p.id];
             if (a.type === 'blank') return; // pre-cutoff date — render no rows
             const oc = a.onCall ? `<span class="oc-mark" title="On call this week">On Call</span>` : '';
+            const locked = isLockActiveForRender(dayKey, p.id, a);
+            const lockCls = locked ? ' locked' : '';
+            const lockTitle = locked ? ` title="${p.name} — ${a.service.name} · Approved & locked (protected from recompute)"` : '';
             if (a.type === 'pto') {
                 rows += `<div class="wd-row pto" style="--c:${p.color}">
             <span class="pid">${p.initials}</span>
@@ -4845,7 +5508,7 @@ function renderWeek() {
           </div>`;
             } else if (a.type === 'off_site') {
                 const cbg = pathBgColor(p.color);
-                rows += `<div class="wd-row off-site" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+                rows += `<div class="wd-row off-site${lockCls}"${lockTitle} style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
             <span class="pid">${p.initials}</span>
             <span class="svc"><span class="swatch"></span>${a.service.short}</span>
             ${oc}
@@ -4858,7 +5521,7 @@ function renderWeek() {
           </div>`;
             } else {
                 const cbg = pathBgColor(p.color);
-                rows += `<div class="wd-row" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+                rows += `<div class="wd-row${lockCls}"${lockTitle} style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
             <span class="pid">${p.initials}</span>
             <span class="svc"><span class="swatch"></span>${a.service.short}</span>
             ${oc}
@@ -4889,18 +5552,13 @@ function renderWeek() {
 function renderHourGrid(date) {
     const dayKey = fmt(date);
     const procs = getProceduresForDay(dayKey);
-    // Conferences the signed-in pathologist is presenting at this day. These
-    // are personal to the presenter (see getConferencesForDay), so they show
-    // only on that user's own schedule and are empty for everyone else. They
-    // share the hourly grid with procedures but render as a visually distinct
-    // banner so the conference commitment is unmistakable next to procedures.
+    // The signed-in presenter's own conferences for the day (see
+    // getConferencesForDay); they share the hourly grid but render as a
+    // distinct banner.
     const confs = getConferencesForDay(dayKey);
 
-    // Group procedures into the half-hour slot they fall into. A procedure
-    // whose start time is exactly on a :00 or :30 boundary goes in that slot;
-    // off-boundary times (e.g. 8:15, 8:45) bucket into the half-hour slot
-    // they belong to (8:15 → 8:00 slot, 8:45 → 8:30 slot). This keeps the
-    // grid layout fixed while allowing arbitrary procedure start times.
+    // Bucket procedures into half-hour slots (8:15 → 8:00, 8:45 → 8:30):
+    // fixed grid, arbitrary start times.
     const bySlot = {};
     procs.forEach(p => {
         const slotKey = slotKeyForTime(p.time);
@@ -4936,10 +5594,8 @@ function renderHourGrid(date) {
                 return `<span class="conf-item conf-type-${escapeHtml(c.type)}" data-day="${dayKey}" data-conf-key="${escapeHtml(c.key)}" tabindex="0" title="${escapeHtml(tooltip)}"><span class="conf-item-dot" aria-hidden="true"></span>${escapeHtml(lbl)}</span>`;
             }).join('');
             const items = (bySlot[timeKey] || []).map(p => {
-                // Always prefix the pill label with the exact start time so
-                // it's visible at a glance regardless of whether the time
-                // lands on a :00, :30, or any other minute
-                // (e.g. "7:00 HH - EUS", "8:15 HH - CT Kidney bx").
+                // Pill label always prefixes the exact start time
+                // ("8:15 HH - CT Kidney bx").
                 const baseLbl = procLabel(p);
                 const lbl = `${formatTime12Short(p.time)} ${baseLbl}`;
                 const cat = getProcedureCategory(p.location, p.procedureName);
@@ -4954,9 +5610,8 @@ function renderHourGrid(date) {
             </div>`;
         }
     }
-    // The Natalie PTO banner lives INSIDE the procedure grid (as its first
-    // child) so it is structurally attached to the procedure schedule rather
-    // than floating in the pathologist-schedule div above it.
+    // Banner lives INSIDE the procedure grid (first child) so it's attached
+    // to the procedure schedule.
     return `<div class="wd-hours">
       ${nataliePtoBannerHtml(date)}
       <div class="wd-hours-head"></div>
@@ -4964,12 +5619,9 @@ function renderHourGrid(date) {
     </div>`;
 }
 
-// Renders the "Natalie PTO" banner row shown directly above the hourly
-// procedure grid on flagged days, or an empty string otherwise. Sits
-// between the pathologist assignment rows and the hour grid in both the
-// week and day views. For Gross Room / admin the banner carries an inline
-// "×" control so a flagged day can be removed in one click without opening
-// the modal (handlers wired in attachHourGridHandlers).
+// "Natalie PTO" banner above the hourly grid on flagged days (week + day
+// views); Gross Room/admin get an inline "×" (wired in
+// attachHourGridHandlers).
 function nataliePtoBannerHtml(date) {
     if (!isNataliePtoDay(date)) return '';
     const dayKey = fmt(date);
@@ -5011,9 +5663,8 @@ function getProceduresForDay(dayKey) {
     })).sort((a, b) => a.time.localeCompare(b.time));
 }
 
-// Display label for a procedure pill, e.g. "HH - CT Random Kidney bx".
-// Falls back to "Procedure" for any older entries that pre-date the
-// location/procedureName fields.
+// Pill label, e.g. "HH - CT Random Kidney bx"; "Procedure" for legacy
+// entries.
 function procLabel(p) {
     if (p && p.location && p.procedureName) {
         return `${p.location} - ${p.procedureName}`;
@@ -5067,13 +5718,6 @@ function formatTime12Short(timeKey) {
     return hh + ':' + pad2(m);
 }
 
-// True when the given "HH:MM" lands exactly on a half-hour boundary.
-function isOnHalfHourBoundary(timeKey) {
-    if (!timeKey) return false;
-    const m = parseInt(timeKey.split(':')[1], 10);
-    return m === 0 || m === 30;
-}
-
 // Returns the half-hour slot key ("HH:MM") that the given time falls into,
 // or null if the time is outside the visible HOURS_START..HOURS_END window.
 // e.g. "08:15" → "08:00", "08:45" → "08:30", "06:30" → null (before window).
@@ -5101,10 +5745,8 @@ function isValidTimeKey(timeKey) {
     return true;
 }
 
-// "8:00 AM – 8:30 AM" for a procedure starting at timeKey with durationMin
-// minutes (defaults to 30). End time is computed in minutes-since-midnight
-// and clamped to a single day; durations that would cross midnight are
-// truncated to "11:59 PM" for display purposes.
+// "8:00 AM – 8:30 AM" for timeKey + durationMin (default 30); end
+// clamped to the same day ("11:59 PM").
 function formatTimeRange(timeKey, durationMin) {
     const dur = (typeof durationMin === 'number' && durationMin > 0) ? durationMin : 30;
     const [hStr, mStr] = timeKey.split(':');
@@ -5151,9 +5793,8 @@ function clearProcedureSelection() {
 //   - Single-click on a pill → select it (Delete key removes it).
 //   - Double-click on a pill → edit-procedure modal.
 function attachHourGridHandlers() {
-    // Natalie PTO banner: the inline "×" removes the flag for that day; a
-    // plain click on the banner shouldn't fall through to the .week-day
-    // day-detail modal. (Banner only renders for users who can manage it.)
+    // Banner "×" removes the day's flag; banner clicks don't fall through to
+    // the day-detail modal.
     document.querySelectorAll('.natalie-pto-banner').forEach(banner => {
         banner.addEventListener('click', e => {
             e.stopPropagation();
@@ -5167,10 +5808,8 @@ function attachHourGridHandlers() {
     });
 
     document.querySelectorAll('.wd-hours').forEach(grid => {
-        // Block the parent .week-day's click → day modal. Also clear any
-        // procedure selection when the user clicks an empty area of the
-        // grid (clicks on pills are handled separately and stopPropagation
-        // there prevents this from firing for them).
+        // Block the parent day-modal click; clicking empty grid clears the
+        // procedure selection (pill clicks stopPropagation).
         grid.addEventListener('click', e => {
             e.stopPropagation();
             if (!e.target.closest('.proc-item')) {
@@ -5183,11 +5822,9 @@ function attachHourGridHandlers() {
     document.querySelectorAll('.hour-row').forEach(row => {
         row.addEventListener('dblclick', e => {
             // Read-only guests (histology) can't add procedures.
-            if (isHistology()) return;
-            // If the dblclick landed on an existing pill, the pill's own
-            // handler opens the edit modal — don't open the add modal.
-            // Conference pills are read-only on the schedule (managed from the
-            // Tracking page), so a dblclick on one is simply ignored here.
+            if (isReadOnlyGuest()) return;
+            // Dblclick on a pill → its own edit handler; conference pills are
+            // read-only here (managed from Tracking).
             if (e.target.closest('.proc-item') || e.target.closest('.conf-item')) return;
             const dayKey = row.dataset.day;
             const timeKey = row.dataset.time;
@@ -5202,12 +5839,10 @@ function attachHourGridHandlers() {
             e.stopPropagation();
             selectProcedure(item.dataset.day, item.dataset.key);
         });
-        // Double click → edit the procedure. Reuses the add-procedure modal
-        // in edit mode (location + procedure type prefilled). Disabled for
-        // read-only guests (histology).
+        // Double click → edit (same modal, prefilled). Disabled for histology.
         item.addEventListener('dblclick', e => {
             e.stopPropagation();
-            if (isHistology()) return;
+            if (isReadOnlyGuest()) return;
             const dayKey = item.dataset.day;
             const procKey = item.dataset.key;
             if (!dayKey || !procKey) return;
@@ -5219,7 +5854,7 @@ function attachHourGridHandlers() {
         // ── Drag-and-drop: move procedure to a different time slot ──
         item.addEventListener('dragstart', e => {
             // Read-only guests (histology) cannot move procedures.
-            if (isHistology()) { e.preventDefault(); return; }
+            if (isReadOnlyGuest()) { e.preventDefault(); return; }
             e.stopPropagation();
             // Store the source info in dataTransfer so the drop handler knows
             // which procedure is being moved, even across grid columns.
@@ -5300,9 +5935,8 @@ function attachHourGridHandlers() {
         });
     });
 
-    // Re-apply selection state after a re-render (Firebase snapshots blow
-    // away the DOM and any class set on it). If the previously-selected
-    // procedure no longer exists, drop the stale reference.
+    // Re-apply selection after re-render (snapshots blow away the DOM); drop
+    // stale references.
     if (_selectedProc) {
         const sel = document.querySelector(
             '.proc-item[data-day="' + _selectedProc.dayKey + '"][data-key="' + _selectedProc.procKey + '"]'
@@ -5312,22 +5946,20 @@ function attachHourGridHandlers() {
     }
 }
 
-// Click anywhere outside a procedure pill → deselect. Skips clicks inside
-// modals so users can interact with dialogs without losing their selection
-// (though selection is also cleared after delete/edit succeeds).
+// Click outside a pill → deselect; clicks inside modals keep the
+// selection.
 document.addEventListener('click', e => {
     if (e.target.closest('.proc-item')) return;
     if (e.target.closest('.modal-back')) return;
     clearProcedureSelection();
 });
 
-// Delete / Backspace removes the currently-selected procedure.
-// Skips text-entry contexts and any open modal so we don't delete while
-// the user is typing or navigating a dialog. Disabled for read-only guests.
+// Delete/Backspace removes the selection — skipped while typing or in a
+// modal; disabled for read-only guests.
 document.addEventListener('keydown', async e => {
     if (e.key !== 'Delete' && e.key !== 'Backspace') return;
     if (!_selectedProc) return;
-    if (isHistology()) return;
+    if (isReadOnlyGuest()) return;
     const ae = document.activeElement;
     if (ae && (
         ae.tagName === 'INPUT' ||
@@ -5347,11 +5979,8 @@ document.addEventListener('keydown', async e => {
     }
 });
 
-// Procedure modal — pick a location (HH/MH) and a procedure type, then
-// confirm. The "Add Procedure" button is disabled until both are chosen.
-// Pass `editingKey` to open in edit mode: pre-fills location + name from
-// the existing record, swaps the title/button labels, and on save updates
-// in place rather than pushing a new entry.
+// Procedure modal — location + type, confirm enabled when both chosen.
+// `editingKey` → edit mode: prefill, relabel, update in place.
 let _pendingProc = null;  // { dayKey, timeKey, location, procedureName, editingKey }
 
 function openProcedureModal(dayKey, timeKey, editingKey) {
@@ -5388,9 +6017,7 @@ function openProcedureModal(dayKey, timeKey, editingKey) {
     const deleteBtn = document.getElementById('procDelete');
     if (deleteBtn) deleteBtn.style.display = editingKey ? '' : 'none';
 
-    // Prefill the time input. For new procedures this is the half-hour slot
-    // the user double-clicked; for edits, the procedure's existing time.
-    // Either way the user can override it before saving.
+    // Prefill time: dblclicked slot for new, stored time for edits; editable.
     const timeInput = document.getElementById('procTimeInput');
     if (timeInput) {
         timeInput.value = timeKey || '';
@@ -5416,9 +6043,8 @@ function openProcedureModal(dayKey, timeKey, editingKey) {
             return `<button type="button" class="proc-type-btn proc-cat-${cat}" data-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`;
         }
 
-        // Expandable parent: the main label still selects the base name; the
-        // chevron toggles a sub-option list rendered just beneath it. The
-        // parent + its sub-options share one grid cell that spans both columns.
+        // Expandable parent: label selects the base; chevron toggles sub-options
+        // (shared grid cell spanning both columns).
         const subBtns = variants.map(v => {
             const vcat = getProcedureCategory(null, v);
             return `<button type="button" class="proc-type-btn proc-type-subbtn proc-cat-${vcat}" data-name="${escapeHtml(v)}">${escapeHtml(v)}</button>`;
@@ -5505,10 +6131,8 @@ function updateProcConfirmEnabled() {
     btn.disabled = !ready;
 }
 
-// Refresh the colour category classes on all proc-type-btn elements and the
-// free-text wrap to reflect the currently selected location. Called whenever
-// the location or the procedure name changes so the buttons always preview
-// the colour the pill will have in the schedule.
+// Refresh colour-category classes on type buttons + free-text wrap when
+// location/name changes, so buttons preview the pill colour.
 function updateModalProcColors() {
     const loc = _pendingProc ? _pendingProc.location : null;
     const freeName = _pendingProc ? _pendingProc.procedureName : null;
@@ -5550,9 +6174,8 @@ async function saveProcedure() {
     const { dayKey, location, procedureName, editingKey } = _pendingProc;
     try {
         if (editingKey) {
-            // Edit mode — update only the mutable fields. Leave type,
-            // createdAt, createdBy untouched. Stamp updatedAt for traceability.
-            // Time IS now mutable since the user can adjust it in the modal.
+            // Edit mode — update only mutable fields (time included); stamp
+            // updatedAt.
             await db.ref('scheduler/procedures/' + dayKey + '/' + editingKey).update({
                 time: timeKey,
                 location,
@@ -5577,9 +6200,7 @@ async function saveProcedure() {
     }
 }
 
-// Delete the procedure currently being edited. Only callable in edit mode
-// (the Delete button is hidden otherwise). Confirms first, since removal is
-// permanent.
+// Delete the edited procedure (edit mode only); confirm first.
 async function deleteProcedure() {
     if (!_pendingProc || !_pendingProc.editingKey) return;
     if (!confirm('Delete this procedure? This cannot be undone.')) return;
@@ -5595,10 +6216,8 @@ async function deleteProcedure() {
 // Wire up the modal once. Inputs delegate from the modal back so the
 // dynamically-rendered procedure-type buttons work without re-binding.
 
-// ── Restructure procedure modal HTML for enhanced styling ──
-// Rebuilds the modal's inner content with the richer markup the new
-// CSS expects (modal-inner wrapper, proc-header, section labels, and
-// loc-abbr/loc-name spans inside each location option).
+// ── Restructure procedure modal HTML ── richer markup the new CSS
+// expects.
 (function initProcedureModalStructure() {
     const back = document.getElementById('procModalBack');
     if (!back) return;
@@ -5666,11 +6285,8 @@ document.getElementById('procLocToggle').addEventListener('change', e => {
     updateProcConfirmEnabled();
 });
 
-// Keep each expandable parent's collapsed label/selected-state in sync with
-// the current selection. When a variant is chosen, its parent row shows the
-// variant's name and reads as selected even while the dropdown is collapsed.
-// When the base or any other item is chosen, the parent reverts to its base
-// label. Always called after the selection changes.
+// Keep expandable parents' collapsed label/selected state in sync with
+// the current selection (variant name shows on the parent row).
 function syncProcParentLabels() {
     const selectedName = _pendingProc ? _pendingProc.procedureName : null;
     document.querySelectorAll('#procTypeGrid .proc-type-expandable').forEach(exp => {
@@ -5696,10 +6312,8 @@ function syncProcParentLabels() {
     });
 }
 
-// Procedure-type buttons: single-select (one selected at a time).
-// Clicking a preset button also clears the free-text input.
-// Clicking the caret on an expandable parent toggles its sub-option list
-// instead of selecting the parent.
+// Type buttons are single-select; preset click clears free-text; caret
+// toggles sub-options without selecting the parent.
 document.getElementById('procTypeGrid').addEventListener('click', e => {
     if (!_pendingProc) return;
 
@@ -5800,10 +6414,8 @@ function renderMonth() {
             ? pathologists
             : pathologists.filter(p => p.id === parseInt(currentPathFilter));
 
-        // Lake Forest sendout banner sits above the first pathologist row.
-        // Only shown for in-month days so out-of-month padding cells stay clean.
-        // Two labels are emitted (full + abbr); CSS picks which to show based
-        // on viewport — same pattern as .svc-full / .svc-abbr.
+        // LF sendout banner above the first pathologist row (in-month days
+        // only); full + abbr labels emitted, CSS picks per viewport.
         if (inMonth && isLfSendoutDay(date)) {
             rows += `<div class="wd-row lf-sendout" title="Lake Forest sendout">
             <span class="lf-label lf-label-full">Lake Forest sendout</span>
@@ -5815,6 +6427,9 @@ function renderMonth() {
             const a = dayAssign[p.id];
             if (a.type === 'blank') return; // pre-cutoff date — render no rows
             const oc = a.onCall ? `<span class="oc-mark" title="On call this week">On Call</span>` : '';
+            const locked = isLockActiveForRender(fmt(date), p.id, a);
+            const lockCls = locked ? ' locked' : '';
+            const lockTip = locked ? ' · Approved & locked' : '';
             if (a.type === 'pto') {
                 rows += `<div class="wd-row pto" style="--c:${p.color}" title="${p.name} — PTO${a.onCall ? ' · On call' : ''}">
             <span class="pid">${p.initials}</span>
@@ -5823,7 +6438,7 @@ function renderMonth() {
           </div>`;
             } else if (a.type === 'off_site') {
                 const cbg = pathBgColor(p.color);
-                rows += `<div class="wd-row off-site" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}">
+                rows += `<div class="wd-row off-site${lockCls}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
             <span class="pid">${p.initials}</span>
             <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
             ${oc}
@@ -5836,7 +6451,7 @@ function renderMonth() {
           </div>`;
             } else {
                 const cbg = pathBgColor(p.color);
-                rows += `<div class="wd-row" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}">
+                rows += `<div class="wd-row${lockCls}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
             <span class="pid">${p.initials}</span>
             <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
             ${oc}
@@ -5946,7 +6561,9 @@ function renderYear() {
         ptoDaysSummaryHtml = `<div class="year-pto-summary">` +
             pathologists.map(p => {
                 const used = ptoDaysScheduled(p.id, { start: fyRange.start, end: fyRange.end });
-                const allot = Number.isFinite(p.vacationAllotted) ? p.vacationAllotted : 0;
+                // Per-year allotment for the fiscal year on display (falls
+                // back to the pathologist's default when the year has none).
+                const allot = ptoAllotmentFor(p.id, ayStart);
                 const isOver = allot > 0 && used > allot;
                 const label = escapeHtml(p.name) + ' — ' + used + (allot > 0 ? ' of ' + allot : '') + ' PTO days';
                 return `<span class="year-pto-chip${isOver ? ' is-over' : ''}" style="--c:${p.color};" title="${label}">` +
@@ -6000,6 +6617,8 @@ function renderYear() {
             if (td) classes.push('today');
             const holiday = inMonth ? getFederalHoliday(date) : null;
             if (holiday) classes.push('holiday');
+            // LF guest mode: mark sendout days (styled via body.lf-guest CSS)
+            if (inMonth && isLakeForest() && isLfSendoutDay(date)) classes.push('lf');
             if (content) {
                 classes.push('has-data');
                 if (content.multi) classes.push('multi');
@@ -6058,6 +6677,7 @@ function attachDayClickHandlers() {
 }
 
 function openDayDetail(date) {
+    if (isLakeForest()) return; // LF guest: calendar is view-only, no day drill-in
     activeDayDate = date;
     const title = document.getElementById('dayModalTitle');
     const sub = document.getElementById('dayModalSub');
@@ -6097,6 +6717,11 @@ function openDayDetail(date) {
         const a = dayAssign[p.id];
         if (a.type === 'blank') return ''; // pre-cutoff date — no row
         const ocPill = a.onCall ? `<span class="doc-pill">On Call</span>` : '';
+        const locked = isLockActiveForRender(fmt(date), p.id, a);
+        const lockBadge = locked
+            ? `<span class="lock-badge" title="Approved via request — protected from recompute">Locked</span>`
+            : '';
+        const lockCls = locked ? ' locked' : '';
         const adminAttrs = admin ? ` data-pid="${p.id}" data-atype="${a.type}"` : '';
         const adminCls = admin ? ' admin-clickable' : '';
         if (a.type === 'pto') {
@@ -6109,10 +6734,11 @@ function openDayDetail(date) {
         }
         if (a.type === 'off_site') {
             const cbg = pathBgColor(p.color);
-            return `<div class="day-detail-row${adminCls}"${adminAttrs} style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+            return `<div class="day-detail-row${adminCls}${lockCls}"${adminAttrs} style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
           <div class="ddot"></div>
           <div class="dname">${p.name}</div>
           <div class="dservice"><span class="swatch"></span>${a.service.name}</div>
+          ${lockBadge}
           ${ocPill}
         </div>`;
         }
@@ -6125,10 +6751,11 @@ function openDayDetail(date) {
         </div>`;
         }
         const cbg = pathBgColor(p.color);
-        return `<div class="day-detail-row${adminCls}"${adminAttrs} style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
+        return `<div class="day-detail-row${adminCls}${lockCls}"${adminAttrs} style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}">
         <div class="ddot"></div>
         <div class="dname">${p.name}</div>
         <div class="dservice"><span class="swatch"></span>${a.service.name}</div>
+        ${lockBadge}
         ${ocPill}
       </div>`;
     }).join('');
@@ -6139,11 +6766,10 @@ function openDayDetail(date) {
     const svcBtn = document.getElementById('dayChangeService');
     if (svcBtn) svcBtn.style.display = (isWk || holiday) ? 'none' : '';
 
-    // Adjust day-modal action button labels based on viewer role.
-    // Gross room cannot make any pathologist-schedule changes at all.
-    // Histology is a read-only guest — it gets no edit buttons either.
+    // Day-modal action labels by role: gross room gets no
+    // pathologist-schedule changes; histology is read-only.
     const grossRoom = isGrossRoom();
-    const readOnlyGuest = grossRoom || isHistology();
+    const readOnlyGuest = grossRoom || isReadOnlyGuest();
     const ptoBtn = document.getElementById('dayAddPto');
     const ocBtn = document.getElementById('dayChangeOnCall');
     if (ptoBtn) {
@@ -6163,9 +6789,7 @@ function openDayDetail(date) {
         }
     }
 
-    // Lake Forest sendout button — admin-only.  Label flips based on whether
-    // the row is already showing for this date so a single button manages both
-    // adding and removing.
+    // LF sendout button (admin-only) — label flips between add and remove.
     const lfBtn = document.getElementById('dayAddLfSendout');
     if (lfBtn) {
         if (admin) {
@@ -6263,10 +6887,8 @@ function attachPathRowHandlers(date) {
                             ? newStartDate
                             : (oldVac ? oldVac.start : newStartDate);
                         await db.ref('scheduler/vacations/' + key).update({ start: newStart, end: newEnd });
-                        // Strip any stale regular service overrides for this
-                        // pathologist on the (possibly extended) range, so the
-                        // updated PTO actually takes effect on any newly-added
-                        // days instead of being silently overridden.
+                        // Strip stale regular overrides on the (possibly extended) range so the
+                        // updated PTO takes effect.
                         if (oldVac) {
                             await clearConflictingServiceOverridesForPto(
                                 oldVac.pathologistId, newStart, newEnd);
@@ -6331,39 +6953,133 @@ function attachPathRowHandlers(date) {
             } else if (atype === 'service' || atype === 'off_site') {
                 const dayAssign = getDayAssignments(date);
                 const currentSvc = dayAssign[pid]?.service;
+                const currentId = currentSvc ? currentSvc.id : '';
+                const currentIsFt = isFreetextServiceId(currentId);
                 const allOptions = [...SERVICES, COMBO_SVC, ...OFF_SERVICES];
                 const opts = allOptions.map(s =>
-                    `<option value="${s.id}" ${currentSvc && s.id === currentSvc.id ? 'selected' : ''}>${s.name}</option>`
+                    `<option value="${s.id}" ${!currentIsFt && s.id === currentId ? 'selected' : ''}>${s.name}</option>`
                 ).join('');
                 const noneOpt = `<option value="">— No service —</option>`;
+                const customOpt = `<option value="__ft__" ${currentIsFt ? 'selected' : ''}>Custom service…</option>`;
 
                 // Check if there's an existing day-level override for this path on this date
                 const dayKey = fmt(date);
                 const hasOverride = serviceOverrides[dayKey] && serviceOverrides[dayKey][pid];
+                // Lock on this slot? (glow on the schedule — approved request
+                // or a previous admin lock-in)
+                const lockId = getServiceLock(dayKey, pid);
 
+                renderFreetextDatalist();
                 panel.innerHTML = `
                     <div class="pqp-label">Service — ${path.name}</div>
                     <div class="pqp-row">
-                        <select id="pqpSvcSel_${pid}">${noneOpt}${opts}</select>
+                        <select id="pqpSvcSel_${pid}">${noneOpt}${opts}${customOpt}</select>
                         <button class="pqp-btn primary" id="pqpSvcSave_${pid}">Save</button>
                     </div>
+                    <div class="pqp-row pqp-ft-row" id="pqpFtRow_${pid}" style="display:${currentIsFt ? '' : 'none'};">
+                        <input type="text" class="pqp-ft-input" id="pqpFtInput_${pid}"
+                               list="ftServiceNames" maxlength="40" autocomplete="off" spellcheck="false"
+                               placeholder="Type the service, e.g. CAP Inspection"
+                               value="${currentIsFt ? escapeHtml(currentSvc.name) : ''}" />
+                    </div>
+                    <label class="pqp-lock-row" id="pqpLockRow_${pid}">
+                        <input type="checkbox" id="pqpLockCb_${pid}" ${lockId ? 'checked' : ''} />
+                        <span class="pqp-lock-text" id="pqpLockText_${pid}">Lock in place — recompute won't move it</span>
+                    </label>
                     ${hasOverride ? `<button class="pqp-reset" id="pqpSvcReset_${pid}">Reset to default rotation</button>` : ''}
                 `;
 
+                const svcSel = panel.querySelector(`#pqpSvcSel_${pid}`);
+                const ftRow = panel.querySelector(`#pqpFtRow_${pid}`);
+                const ftInput = panel.querySelector(`#pqpFtInput_${pid}`);
+                const lockCb = panel.querySelector(`#pqpLockCb_${pid}`);
+                const lockText = panel.querySelector(`#pqpLockText_${pid}`);
+
+                // Non-standard picks are ALWAYS locked (checkbox forced + disabled);
+                // standard picks restore the admin's manual choice.
+                function syncLockForced() {
+                    const v = svcSel.value;
+                    const forced = v === '__ft__' || (v && isNonStandardServiceId(v));
+                    if (forced) {
+                        if (lockCb.dataset.prevManual === undefined) {
+                            lockCb.dataset.prevManual = lockCb.checked ? '1' : '0';
+                        }
+                        lockCb.checked = true;
+                        lockCb.disabled = true;
+                        lockText.textContent = 'Locked automatically — custom & off-site services are always locked';
+                    } else {
+                        lockCb.disabled = false;
+                        if (lockCb.dataset.prevManual !== undefined) {
+                            lockCb.checked = lockCb.dataset.prevManual === '1';
+                            delete lockCb.dataset.prevManual;
+                        }
+                        lockText.textContent = "Lock in place — recompute won't move it";
+                    }
+                }
+                svcSel.addEventListener('change', () => {
+                    ftRow.style.display = svcSel.value === '__ft__' ? '' : 'none';
+                    if (svcSel.value === '__ft__') setTimeout(() => ftInput.focus(), 0);
+                    syncLockForced();
+                });
+                syncLockForced();
+
                 panel.querySelector(`#pqpSvcSave_${pid}`).addEventListener('click', async () => {
-                    const sel = panel.querySelector(`#pqpSvcSel_${pid}`);
-                    const newVal = sel.value;
                     const dayKey = fmt(date);
 
-                    // Skip if the value didn't actually change. Without this
-                    // check, clicking Save without editing would still create
-                    // an override + pin, freezing the path against future
-                    // natural-rotation adjustments for no reason.
-                    const initialVal = currentSvc ? currentSvc.id : '';
-                    if (newVal === initialVal) {
+                    // Resolve the chosen service id (custom → 'ft:' id).
+                    let newVal;
+                    if (svcSel.value === '__ft__') {
+                        newVal = makeFreetextServiceId(ftInput.value);
+                        if (!newVal) {
+                            showToast('Type a name for the custom service first.', { type: 'error' });
+                            ftInput.focus();
+                            return;
+                        }
+                    } else {
+                        newVal = svcSel.value;
+                    }
+
+                    const initialVal = currentId;
+                    const initialLock = !!lockId;
+                    const wantLock = newVal
+                        ? (isNonStandardServiceId(newVal) || lockCb.checked)
+                        : false;
+
+                    // Nothing changed at all → just close.
+                    if (newVal === initialVal && wantLock === initialLock) {
                         closePanel();
                         openDayDetail(date);
                         return;
+                    }
+
+                    // ── Same service, lock toggled ──
+                    if (newVal === initialVal) {
+                        if (wantLock) {
+                            // Lock the current assignment in place: back it
+                            // with a concrete override, then write the lock.
+                            const existing = serviceOverrides[dayKey] ? { ...serviceOverrides[dayKey] } : {};
+                            existing[pid] = newVal;
+                            await db.ref('scheduler/serviceOverrides/' + dayKey).set(existing);
+                            await db.ref('scheduler/serviceLocks/' + dayKey + '/' + pid).set(newVal);
+                            showToast('Assignment locked — recompute won\'t move it.');
+                        } else {
+                            // Unlock only — the service stays.
+                            await db.ref('scheduler/serviceLocks/' + dayKey + '/' + pid).remove();
+                            showToast('Lock removed — assignment kept, but no longer protected from recompute.');
+                        }
+                        closePanel();
+                        openDayDetail(date);
+                        return;
+                    }
+
+                    // ── Service changed ──
+                    // Replacing a locked slot is allowed (the admin is the
+                    // approver) but is called out first.
+                    if (initialLock) {
+                        const okGo = confirm(
+                            `${path.name.replace(/^Dr\. /, '')}'s assignment on this day is locked. ` +
+                            `Saving will replace it${wantLock ? ' (the new assignment stays locked)' : ' and remove the lock'}. Continue?`);
+                        if (!okGo) return;
                     }
 
                     const existing = serviceOverrides[dayKey] ? { ...serviceOverrides[dayKey] } : {};
@@ -6385,6 +7101,12 @@ function attachPathRowHandlers(date) {
                         // locks; recompute is free to reflow the day.
                         recomputePins[dayKey] = {};
                     }
+                    // Lock follows the choice: keep/replace it, or release it.
+                    if (newVal && wantLock) {
+                        await db.ref('scheduler/serviceLocks/' + dayKey + '/' + pid).set(newVal);
+                    } else if (initialLock || getServiceLock(dayKey, pid)) {
+                        await db.ref('scheduler/serviceLocks/' + dayKey + '/' + pid).remove();
+                    }
                     closePanel();
                     openDayDetail(date);
                     await maybeOfferRecompute(recomputePins, {
@@ -6398,6 +7120,12 @@ function attachPathRowHandlers(date) {
                 if (resetBtn) {
                     resetBtn.addEventListener('click', async () => {
                         const dayKey = fmt(date);
+                        if (lockId) {
+                            const okGo = confirm(
+                                `${path.name.replace(/^Dr\. /, '')}'s assignment on this day was approved ` +
+                                `from a request and is locked. Resetting will remove the lock too. Continue?`);
+                            if (!okGo) return;
+                        }
                         const existing = serviceOverrides[dayKey] ? { ...serviceOverrides[dayKey] } : {};
                         delete existing[pid];
                         if (Object.keys(existing).length === 0) {
@@ -6405,6 +7133,8 @@ function attachPathRowHandlers(date) {
                         } else {
                             await db.ref('scheduler/serviceOverrides/' + dayKey).set(existing);
                         }
+                        // Reset releases the lock along with the override.
+                        await db.ref('scheduler/serviceLocks/' + dayKey + '/' + pid).remove();
                         const recomputePins = {};
                         // Reset removed pid's override — recompute is free
                         // to reflow the day; nothing to lock.
@@ -6434,10 +7164,20 @@ function attachPathRowHandlers(date) {
                 if (canAssignService) {
                     const allOptions = [...SERVICES, COMBO_SVC, ...OFF_SERVICES];
                     const opts = allOptions.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+                    renderFreetextDatalist();
                     parts.push(`<div class="pqp-row">
-                        <select id="pqpOffSvcSel_${pid}"><option value="">— Assign service —</option>${opts}</select>
+                        <select id="pqpOffSvcSel_${pid}"><option value="">— Assign service —</option>${opts}<option value="__ft__">Custom service…</option></select>
                         <button class="pqp-btn primary" id="pqpOffSvcSave_${pid}">Save</button>
-                    </div>`);
+                    </div>
+                    <div class="pqp-row pqp-ft-row" id="pqpOffFtRow_${pid}" style="display:none;">
+                        <input type="text" class="pqp-ft-input" id="pqpOffFtInput_${pid}"
+                               list="ftServiceNames" maxlength="40" autocomplete="off" spellcheck="false"
+                               placeholder="Type the service, e.g. CAP Inspection" />
+                    </div>
+                    <label class="pqp-lock-row">
+                        <input type="checkbox" id="pqpOffLockCb_${pid}" />
+                        <span class="pqp-lock-text" id="pqpOffLockText_${pid}">Lock in place — recompute won't move it</span>
+                    </label>`);
                 }
 
                 panel.innerHTML = parts.join('');
@@ -6457,14 +7197,63 @@ function attachPathRowHandlers(date) {
 
                 const offSvcSave = panel.querySelector(`#pqpOffSvcSave_${pid}`);
                 if (offSvcSave) {
+                    const offSel = panel.querySelector(`#pqpOffSvcSel_${pid}`);
+                    const offFtRow = panel.querySelector(`#pqpOffFtRow_${pid}`);
+                    const offFtInput = panel.querySelector(`#pqpOffFtInput_${pid}`);
+                    const offLockCb = panel.querySelector(`#pqpOffLockCb_${pid}`);
+                    const offLockText = panel.querySelector(`#pqpOffLockText_${pid}`);
+
+                    function syncOffLockForced() {
+                        const v = offSel.value;
+                        const forced = v === '__ft__' || (v && isNonStandardServiceId(v));
+                        if (forced) {
+                            if (offLockCb.dataset.prevManual === undefined) {
+                                offLockCb.dataset.prevManual = offLockCb.checked ? '1' : '0';
+                            }
+                            offLockCb.checked = true;
+                            offLockCb.disabled = true;
+                            offLockText.textContent = 'Locked automatically — custom & off-site services are always locked';
+                        } else {
+                            offLockCb.disabled = false;
+                            if (offLockCb.dataset.prevManual !== undefined) {
+                                offLockCb.checked = offLockCb.dataset.prevManual === '1';
+                                delete offLockCb.dataset.prevManual;
+                            }
+                            offLockText.textContent = "Lock in place — recompute won't move it";
+                        }
+                    }
+                    offSel.addEventListener('change', () => {
+                        if (offFtRow) offFtRow.style.display = offSel.value === '__ft__' ? '' : 'none';
+                        if (offSel.value === '__ft__' && offFtInput) setTimeout(() => offFtInput.focus(), 0);
+                        syncOffLockForced();
+                    });
+                    syncOffLockForced();
+
                     offSvcSave.addEventListener('click', async () => {
-                        const sel = panel.querySelector(`#pqpOffSvcSel_${pid}`);
-                        const newVal = sel.value;
+                        let newVal;
+                        if (offSel.value === '__ft__') {
+                            newVal = makeFreetextServiceId(offFtInput ? offFtInput.value : '');
+                            if (!newVal) {
+                                showToast('Type a name for the custom service first.', { type: 'error' });
+                                if (offFtInput) offFtInput.focus();
+                                return;
+                            }
+                        } else {
+                            newVal = offSel.value;
+                        }
                         if (!newVal) return;
+                        const wantLock = isNonStandardServiceId(newVal) || offLockCb.checked;
                         const dayKey = fmt(date);
                         const existing = serviceOverrides[dayKey] ? { ...serviceOverrides[dayKey] } : {};
                         existing[pid] = newVal;
                         await db.ref('scheduler/serviceOverrides/' + dayKey).set(existing);
+                        // Lock the new assignment, or clear any stale lock
+                        // this slot might still carry.
+                        if (wantLock) {
+                            await db.ref('scheduler/serviceLocks/' + dayKey + '/' + pid).set(newVal);
+                        } else if (getServiceLock(dayKey, pid)) {
+                            await db.ref('scheduler/serviceLocks/' + dayKey + '/' + pid).remove();
+                        }
                         const recomputePins = {};
                         // Pin ONLY the just-assigned path; everyone else
                         // stays free for the recompute to rearrange.
@@ -6676,9 +7465,7 @@ document.getElementById('ptoSave').addEventListener('click', async () => {
             start: fmt(s),
             end: fmt(e),
         });
-        // Strip any stale regular service overrides for this pathologist
-        // on these days, so the new PTO actually takes effect instead of
-        // being silently overridden.
+        // Strip stale regular overrides so the new PTO takes effect.
         await clearConflictingServiceOverridesForPto(pid, fmt(s), fmt(e));
         // ── Change log ──
         logChange(Object.assign({
@@ -6766,9 +7553,8 @@ document.getElementById('ocCancel').addEventListener('click', () => {
 document.getElementById('ocModalBack').addEventListener('click', e => {
     if (e.target.id === 'ocModalBack') e.target.classList.remove('open');
 });
-// Helper: remove all day-level on-call overrides within the call cycle
-// that contains activeOcDate.  Called whenever a week-scope change is
-// saved or reset so day overrides can no longer shadow the week setting.
+// Remove all day-level on-call overrides inside activeOcDate's call
+// cycle (so day overrides can't shadow a new week setting).
 async function _clearDayOverridesForCycle() {
     const cs = getCallCycleStart(activeOcDate);
     const ce = getCallCycleEnd(cs);
@@ -6838,12 +7624,8 @@ document.getElementById('ocReset').addEventListener('click', async () => {
 });
 
 // ────────────── LAKE FOREST SENDOUT MODAL ──────────────
-// Admin-only.  Lets an admin flag a single day or a full call cycle as a
-// "Lake Forest sendout" day.  Storage:
-//   scheduler/lfSendoutDays/<YYYY-MM-DD>     → true
-//   scheduler/lfSendoutWeeks/<call-cycle-start YYYY-MM-DD> → true
-// When either flag is set the calendar renders an "LF sendout" row above the
-// first pathologist row for that day.
+// Admin-only: flag one day or a full call cycle.
+//   lfSendoutDays/<YYYY-MM-DD> → true; lfSendoutWeeks/<cycle-start> → true
 let activeLfDate = null;
 let activeLfDayKey = null;
 let activeLfWeekKey = null;
@@ -7010,14 +7792,9 @@ document.getElementById('lfRemove').addEventListener('click', async () => {
 });
 
 // ────────────── NATALIE PTO MODAL (Gross Room + admin) ──────────────
-// Flags "Natalie PTO" on the procedure schedule. Three scopes:
-//   • day    → the single selected date
-//   • week   → every weekday (Mon–Fri, skipping federal holidays) in the
-//              calendar week of the selected date
-//   • range  → every weekday in an inclusive start→end range
-// All scopes resolve to individual per-day flags under
-// scheduler/natalieptoDays/<YYYY-MM-DD>, mirroring the pathologist PTO
-// model (a set of days) without touching the rotation or allotment logic.
+// Scopes: day / week (Mon–Fri, skipping holidays) / range — all resolve to
+// per-day flags under scheduler/natalieptoDays/<YYYY-MM-DD>; no effect on
+// rotation or allotments.
 let activeNpDate = null;
 
 // True for anyone allowed to manage Natalie PTO: Gross Room only.
@@ -7025,10 +7802,8 @@ function canManageNataliePto() {
     return isGrossRoom();
 }
 
-// Returns the list of dates a given scope will affect (used for both the
-// status preview and the actual write). Weekends and federal holidays are
-// skipped for week/range scopes; the day scope writes exactly the date
-// chosen (so a one-off weekend flag is still possible if ever needed).
+// Dates a scope affects (preview + write). Week/range skip weekends +
+// holidays; day writes exactly the chosen date.
 function _npDatesForScope(scope) {
     if (scope === 'day') {
         const v = document.getElementById('npDay').value;
@@ -7220,11 +7995,8 @@ document.getElementById('addNataliePtoBtn').addEventListener('click', () => open
     if (btn) btn.addEventListener('click', () => openNataliePtoModal(null));
 })();
 
-
-
-// List every workday (skipping weekends + federal holidays) inside the call
-// cycle that contains `date`.  Used when applying a "full call week" service
-// override / request.
+// Every workday in the call cycle containing `date` (for full-call-week
+// overrides/requests).
 function workdaysInCallCycle(date) {
     const cs = getCallCycleStart(date);
     const ce = getCallCycleEnd(cs);
@@ -7265,6 +8037,7 @@ function openServiceModal(date) {
 
     const dayAssign = getDayAssignments(date);
     const container = document.getElementById('svcAssignments');
+    renderFreetextDatalist();
 
     // Non-admin: only render their own row (they can only request changes
     // to their own service slot)
@@ -7278,28 +8051,97 @@ function openServiceModal(date) {
             return `<label style="margin-top:10px;">${p.name}</label>
           <select disabled><option>Date is before scheduling start</option></select>`;
         }
-        // PTO and off_site rows are now editable: a regular service override
-        // brings a PTO pathologist back on duty; selecting "— No service —"
-        // clears any override and restores their PTO/off-site status.
+        // PTO/off-site rows are editable: a regular override brings them back on
+        // duty; "— No service —" clears it.
         const currentId = (a.type === 'service' || a.type === 'off_site')
             ? (a.service ? a.service.id : '')
             : '';
+        const currentIsFt = isFreetextServiceId(currentId);
         const allOptions = [...SERVICES, COMBO_SVC, ...OFF_SERVICES];
         const opts = allOptions.map(s =>
-            `<option value="${s.id}" ${s.id === currentId ? 'selected' : ''}>${s.name}</option>`
+            `<option value="${s.id}" ${!currentIsFt && s.id === currentId ? 'selected' : ''}>${s.name}</option>`
         ).join('');
         const noneOpt = `<option value="" ${currentId === '' ? 'selected' : ''}>— No service —</option>`;
-        // data-initial captures the displayed value at modal-open time so the
-        // save handler can tell which selects the admin actually changed.
-        // Only changed selects become recompute pins — otherwise every
-        // pre-filled dropdown would pin its path and overconstrain the
-        // optimizer (e.g., two paths pinned to Huntley, one because the admin
-        // chose it, one because the dropdown was already showing Huntley).
+        // Admin extras: "Custom service…" freetext + per-row Lock. Non-admins
+        // see neither, but a current freetext assignment is injected so the select
+        // displays correctly.
+        const customOpt = admin
+            ? `<option value="__ft__" ${currentIsFt ? 'selected' : ''}>Custom service…</option>`
+            : (currentIsFt
+                ? `<option value="${escapeHtml(currentId)}" selected>${escapeHtml(a.service.name)} (custom)</option>`
+                : '');
+        const lockId = getServiceLock(activeSvcDayKey, p.id);
+        // data-initial = displayed value at open, so only selects the admin
+        // actually changed become recompute pins (pinning every prefilled dropdown
+        // would overconstrain the optimizer).
+        const selectHtml = `<select data-pid="${p.id}" data-initial="${escapeHtml(currentId)}">${noneOpt}${opts}${customOpt}</select>`;
+        const lockToggleHtml = admin
+            ? `<label class="svc-lock-toggle" title="Lock this assignment in place — recompute won't move it. Custom & off-site services are always locked.">
+                   <input type="checkbox" class="svc-lock-cb" data-lock-pid="${p.id}"
+                          data-initial-lock="${lockId ? '1' : '0'}" ${lockId ? 'checked' : ''} />
+                   <span>Lock</span>
+               </label>`
+            : '';
+        const ftInputHtml = admin
+            ? `<input type="text" class="svc-ft-input" data-ft-pid="${p.id}"
+                      list="ftServiceNames" maxlength="40" autocomplete="off" spellcheck="false"
+                      placeholder="Type the service, e.g. CAP Inspection"
+                      style="display:${currentIsFt ? '' : 'none'};"
+                      value="${currentIsFt ? escapeHtml(a.service.name) : ''}" />`
+            : '';
         return `<label style="margin-top:10px;">${p.name}${a.type === 'pto' ? ' <span style="font-size:11px;color:var(--ink-3);">(PTO)</span>' : a.type === 'off_site' ? ' <span style="font-size:11px;color:var(--ink-3);">(Off Site)</span>' : ''}</label>
-        <select data-pid="${p.id}" data-initial="${currentId}">${noneOpt}${opts}</select>`;
+        <div class="svc-row">${selectHtml}${lockToggleHtml}</div>${ftInputHtml}`;
     }).join('');
+
+    // Sync each admin row's forced-lock state (non-standard picks are
+    // always locked) for the values shown at open time.
+    if (admin) {
+        container.querySelectorAll('select[data-pid]').forEach(sel => {
+            _svcRowSyncLock(sel);
+        });
+    }
     document.getElementById('svcModalBack').classList.add('open');
 }
+
+// ── Service-modal row behavior (delegated, wired once) ── non-standard
+// picks force + disable the Lock checkbox; the manual choice is remembered
+// for standard services.
+function _svcRowSyncLock(sel) {
+    const pid = sel.dataset.pid;
+    const cb = document.querySelector(`#svcAssignments .svc-lock-cb[data-lock-pid="${pid}"]`);
+    if (!cb) return;
+    const v = sel.value;
+    const forced = v === '__ft__' || (v && isNonStandardServiceId(v));
+    if (forced) {
+        if (cb.dataset.prevManual === undefined) {
+            cb.dataset.prevManual = cb.checked ? '1' : '0';
+        }
+        cb.checked = true;
+        cb.disabled = true;
+    } else {
+        cb.disabled = false;
+        if (cb.dataset.prevManual !== undefined) {
+            cb.checked = cb.dataset.prevManual === '1';
+            delete cb.dataset.prevManual;
+        }
+    }
+}
+
+(function wireSvcAssignmentRows() {
+    const container = document.getElementById('svcAssignments');
+    if (!container) return;
+    container.addEventListener('change', e => {
+        const sel = e.target.closest('select[data-pid]');
+        if (!sel) return;
+        const pid = sel.dataset.pid;
+        const ftInput = container.querySelector(`.svc-ft-input[data-ft-pid="${pid}"]`);
+        if (ftInput) {
+            ftInput.style.display = sel.value === '__ft__' ? '' : 'none';
+            if (sel.value === '__ft__') setTimeout(() => ftInput.focus(), 0);
+        }
+        _svcRowSyncLock(sel);
+    });
+})();
 
 document.getElementById('svcCancel').addEventListener('click', () => {
     document.getElementById('svcModalBack').classList.remove('open');
@@ -7312,83 +8154,149 @@ document.getElementById('svcSave').addEventListener('click', async () => {
     const scope = 'day';
 
     if (isAdmin()) {
-        // Build {pid: serviceId} map of all the slots the admin ACTUALLY
-        // changed. Each select has data-initial set to its value at modal-
-        // open time; we ignore selects that match their initial value, since
-        // those are unchanged dropdowns the admin never touched.
-        //
-        // Without this filter, every pre-filled dropdown would be sent as
-        // a pin to the recompute, overconstraining the optimizer. Example:
-        // admin changes B to Huntley, but C was already showing Huntley
-        // naturally — submitting would pin BOTH B and C to Huntley, leaving
-        // the day with two Huntleys and no Bigs.
-        const update = {};
-        const cleared = new Set();
-        selects.forEach(s => {
-            const initial = s.dataset.initial || '';
-            const current = s.value || '';
-            if (current === initial) return;   // unchanged — leave overrides alone
-            if (current) {
-                update[s.dataset.pid] = current;
+        // Per-row intent: resolved service id ('ft:' for custom) + desired lock.
+        // Only rows whose SERVICE or LOCK changed are touched — unchanged prefills
+        // must never become recompute pins (overconstrains the optimizer).
+        const rows = [];
+        for (const s of selects) {
+            const pid = s.dataset.pid;
+            const initialSid = s.dataset.initial || '';
+            let sid;
+            if (s.value === '__ft__') {
+                const ftInput = document.querySelector(`#svcAssignments .svc-ft-input[data-ft-pid="${pid}"]`);
+                sid = makeFreetextServiceId(ftInput ? ftInput.value : '');
+                if (!sid) {
+                    showToast(`Type a name for ${_chgShortName(parseInt(pid, 10))}'s custom service first.`, { type: 'error' });
+                    if (ftInput) ftInput.focus();
+                    return;
+                }
             } else {
-                // Was something, now "— No service —" — explicit clear
-                cleared.add(String(s.dataset.pid));
+                sid = s.value || '';
             }
-        });
+            const cb = document.querySelector(`#svcAssignments .svc-lock-cb[data-lock-pid="${pid}"]`);
+            const initialLock = cb ? cb.dataset.initialLock === '1' : false;
+            // Non-standard services are ALWAYS locked when set; standard
+            // ones follow the checkbox. Clearing a slot never keeps a lock.
+            const wantLock = sid
+                ? (isNonStandardServiceId(sid) || (cb ? cb.checked : false))
+                : false;
+            rows.push({
+                pid,
+                initialSid,
+                sid,
+                initialLock,
+                wantLock,
+                sidChanged: sid !== initialSid,
+                lockChanged: (sid ? wantLock : false) !== initialLock,
+            });
+        }
 
-        // Track what we just saved so the recompute prompt can use the new
-        // values as locks regardless of whether the Firebase listener has
-        // fired yet.
+        const touched = rows.filter(r => r.sidChanged || r.lockChanged);
+        if (touched.length === 0) {
+            document.getElementById('svcModalBack').classList.remove('open');
+            return;
+        }
+
+        // ── Locked-slot guard ── replacing/unlocking is allowed (admin is the
+        // approver) but called out first.
+        const lockedTouched = touched.filter(r => r.initialLock && (r.sidChanged || !r.wantLock));
+        if (lockedTouched.length > 0) {
+            const names = lockedTouched
+                .map(r => _chgShortName(parseInt(r.pid, 10)))
+                .join(', ');
+            const okGo = confirm(
+                `${names}: this day's assignment is locked. ` +
+                `Saving will replace or unlock it. Continue?`);
+            if (!okGo) return;
+        }
+
+        // Track what was just saved so the recompute prompt can use the new
+        // values as locks before the listener fires.
         let recomputeFromDate = null;
         const recomputePins = {};
+        const anySidChanged = touched.some(r => r.sidChanged);
+
+        // Apply one day's worth of changes to an overrides map + build the
+        // matching lock writes and pins for that day.
+        function applyRowsToDay(dKey, existingOverrides, lockWrites, pins) {
+            const merged = Object.assign({}, existingOverrides || {});
+            touched.forEach(r => {
+                if (r.sidChanged) {
+                    if (r.sid) merged[r.pid] = r.sid;
+                    else delete merged[r.pid];
+                } else if (r.lockChanged && r.wantLock) {
+                    // Lock-in of the CURRENT assignment: back the lock with
+                    // a concrete override so the schedule can't drift under it.
+                    merged[r.pid] = r.sid;
+                }
+                if (r.sid && r.wantLock) {
+                    lockWrites['scheduler/serviceLocks/' + dKey + '/' + r.pid] = r.sid;
+                } else {
+                    _lockClearWrite(lockWrites, dKey, r.pid);
+                }
+                if (r.sid && (r.sidChanged || r.wantLock)) {
+                    pins[r.pid] = r.sid;
+                }
+            });
+            return merged;
+        }
 
         if (scope === 'day') {
-            // Merge: start from existing overrides, apply changes, remove cleared.
-            const merged = Object.assign({}, serviceOverrides[activeSvcDayKey] || {});
-            Object.assign(merged, update);
-            cleared.forEach(pid => { delete merged[pid]; });
+            const lockWrites = {};
+            const pins = {};
+            const merged = applyRowsToDay(activeSvcDayKey,
+                serviceOverrides[activeSvcDayKey], lockWrites, pins);
 
             if (Object.keys(merged).length === 0) {
                 await db.ref('scheduler/serviceOverrides/' + activeSvcDayKey).remove();
             } else {
                 await db.ref('scheduler/serviceOverrides/' + activeSvcDayKey).set(merged);
             }
-            // Pin only the just-changed paths for the recompute
-            recomputePins[activeSvcDayKey] = Object.assign({}, update);
-            recomputeFromDate = activeSvcDate;
+            if (Object.keys(lockWrites).length > 0) {
+                await db.ref().update(lockWrites);
+            }
+            recomputePins[activeSvcDayKey] = pins;
+            if (anySidChanged) recomputeFromDate = activeSvcDate;
         } else {
             // Full call week: merge into every workday in the cycle.
             const days = workdaysInCallCycle(activeSvcDate);
             const writes = {};
             days.forEach(d => {
                 const dKey = fmt(d);
-                const existing = Object.assign({}, serviceOverrides[dKey] || {});
-                // Apply new values and remove explicit clears
-                Object.assign(existing, update);
-                cleared.forEach(pid => { delete existing[pid]; });
-                if (Object.keys(existing).length === 0) {
+                const pins = {};
+                const merged = applyRowsToDay(dKey, serviceOverrides[dKey], writes, pins);
+                if (Object.keys(merged).length === 0) {
                     writes['scheduler/serviceOverrides/' + dKey] = null;
                 } else {
-                    writes['scheduler/serviceOverrides/' + dKey] = existing;
+                    writes['scheduler/serviceOverrides/' + dKey] = merged;
                 }
-                recomputePins[dKey] = Object.assign({}, update);
+                recomputePins[dKey] = pins;
             });
             if (Object.keys(writes).length > 0) {
                 await db.ref().update(writes);
             }
-            if (days.length > 0) recomputeFromDate = days[0];
+            if (anySidChanged && days.length > 0) recomputeFromDate = days[0];
         }
 
-        // ── Change log ──
-        // Build human-readable lines summarizing what changed: each
-        // affected pathologist gets one line "Dr. X → Cyto/Gross" or
-        // "Dr. X → cleared". Skip if nothing actually changed.
+        // ── Change log ── one line per touched row, including pure lock flips.
+        const update = {};
+        const cleared = new Set();
         const lines = [];
-        Object.entries(update).forEach(([pid, sid]) => {
-            lines.push(`${_chgShortName(parseInt(pid, 10))} → ${_chgServiceName(sid)}`);
-        });
-        cleared.forEach(pid => {
-            lines.push(`${_chgShortName(parseInt(pid, 10))} → cleared`);
+        touched.forEach(r => {
+            const who = _chgShortName(parseInt(r.pid, 10));
+            if (r.sidChanged) {
+                if (r.sid) {
+                    update[r.pid] = r.sid;
+                    lines.push(`${who} → ${_chgServiceName(r.sid)}${r.wantLock ? ' (locked)' : ''}`);
+                } else {
+                    cleared.add(String(r.pid));
+                    lines.push(`${who} → cleared`);
+                }
+            } else if (r.wantLock) {
+                lines.push(`${who} → locked (${_chgServiceName(r.sid)})`);
+            } else {
+                lines.push(`${who} → unlocked`);
+            }
         });
         if (lines.length > 0) {
             logChange(Object.assign({
@@ -7409,6 +8317,9 @@ document.getElementById('svcSave').addEventListener('click', async () => {
                 dayBeforeFix: true,
                 message: 'Service change saved. Recompute the future schedule for everyone using the rotation rules?',
             });
+        } else {
+            // Pure lock/unlock save — nothing moved, so no recompute offer.
+            showToast('Locks updated.');
         }
     } else {
         // Non-admin: there's only one select (their own).  Submit a request.
@@ -7431,17 +8342,31 @@ document.getElementById('svcReset').addEventListener('click', async () => {
     let recomputeFromDate = null;
     const recomputePins = {};
 
+    // Warn if the reset will discard approved-locked assignments.
+    const dayLocks = serviceLocks[activeSvcDayKey] || {};
+    if (Object.keys(dayLocks).length > 0) {
+        const names = Object.keys(dayLocks)
+            .map(pid => _chgShortName(parseInt(pid, 10)))
+            .join(', ');
+        const okGo = confirm(
+            `${names}: assignment(s) on this day were approved from requests and are locked. ` +
+            `Resetting will remove the lock(s) too. Continue?`);
+        if (!okGo) return;
+    }
+
     if (scope === 'day') {
         await db.ref('scheduler/serviceOverrides/' + activeSvcDayKey).remove();
+        await db.ref('scheduler/serviceLocks/' + activeSvcDayKey).remove();
         recomputePins[activeSvcDayKey] = {};
         recomputeFromDate = activeSvcDate;
     } else {
-        // Wipe overrides for every workday in the call cycle
+        // Wipe overrides (and locks) for every workday in the call cycle
         const days = workdaysInCallCycle(activeSvcDate);
         const writes = {};
         days.forEach(d => {
             const dKey = fmt(d);
             writes['scheduler/serviceOverrides/' + dKey] = null;
+            writes['scheduler/serviceLocks/' + dKey] = null;
             recomputePins[dKey] = {};
         });
         if (Object.keys(writes).length > 0) await db.ref().update(writes);
@@ -7502,9 +8427,7 @@ document.getElementById('viewTabs').addEventListener('click', e => {
     document.querySelectorAll('.view-tab').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
     view = btn.dataset.view;
-    // Mirror to the mobile view select so the two surfaces stay in sync
-    // (e.g. if a desktop tab is clicked programmatically or the user
-    // crosses the breakpoint after picking a view).
+    // Mirror to the mobile view select so the surfaces stay in sync.
     const mobileViewSel = document.getElementById('mobileViewSelect');
     if (mobileViewSel) mobileViewSel.value = view;
     renderMain();
@@ -7537,11 +8460,8 @@ document.getElementById('pathTabs').addEventListener('click', e => {
     renderMain();
 });
 
-// ── Mobile dropdown handlers ─────────────────────────────────────────
-// On phones the .path-tabs / .view-tabs button groups are hidden and
-// replaced by these compact <select>s in the toolbar. We delegate to the
-// existing tab buttons via .click() so the canonical logic (active class,
-// state updates, mirror sync) runs from a single code path.
+// ── Mobile dropdown handlers ── the selects delegate to the hidden tab
+// buttons via .click() so the canonical logic runs from one code path.
 const mobileViewSel = document.getElementById('mobileViewSelect');
 if (mobileViewSel) {
     mobileViewSel.addEventListener('change', e => {
@@ -7565,17 +8485,11 @@ if (mobilePathSel) {
     });
 }
 
-// ── Swipe navigation (mobile only) ───────────────────────────────────
-// Listens on #main (which persists across re-renders). Tracks horizontal
-// gestures live — the previous/next periods are pre-rendered as snapshots
-// flush to either side of #main, and all three translate together with the
-// finger so the user sees the adjacent period swiping in as they drag.
-// On a qualifying swipe the band continues to its committed position; on
-// an aborted drag everything snaps back.
-//
-// Architecture: #main and its two neighbor snapshots all live as siblings
-// in the same .content-area (which already clips with overflow:hidden).
-// The toolbar sits above #main and is unaffected.
+// ── Swipe navigation (mobile only) ── prev/next periods are
+// pre-rendered snapshots flush to either side of #main; all three translate
+// with the finger. Qualifying swipe → the band continues; aborted drag →
+// snap back. Snapshots are #main's siblings in .content-area (already
+// overflow:hidden); the toolbar above is unaffected.
 (function setupSwipeNavigation() {
     const mainEl = document.getElementById('main');
     if (!mainEl) return;
@@ -7584,13 +8498,10 @@ if (mobilePathSel) {
     let tracking = false, dragging = false;
     let isAnimating = false;
 
-    // Live-drag tracking. lastDx is the most recent horizontal offset the
-    // band was actually moved to during touchmove; that is the position
-    // the user *sees*, so commit decisions key off it rather than the
-    // touchend coordinate (a finger commonly rolls back a few px on
-    // release, which would otherwise drop a clearly-past-half drag back
-    // to the original day). prevDx/prevT/lastT feed a release-velocity
-    // estimate so a deliberate fling still commits even under half.
+    // Live-drag tracking. Commit decisions key off lastDx — the position the
+    // user SEES (fingers roll back a few px on release) — while
+    // prevDx/prevT/lastT feed a release-velocity estimate so a fling commits
+    // under half.
     let lastDx = 0, lastT = 0, prevDx = 0, prevT = 0;
 
     // Neighbor snapshots built on first confirmed horizontal move and
@@ -7602,9 +8513,8 @@ if (mobilePathSel) {
     const MAX_VERTICAL_PX  = 60;  // vertical drift allowed (keeps scroll gestures intact)
     const ANIM_MS          = 280; // slide-in / slide-out duration
 
-    // Compute the cursor value for the period `delta` steps from the
-    // current one (+1 = next, -1 = prev). Mirrors the prev/next button
-    // handlers so swipes and buttons stay perfectly aligned.
+    // Cursor value `delta` periods away; mirrors the prev/next handlers so
+    // swipes and buttons stay aligned.
     function cursorFor(delta) {
         if (view === 'day')        return addDays(cursor, delta);
         else if (view === 'week')  return addDays(cursor, 7 * delta);
@@ -7612,36 +8522,19 @@ if (mobilePathSel) {
         else                       return new Date(cursor.getFullYear() + delta, cursor.getMonth(), 1);
     }
 
-    // Render the neighbor period into a *temporary detached element*
-    // rather than into the real #main. Renaming the temp's id to "main"
-    // (and the real #main's id to something else) for the duration of
-    // the render redirects renderMain()'s internal getElementById('main')
-    // call to the temp container. This matters because renderMain()
-    // does `main.innerHTML = …` — if we let it write to the real #main
-    // mid-gesture, every child of #main (including the element the
-    // touch started on) is destroyed, and mobile browsers (notably iOS
-    // Safari) then stop dispatching touchmove/touchend for the rest of
-    // the gesture. Symptom: the swipe moves a few pixels then freezes.
-    //
-    // We also save and restore the global `cursor` (and re-run
-    // renderPeriodLabel) inside this function so it has no side effects
-    // on outer state. Otherwise the second call sees `cursor` mutated by
-    // the first, and cursorFor(+1) ends up returning today (yesterday+1)
-    // instead of tomorrow — making the next snapshot show today's
-    // content. Symptom: incoming and outgoing panels show the same date
-    // during the swipe.
+    // Render the neighbor into a temporary DETACHED element by swapping ids
+    // so renderMain()'s getElementById('main') hits the temp. Writing into the
+    // real #main mid-gesture destroys the touch-target and iOS Safari stops
+    // dispatching touchmove/touchend (swipe freezes). Also save/restore the
+    // global `cursor` (+ period label) — otherwise the second snapshot renders
+    // the wrong period and both panels show the same date.
     function snapshotPeriod(periodCursor) {
         const savedCursor = cursor;
         cursor = periodCursor;
 
-        // Use <main> (not <div>) so element-targeted CSS rules like
-        // `main { padding: … }` and `.content-area > main { … }` apply
-        // to the snapshot just like they do to the real #main. Otherwise
-        // the snapshot's content sits 14px higher / 12px further left
-        // than the real one on mobile (the universal `* { padding: 0 }`
-        // reset wins on a <div>, and the `main { padding: … }` override
-        // never matches). Symptom: the incoming panel appears raised
-        // during the swipe, then snaps down on commit.
+        // Use <main> (not <div>) so `main {}` / `.content-area > main {}` padding
+        // rules match the snapshot; a <div> gets the universal 0-padding reset and
+        // the incoming panel appears raised, snapping down on commit.
         const temp = document.createElement('main');
         // Off-screen + hidden so the in-progress render never paints.
         temp.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden';
@@ -7654,10 +8547,8 @@ if (mobilePathSel) {
             temp.id  = '';
             mainEl.id = 'main';
             document.body.removeChild(temp);
-            // Restore the bits renderMain mutated outside the temp:
-            // the global cursor, and the period label (which lives in
-            // #currentPeriod, not in #main, so renderMain wrote to the
-            // real one each time).
+            // Restore what renderMain mutated outside the temp: the global cursor
+            // and the period label (#currentPeriod lives outside #main).
             cursor = savedCursor;
             renderPeriodLabel();
         }
@@ -7665,11 +8556,9 @@ if (mobilePathSel) {
         return temp;
     }
 
-    // Build prev + next snapshots flush to either side of #main. Called
-    // once per gesture, the moment the drag is confirmed horizontal.
-    // Costs 3 renderMain() calls (prev, next, restore) — fine because
-    // it only runs after the 8px horizontal dead zone is crossed, so
-    // pure taps and vertical scrolls don't pay for it.
+    // Build prev + next snapshots flush to either side of #main, once per
+    // gesture after the 8px horizontal dead zone (~3 renderMain calls, so pure
+    // taps and vertical scrolls don't pay).
     function buildNeighbors() {
         const w      = mainEl.offsetWidth || window.innerWidth;
         const parent = mainEl.offsetParent || mainEl.parentElement;
@@ -7678,9 +8567,8 @@ if (mobilePathSel) {
         const height = mainEl.offsetHeight;
         snapWidth = w;
 
-        // snapshotPeriod restores `cursor` and the period label itself,
-        // so callers can invoke it freely without worrying about side
-        // effects on outer state.
+        // snapshotPeriod restores `cursor` and the period label — safe to call
+        // without outer-state side effects.
         prevSnap = snapshotPeriod(cursorFor(-1));
         nextSnap = snapshotPeriod(cursorFor(+1));
 
@@ -7723,9 +8611,8 @@ if (mobilePathSel) {
         if (nextSnap) nextSnap.style.transition = t;
     }
 
-    // Run `cb` once the current transform transition on #main ends, with
-    // a setTimeout fallback in case transitionend doesn't fire (e.g. the
-    // start and end values turned out identical, or the tab was hidden).
+    // Run `cb` when #main's transform transition ends, with a setTimeout
+    // fallback (identical start/end values, hidden tab).
     function whenTransformDone(durationMs, cb) {
         let done = false;
         function finish() {
@@ -7742,12 +8629,9 @@ if (mobilePathSel) {
         setTimeout(finish, durationMs + 60);
     }
 
-    // Commit: the relevant neighbor slides into the center, #main slides
-    // off in the swipe direction, the other neighbor slides further off.
-    // When the animation ends, we update `cursor`, re-render #main with
-    // the new period, snap its transform back to 0, and remove both
-    // snapshots. Because snapshots have z-index:5 and #main doesn't,
-    // the now-centered neighbor masks #main during the swap — no flash.
+    // Commit: neighbor slides center, #main slides off, other neighbor
+    // further off; on end, update cursor, re-render, snap transform, drop
+    // snapshots. Snapshots' z-index:5 masks #main during the swap — no flash.
     function commitAnimation(goNext, finalDx) {
         isAnimating = true;
         const w = snapWidth;
@@ -7825,9 +8709,8 @@ if (mobilePathSel) {
         mainEl.style.transform  = '';
     }, { passive: true });
 
-    // passive:false so we can preventDefault() once the gesture is confirmed
-    // horizontal — this keeps native vertical scroll working for vertical-only
-    // gestures while letting us own the horizontal ones.
+    // passive:false so preventDefault() can claim confirmed-horizontal
+    // gestures while vertical scroll stays native.
     mainEl.addEventListener('touchmove', (e) => {
         if (!tracking) return;
         const t  = e.touches[0];
@@ -7843,9 +8726,8 @@ if (mobilePathSel) {
                 return;
             }
             dragging = true;
-            // Build the neighbor previews now that we know it's a swipe.
-            // Synchronous and costs ~3 renderMain calls — one possible
-            // hitched frame at the very start of the drag, then smooth.
+            // Build neighbor previews once the swipe is confirmed (~3 renderMain
+            // calls; one possible hitched frame, then smooth).
             buildNeighbors();
         }
 
@@ -7868,11 +8750,8 @@ if (mobilePathSel) {
         const t  = e.changedTouches[0];
         const dy = t.clientY - startY;
 
-        // Use the band's last *rendered* position, not the touchend
-        // coordinate. The two can differ by several px when the finger
-        // rolls back on lift; lastDx is what the user actually sees, so
-        // committing off it removes the "looked past half but snapped
-        // back" inconsistency.
+        // Commit off the band's last RENDERED position (lastDx), not touchend —
+        // fingers roll back on lift and lastDx is what the user saw.
         const dx = lastDx;
 
         // Too much vertical drift — this was a scroll, not a swipe.
@@ -7881,18 +8760,13 @@ if (mobilePathSel) {
             return;
         }
 
-        // Release velocity in px/ms over the last touchmove window, signed
-        // to match the drag direction. A short, fast fling should commit
-        // even when the band never reached the halfway line.
+        // Release velocity (px/ms, signed) over the last touchmove window — a
+        // fast fling commits even before halfway.
         const dt  = Math.max(1, lastT - prevT);
         const vel = (lastDx - prevDx) / dt;
 
-        // Commit if EITHER:
-        //  (a) the band was dragged at least halfway across (works for
-        //      slow drags and gestures paused at the end), or
-        //  (b) it was a deliberate fling past the minimum distance whose
-        //      release velocity is moving in the same direction as the
-        //      drag (lets short fast swipes commit before reaching 50%).
+        // Commit if dragged ≥ halfway, OR a deliberate fling past minimum
+        // distance with release velocity in the drag direction.
         const draggedHalf = snapWidth > 0 && Math.abs(dx) >= snapWidth * 0.5;
         const FLING_VEL    = 0.5; // px/ms ≈ a brisk flick
         const flung        = Math.abs(dx) >= MIN_DISTANCE_PX &&
@@ -7915,13 +8789,9 @@ if (mobilePathSel) {
     }, { passive: true });
 })();
 
-// Viewport-aware view fallback: the Day tab is mobile-only (hidden on
-// desktop via CSS), so if the window crosses the mobile breakpoint while
-// Day view is active we swap to Week so the user isn't stranded on a tab
-// they can no longer see. We don't auto-switch the other direction
-// (desktop → mobile keeps the current view, e.g. week) — that respects
-// user intent if they deliberately picked Week mid-session. The initial
-// "mobile gets Day" override only fires on first load.
+// Day tab is mobile-only: crossing to desktop while on Day swaps to
+// Week. No auto-switch the other way (respects a deliberate mid-session
+// choice); the mobile Day override only fires on first load.
 let _wasMobileViewport = isMobileViewport();
 window.addEventListener('resize', () => {
     const nowMobile = isMobileViewport();
@@ -7941,10 +8811,8 @@ window.addEventListener('resize', () => {
 });
 
 // ────────────── MOBILE HAMBURGER MENU ──────────────
-// On phones, Manage PTO / Requests / Export to Outlook live in a dropdown
-// behind a hamburger icon to free up vertical real estate. The menu items
-// just delegate to the existing sidebar button click handlers so behavior
-// stays in lock-step between the two surfaces.
+// Phone-only dropdown for Manage PTO / Requests / Export; items delegate
+// to the sidebar button handlers so behavior stays in lock-step.
 (function wireHamburgerMenu() {
     const menuBtn = document.getElementById('menuBtn');
     const dropdown = document.getElementById('menuDropdown');
@@ -8000,10 +8868,8 @@ window.addEventListener('resize', () => {
     });
 })();
 
-// Tap-to-today on the period label.  On desktop this only fires when
-// you're not already viewing today (the label gets the "off-today" class
-// via renderPeriodLabel); on mobile it always fires since we removed the
-// dedicated Today button to save space.
+// Tap-to-today on the period label: desktop only when off-today; mobile
+// always (no dedicated Today button).
 document.getElementById('currentPeriod').addEventListener('click', () => {
     cursor = new Date(today);
     renderMain();
@@ -8023,9 +8889,7 @@ document.addEventListener('keydown', e => {
 });
 
 // ────────────── EXPORT TO OUTLOOK (.ics) ──────────────
-// Builds an iCalendar file from the schedule and triggers a browser download.
-// Outlook (desktop, web, and mobile), Google Calendar, and Apple Calendar all
-// import .ics files natively.
+// Builds an iCalendar file; Outlook / Google / Apple import natively.
 
 // Pad helper for ICS UTC timestamps (DTSTAMP must be UTC)
 function _icsPad(n) { return String(n).padStart(2, '0'); }
@@ -8079,9 +8943,9 @@ function _icsServiceShort(serviceId) {
     }
 }
 
-// Contiguous PTO blocks for one pathologist, with weekend flanks attached
-// when the PTO touches a Monday (extend back to Sat) or a Friday (extend
-// forward to Sun). Result is sorted, merged, and clipped to [startDate, endDate].
+// Contiguous PTO blocks per pathologist with weekend flanks (PTO
+// touching Mon extends back to Sat, Fri forward to Sun); sorted, merged,
+// clipped to range.
 function _collectPtoBlocks(pathId, startDate, endDate) {
     const raw = vacations
         .filter(v => v.pathologistId === pathId)
@@ -8115,10 +8979,8 @@ function _collectPtoBlocks(pathId, startDate, endDate) {
         .filter(b => b.start.getTime() <= b.end.getTime());
 }
 
-// Contiguous on-call blocks for one pathologist within [startDate, endDate].
-// Walks day-by-day so per-day overrides naturally split blocks. Holiday-shifted
-// cycles (e.g. Memorial Day) come through automatically because onCallIdForDay
-// already accounts for the cycle boundary logic.
+// Contiguous on-call blocks in range; day-by-day walk so day overrides
+// split blocks and holiday-shifted cycles come through onCallIdForDay.
 function _collectCallBlocks(pathId, startDate, endDate) {
     const blocks = [];
     let curStart = null;
@@ -8135,9 +8997,9 @@ function _collectCallBlocks(pathId, startDate, endDate) {
     return blocks;
 }
 
-// Build a list of VEVENT blocks for one pathologist + date range + options.
-// Matches the user's Outlook formatting: "Dr. {Last} {tag}", consolidated PTO
-// and Call blocks, and Outlook master-category colors.
+// VEVENT blocks per pathologist + range + options, matching the user's
+// Outlook formatting ("Dr. {Last} {tag}", consolidated PTO/Call blocks,
+// category colors).
 function buildIcsEvents(pathId, startDate, endDate, opts) {
     const events = [];
     const stamp = _icsDateTimeUtc(new Date());
@@ -8403,9 +9265,8 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         });
     }
 
-    // Default-view segmented control. Note: this only sets the launch
-    // default — it does NOT change the current `view`. The user can still
-    // switch views in this session via the header view-tabs.
+    // Default-view control sets the LAUNCH default only — not the current
+    // view.
     const defaultViewSeg = document.getElementById('defaultViewSeg');
     if (defaultViewSeg) {
         defaultViewSeg.addEventListener('click', e => {
@@ -8463,24 +9324,10 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         });
     }
 })();
-/* ════════════════════════════════════════════════════════════════════════
-   ╔══════════════════════════════════════════════════════════════════════╗
-   ║                                                                      ║
-   ║              REWORKED LAYOUT — page navigation + sidebar             ║
-   ║                                                                      ║
-   ╚══════════════════════════════════════════════════════════════════════╝
-
-   Adds the new full-height sidebar's page-navigation system. The sidebar
-   has three "pages":
-       schedule  — the calendar (default; uses existing renderMain logic)
-       requests  — placeholder for future content
-       tracking  — placeholder for future content
-   plus Settings (full main-area page) and Sign out.
-
-   The kebab menu in the toolbar still exposes Manage PTO / Requests modal /
-   Export / Recompute, mirroring the previous mobile-only hamburger menu,
-   so all existing functionality stays reachable.
-   ════════════════════════════════════════════════════════════════════════ */
+// ════ REWORKED LAYOUT — page navigation + sidebar ════
+// Sidebar pages: schedule (calendar) / requests / changes / tracking, plus
+// Settings and Sign out. The toolbar kebab still mirrors Manage PTO /
+// Requests / Export / Recompute.
 
 (function initPageNavigation() {
     const VALID_PAGES = ['schedule', 'requests', 'changes', 'tracking', 'settings'];
@@ -8489,13 +9336,10 @@ document.getElementById('exportDownload').addEventListener('click', () => {
     const app = document.getElementById('app');
     const navItems = document.querySelectorAll('.page-nav .nav-item, .aside-bottom .nav-item');
 
-    /**
-     * Switch which "page" is shown in the content area.
-     * - schedule: shows toolbar + main (existing calendar render)
-     * - requests/changes/tracking: shows placeholder page-shell
-     * - settings: shows full settings page
-     */
+    // Switch the visible "page": schedule shows toolbar+main; others show
+    // their page-shell; settings is the full settings page.
     function setPage(page) {
+        if (isLakeForest() && page !== 'schedule') page = 'schedule'; // LF guest: schedule only
         if (!VALID_PAGES.includes(page)) page = 'schedule';
         currentPage = page;
 
@@ -8561,11 +9405,9 @@ document.getElementById('exportDownload').addEventListener('click', () => {
     const asideToggleBtn = document.getElementById('asideToggleBtn');
     const sidebarBackdrop = document.getElementById('sidebarBackdrop');
 
-    // Scroll-lock state. We save window.scrollY when the drawer opens and
-    // pin the body in place with position:fixed (via the CSS class), then
-    // restore the scroll offset when it closes. position:fixed is the only
-    // reliable way to stop iOS Safari from scrolling the page behind the
-    // drawer; plain overflow:hidden on body isn't enough there.
+    // Scroll-lock: save scrollY, pin body with position:fixed (CSS class),
+    // restore on close — the only reliable iOS Safari approach;
+    // overflow:hidden isn't enough there.
     let sidebarSavedScrollY = 0;
 
     function lockBodyScrollForSidebar() {
@@ -8634,9 +9476,8 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         });
     }
 
-    // ── Mirror the kebab's red-alert-dot onto the mobile hamburger ────
-    // The aside hamburger should glow when there are pending requests, so
-    // the user knows to open the sidebar/menu even before it's open.
+    // Mirror the kebab's alert dot onto the mobile hamburger (pending
+    // requests visible before the menu opens).
     const asideAlertDot = document.getElementById('asideAlertDot');
     if (asideAlertDot && asideToggleBtn) {
         const menuBtn = document.getElementById('menuBtn');
@@ -8656,17 +9497,11 @@ document.getElementById('exportDownload').addEventListener('click', () => {
     }
 })();
 
-/* ────────────────────────────────────────────────────────────────────
-   Make 'T' keyboard shortcut still jump to today when the today button
-   is hidden. (The hidden #todayBtn is preserved in HTML for click-through
-   purposes, so the existing handler already works — this is a safety net.)
-   ──────────────────────────────────────────────────────────────────── */
-/* ────────────────────────────────────────────────────────────────────
-   Tracking page: per-conference "Add entry" buttons.
-   Moved here from an inline <script> in schedule.html. Mirrors admin-only
-   visibility from the hidden #trackingAddBtn proxy and wires each
-   .tracking-conf-btn to open the conference modal pre-set to its type.
-   ──────────────────────────────────────────────────────────────────── */
+// 'T' shortcut still jumps to today when the Today button is hidden
+// (#todayBtn stays in the DOM for click-through; this is a safety net).
+// Tracking-page per-conference "Add entry" buttons — moved from an inline
+// <script>; mirrors admin visibility from #trackingAddBtn and opens the
+// conference modal pre-set to each type.
 (function () {
     function init() {
         var addBtn = document.getElementById('trackingAddBtn');
@@ -8684,9 +9519,8 @@ document.getElementById('exportDownload').addEventListener('click', () => {
             attributeFilter: ['style']
         });
 
-        // Wire each per-conference button: open the modal via the proxy,
-        // then pre-select the matching conference type and dispatch 'change'
-        // so any dependent fields (CDH subtype, Other title) render correctly.
+        // Wire each button: open via the proxy, pre-select the type, dispatch
+        // 'change' so dependent fields render.
         var btns = section.querySelectorAll('.tracking-conf-btn');
         for (var i = 0; i < btns.length; i++) {
             btns[i].addEventListener('click', function () {

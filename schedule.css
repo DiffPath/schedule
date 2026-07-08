@@ -3018,16 +3018,32 @@ main {
 
 /* Lock toggle row in the quick panel; custom/off-site force it on +
    disabled and the label says why. */
+/* Lock toggle row in the quick panel; custom/off-site force it on +
+   disabled and the label says why. The panel can be inserted INSIDE the
+   day-detail modal, where the generic `.modal label` and `.modal input`
+   rules would otherwise leak into any property left unset here (uppercase
+   mono text, a width:100% bordered checkbox that shoves the text past the
+   row edge) — so this rule declares them all explicitly. */
 .path-quick-panel .pqp-lock-row {
     display: flex;
     align-items: flex-start;
     gap: 7px;
+    font-family: inherit;
     font-size: 11.5px;
+    text-transform: none;
+    letter-spacing: normal;
+    margin: 0;
     color: var(--ink-2);
     cursor: pointer;
     line-height: 1.35;
 }
 .path-quick-panel .pqp-lock-row input[type="checkbox"] {
+    width: auto;
+    height: auto;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: none;
     margin: 1px 0 0;
     accent-color: var(--accent);
     flex-shrink: 0;

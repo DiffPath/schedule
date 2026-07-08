@@ -2621,17 +2621,35 @@ main {
     min-width: 0;
     width: auto;
 }
-.svc-lock-toggle {
+/* Scoped under .modal so it outranks `.modal label` (0,1,1), which would
+   otherwise force this checkbox label to display:block + uppercase mono with
+   a top margin — stacking the box above the word and shoving it to the side. */
+.modal .svc-lock-toggle {
     display: flex;
     align-items: center;
     gap: 5px;
+    font-family: inherit;
     font-size: 11.5px;
+    text-transform: none;
+    letter-spacing: normal;
+    margin: 0;
     color: var(--ink-2);
     cursor: pointer;
     flex-shrink: 0;
     user-select: none;
 }
 .svc-lock-toggle input[type="checkbox"] {
+    /* `.modal input` sets width:100% + padding + border on every modal input;
+       undo that here so the lock stays a native checkbox, not a bordered box. */
+    width: auto;
+    height: auto;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: none;
+    -webkit-appearance: checkbox;
+    appearance: auto;
+    flex-shrink: 0;
     margin: 0;
     accent-color: var(--accent);
     cursor: pointer;

@@ -82,6 +82,7 @@
                         <polyline points="3.5,14 3.5,11.3 6.2,11.3"/>
                     </svg>
                     <span>Changes</span>
+                    <span class="nav-badge" id="navChangesBadge" style="display:none;"></span>
                 </button>
                 <button class="nav-item" data-page="tracking">
                     <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
@@ -363,7 +364,7 @@
                                 <div class="tracking-pto-list" id="trackingPtoList"></div>
                             </section>
 
-                            <!-- Holiday call tracker — on-call for the six federal holidays, cumulative across years (never resets, ignores the Period selector); derived from onCallIdForDay so swaps credit the actual coverer. -->
+                            <!-- Holiday call tracker — on-call for the six federal holidays from Sept 1, 2025 (FY26 start, fixed) through 12 months from today (ignores the Period selector); derived from onCallIdForDay so swaps credit the actual coverer. -->
                             <section class="tracking-holiday-section">
                                 <div class="tracking-section-label">
                                     <span>Holiday call</span>
@@ -455,7 +456,7 @@
                 <div class="settings-page-content">
                     <h2 class="settings-page-title">Settings</h2>
 
-                    <section class="settings-section">
+                    <section class="settings-section" id="displaySection">
                         <h3 class="settings-section-title">Display</h3>
                         <label class="settings-row">
                             <span class="settings-row-label">
@@ -468,7 +469,7 @@
 
                     <section class="settings-section">
                         <h3 class="settings-section-title">Defaults when you open the app</h3>
-                        <div class="settings-row settings-row-stack">
+                        <div class="settings-row settings-row-stack" id="defaultPageRow">
                             <span class="settings-row-label">
                                 <span class="settings-row-name">Default page</span>
                                 <span class="settings-row-desc">Which page to land on when the app opens.</span>
@@ -663,6 +664,40 @@
                 <button id="lfRemove" class="danger" style="display:none;">Remove sendout</button>
                 <button id="lfCancel">Cancel</button>
                 <button class="primary" id="lfSave">Add sendout</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lake Forest sendout REQUEST modal — LF guest files a request the
+         admin approves; nothing is written directly. -->
+    <div class="modal-back" id="lfReqModalBack">
+        <div class="modal">
+            <h3>Request Lake Forest sendout</h3>
+            <div class="sub">Ask the admin to add or remove a sendout day. You'll see the decision under Requests.</div>
+
+            <label>Date</label>
+            <input type="date" id="lfReqDate" />
+
+            <div class="oc-scope-toggle">
+                <label class="oc-scope-opt">
+                    <input type="radio" name="lfReqScope" value="day" id="lfReqScopeDay" checked>
+                    This day only
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="lfReqScope" value="week" id="lfReqScopeWeek">
+                    Full call week
+                </label>
+            </div>
+
+            <div class="lf-status" id="lfReqStatus" style="margin-top:14px; padding:10px 12px; border-radius:6px; font-size:12.5px;"></div>
+
+            <label>Note for admin (optional)</label>
+            <textarea id="lfReqNote" rows="2" placeholder="e.g. extra sendout volume expected…"
+                style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+
+            <div class="modal-actions">
+                <button id="lfReqCancel">Cancel</button>
+                <button class="primary" id="lfReqSubmit">Submit request</button>
             </div>
         </div>
     </div>

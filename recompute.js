@@ -587,6 +587,10 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
     const writes = {};
     let processed = 0;
     let dayBeforeProcessed = false;
+    // Actual date range of changed days (keys are YYYY-MM-DD, so string
+    // comparison orders chronologically) — used for the change-log summary.
+    let firstChangedKey = null;
+    let lastChangedKey = null;
     for (const k in snapshot) {
         const base = baseline[k] || {};
         if (_sameServiceMap(snapshot[k], base)) continue;
@@ -605,12 +609,19 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
             Object.assign({}, preserved, snapshot[k]);
         processed++;
         if (prevWd && k === fmt(prevWd)) dayBeforeProcessed = true;
+        if (firstChangedKey === null || k < firstChangedKey) firstChangedKey = k;
+        if (lastChangedKey === null || k > lastChangedKey) lastChangedKey = k;
     }
 
     if (Object.keys(writes).length > 0) {
         await db.ref().update(writes);
     }
-    return { processed: processed, dayBeforeProcessed: dayBeforeProcessed };
+    return {
+        processed: processed,
+        dayBeforeProcessed: dayBeforeProcessed,
+        firstChangedKey: firstChangedKey,
+        lastChangedKey: lastChangedKey,
+    };
 }
 
 // ────────────── MANUAL RECOMPUTE ──────────────
@@ -672,7 +683,10 @@ async function _runManualRecompute(fromDate, horizonDays) {
                 horizonDays: horizonDays,
                 daysAffected: res.processed,
                 dayBeforeProcessed: !!res.dayBeforeProcessed,
-            }, _chgSummaryRecompute(res.processed, fromKey, !!res.dayBeforeProcessed)));
+                startDate: res.firstChangedKey || null,
+                endDate: res.lastChangedKey || null,
+            }, _chgSummaryRecompute(res.processed, fromKey, !!res.dayBeforeProcessed,
+                res.firstChangedKey, res.lastChangedKey)));
         }
     } catch (err) {
         console.error('triggerManualRecompute error', err);
@@ -805,7 +819,10 @@ async function maybeOfferRecompute(pinnedByDay, opts) {
                 horizonDays: choice.horizonDays,
                 daysAffected: res.processed,
                 dayBeforeProcessed: !!res.dayBeforeProcessed,
-            }, _chgSummaryRecompute(res.processed, fromKey, !!res.dayBeforeProcessed)));
+                startDate: res.firstChangedKey || null,
+                endDate: res.lastChangedKey || null,
+            }, _chgSummaryRecompute(res.processed, fromKey, !!res.dayBeforeProcessed,
+                res.firstChangedKey, res.lastChangedKey)));
         }
     } catch (err) {
         console.error('recomputeFutureSchedule error', err);
@@ -813,9 +830,19 @@ async function maybeOfferRecompute(pinnedByDay, opts) {
     }
 }
 
-function _chgSummaryRecompute(processed, fromDateKey, dayBeforeProcessed) {
+function _chgSummaryRecompute(processed, fromDateKey, dayBeforeProcessed, firstKey, lastKey) {
     const dayWord = processed === 1 ? 'day' : 'days';
     const tail = dayBeforeProcessed ? ' (incl. day before)' : '';
+    // Prefer the actual changed-date range; fall back to the old "starting
+    // <date>" phrasing if the range isn't available.
+    if (firstKey && lastKey) {
+        const whenBit = firstKey === lastKey
+            ? `on ${_chgFmtDate(firstKey)}`
+            : `from ${_chgFmtDate(firstKey)} to ${_chgFmtDate(lastKey)}`;
+        return {
+            summary: `Service schedule changed ${whenBit} — ${processed} ${dayWord} updated${tail}`,
+        };
+    }
     const fromBit = fromDateKey ? `, starting ${_chgFmtDate(fromDateKey)}` : '';
     return {
         summary: `Schedule recomputed — ${processed} ${dayWord} updated${tail}${fromBit}`,

@@ -4865,9 +4865,11 @@ aside {
     flex-shrink: 0;
 }
 
-/* Requests nav dot — compact circle; amber pending / green approved /
-   red denied; pulses once when an unseen decision arrives. */
-#navRequestsBadge {
+/* Requests / Changes nav dots — compact circle; amber pending / green
+   approved / red denied on Requests, blue on Changes; pulses once when
+   something unseen arrives. */
+#navRequestsBadge,
+#navChangesBadge {
     min-width: 8px;
     width: 8px;
     height: 8px;
@@ -4883,6 +4885,7 @@ aside {
 #navRequestsBadge.tone-pending  { background: #c49620; }
 #navRequestsBadge.tone-approved { background: #2a8c46; }
 #navRequestsBadge.tone-denied   { background: #b94e2a; }
+#navChangesBadge.tone-changed   { background: #2e6a99; }
 
 /* One-shot pulse animation when a new decision lands */
 @keyframes nav-dot-pop {
@@ -4891,7 +4894,8 @@ aside {
     70%  { transform: scale(0.9); opacity: 1; }
     100% { transform: scale(1);   opacity: 1; }
 }
-#navRequestsBadge.pop {
+#navRequestsBadge.pop,
+#navChangesBadge.pop {
     animation: nav-dot-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
@@ -6966,6 +6970,22 @@ table.tracking-summary tbody td.t-sum-consult.t-sum-zero {
     font-weight: 400;
 }
 
+/* Eight columns must fit the left column without a horizontal scrollbar on
+   a 1080p screen: tighter cell padding and header tracking than the base
+   .tracking-summary table, and a slimmer name column. */
+table.tracking-holiday-table th,
+table.tracking-holiday-table td {
+    padding: 9px 4px;
+}
+
+table.tracking-holiday-table thead th {
+    letter-spacing: 0.06em;
+}
+
+table.tracking-holiday-table .t-sum-name-col {
+    min-width: 110px;
+}
+
 /* Departed members still credited by old overrides get a muted row. */
 table.tracking-holiday-table tbody tr.tracking-hc-former .t-sum-name {
     color: var(--ink-3);
@@ -7111,15 +7131,10 @@ table.tracking-summary tbody td.t-sum-empty {
 .lf-guest #pathTabs,
 .lf-guest #mobilePathSelectWrap { display: none !important; }
 
-/* Sidebar: Schedule + Sign out only */
-.lf-guest .nav-item[data-page="requests"],
-.lf-guest .nav-item[data-page="changes"],
-.lf-guest .nav-item[data-page="tracking"],
-.lf-guest .nav-item[data-page="settings"] { display: none !important; }
+/* Sidebar: Schedule / Requests / Changes / Settings — no Tracking
+   (the conference tracker is pathologist business) */
+.lf-guest .nav-item[data-page="tracking"] { display: none !important; }
 
-/* Year view: hide the PTO/Call machinery; mark sendout days instead
-   (the .lf class is added per-cell by renderYear for this account) */
-.lf-guest .year-legend { display: none; }
-.lf-guest .year-month .mini-grid .md .md-square { display: none; }
-.lf-guest .year-view .md.lf { background: #4E2E85; border-radius: 4px; }
-.lf-guest .year-view .md.lf .md-num { color: #fff; font-weight: 700; }
+/* Year view: sendout days render as normal call/PTO-style squares with an
+   "LF" label (cellContent in schedule.js). Cells stay clickable — for LF a
+   day click opens the sendout request modal instead of day drill-in. */

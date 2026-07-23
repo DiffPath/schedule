@@ -244,6 +244,7 @@ const PROCEDURE_TYPES = [
     'EBUS',
     'IR Thyroid bx',
     'IR Thyroid w/ Afirma',
+    'IR Parotid bx',
     'CT Random Kidney bx',
     'CT Bone Marrow',
     'Lymph Node bx',
@@ -349,6 +350,8 @@ function isMobileViewport() {
 // Persisted in localStorage so preferences survive page refreshes.
 const SETTINGS_STORAGE_KEY = 'schedDisplaySettings';
 const VALID_DEFAULT_VIEWS = ['day', 'week', 'month', 'year'];
+// Lake Forest guest picks from the desktop views only (their sole setting).
+const VALID_LF_DEFAULT_VIEWS = ['week', 'month', 'year'];
 const VALID_DEFAULT_FILTERS = ['all', 'me'];
 const VALID_DEFAULT_PAGES = ['schedule', 'requests', 'changes', 'tracking'];
 const DEFAULT_SETTINGS = {
@@ -360,6 +363,9 @@ const DEFAULT_SETTINGS = {
     defaultPathFilter: 'me',
     // Which page to land on when the app opens. 'schedule' preserves prior behavior.
     defaultPage: 'schedule',
+    // Launch view for the Lake Forest guest account — its only setting.
+    // 'year' shows the sendout days at a glance.
+    lfDefaultView: 'year',
 };
 let settings = (() => {
     try {
@@ -372,6 +378,7 @@ let settings = (() => {
 if (!VALID_DEFAULT_VIEWS.includes(settings.defaultView)) settings.defaultView = 'week';
 if (!VALID_DEFAULT_FILTERS.includes(settings.defaultPathFilter)) settings.defaultPathFilter = 'me';
 if (!VALID_DEFAULT_PAGES.includes(settings.defaultPage)) settings.defaultPage = 'schedule';
+if (!VALID_LF_DEFAULT_VIEWS.includes(settings.lfDefaultView)) settings.lfDefaultView = 'year';
 
 // Seed active view from the saved default (fallback 'week'). Mobile always
 // starts in Day view (only mobile view with the procedure schedule) — not
@@ -415,8 +422,10 @@ function applySettings() {
     }
     const dvSeg = document.getElementById('defaultViewSeg');
     if (dvSeg) {
+        // Lake Forest stores its launch view separately (lfDefaultView).
+        const dvActive = isLakeForest() ? settings.lfDefaultView : settings.defaultView;
         dvSeg.querySelectorAll('.seg-btn').forEach(b => {
-            const isActive = b.dataset.value === settings.defaultView;
+            const isActive = b.dataset.value === dvActive;
             b.classList.toggle('active', isActive);
             b.setAttribute('aria-checked', isActive ? 'true' : 'false');
         });
@@ -433,6 +442,13 @@ function applySettings() {
     // pointless row.
     const dfRow = document.getElementById('defaultFilterRow');
     if (dfRow) dfRow.style.display = (isGrossRoom() || isManager() || isReadOnlyGuest()) ? 'none' : '';
+
+    // Lake Forest guest: the only setting on offer is the launch view —
+    // hide the Display section and the Default page row.
+    const dispSec = document.getElementById('displaySection');
+    if (dispSec) dispSec.style.display = isLakeForest() ? 'none' : '';
+    const dpRow = document.getElementById('defaultPageRow');
+    if (dpRow) dpRow.style.display = isLakeForest() ? 'none' : '';
 
     // Sync sidebar arrow button aria-label
     const stb = document.getElementById('sidebarToggleBtn');
@@ -1654,6 +1670,20 @@ auth.onAuthStateChanged(user => {
             return;
         }
         loggedInPathId = id;
+        // Lake Forest guest lands on their saved launch view (LF settings
+        // offer week/month/year; the default is the yearlong schedule).
+        if (id === LAKE_FOREST_ID) {
+            view = VALID_LF_DEFAULT_VIEWS.includes(settings.lfDefaultView)
+                ? settings.lfDefaultView : 'year';
+            document.querySelectorAll('.view-tab').forEach(t => {
+                t.classList.toggle('active', t.dataset.view === view);
+            });
+            // Re-gate the active page: LF has no Tracking page, so a stale
+            // defaultPage from a prior non-LF session falls back to schedule.
+            const appEl = document.getElementById('app');
+            const curPage = appEl ? appEl.getAttribute('data-page') : 'schedule';
+            if (typeof window.__setPage === 'function') window.__setPage(curPage);
+        }
         // One-time cleanup of the legacy localStorage key from the old
         // homegrown auth (no longer used now that Firebase persists sessions).
         try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch (_) {}
@@ -1869,6 +1899,9 @@ function renderSidebar() {
     // Show/hide & update the Requests button + badge
     updateRequestsBadge();
 
+    // Changes nav dot (depends on who is signed in)
+    updateNavChangesIndicator();
+
     const cs = getCallCycleStart(today);
     const ce = getCallCycleEnd(cs);
     const ocId = onCallIdForDay(today);
@@ -2039,8 +2072,10 @@ function updateRequestsBadge() {
     // shared menu-dropdown click handler below)
     const menuRcItem = document.getElementById('menuRecomputeItem');
 
-    // Hide entirely if not signed in OR if gross room / manager / histology (who cannot manage requests or PTO)
-    if (loggedInPathId === null || isGrossRoom() || isManager() || isReadOnlyGuest()) {
+    // Hide entirely if not signed in OR if gross room / manager / histology
+    // (who cannot manage requests or PTO). Lake Forest CAN file sendout
+    // requests, so it falls through to the requester path below.
+    if (loggedInPathId === null || isGrossRoom() || isManager() || isHistology()) {
         if (btn) btn.style.display = 'none';
         if (menuBtn) menuBtn.classList.remove('has-alert');
         if (menuReqItem) menuReqItem.style.display = 'none';
@@ -2060,6 +2095,9 @@ function updateRequestsBadge() {
 
     // ── Mobile menu items ──
     if (menuPtoLabel) menuPtoLabel.textContent = isAdmin() ? 'Manage PTO' : 'Request PTO';
+    // Lake Forest files sendout requests, not PTO — hide the PTO menu item.
+    const menuPtoItemMain = document.querySelector('.menu-item[data-action="pto"]');
+    if (menuPtoItemMain) menuPtoItemMain.style.display = isLakeForest() ? 'none' : '';
     if (menuReqItem) menuReqItem.style.display = '';
     if (menuReqLabel) menuReqLabel.textContent = isAdmin() ? 'Requests' : 'My Requests';
     if (menuExportItem) menuExportItem.style.display = isAdmin() ? '' : 'none';
@@ -2110,7 +2148,7 @@ function updateNavRequestsIndicator() {
     const dot = document.getElementById('navRequestsBadge');
     if (!dot) return;
 
-    if (!loggedInPathId || isGrossRoom() || isManager() || isReadOnlyGuest()) {
+    if (!loggedInPathId || isGrossRoom() || isManager() || isHistology()) {
         dot.style.display = 'none';
         return;
     }
@@ -2177,6 +2215,72 @@ function markRequestsPageSeen() {
     const key = 'reqDecisionAck_' + loggedInPathId;
     try { localStorage.setItem(key, String(Date.now())); } catch (_) {}
     updateNavRequestsIndicator();
+}
+
+// ────────────── CHANGES NAV DOT INDICATOR ──────────────
+// Blue dot on "Changes": an unseen change affecting the signed-in
+// pathologist's schedule has landed. Visiting the page stamps
+// chgSeenAck_{pathId} in localStorage; older changes count as seen.
+// Changes the user made themselves never light the dot.
+function _getChangesAckTs() {
+    if (loggedInPathId === null) return Date.now();
+    const key = 'chgSeenAck_' + loggedInPathId;
+    try {
+        const stored = localStorage.getItem(key);
+        if (stored === null) {
+            // First activation: baseline to now so stale history is silent.
+            const now = String(Date.now());
+            localStorage.setItem(key, now);
+            return +now;
+        }
+        return +stored || 0;
+    } catch (_) { return 0; }
+}
+
+function updateNavChangesIndicator() {
+    const dot = document.getElementById('navChangesBadge');
+    if (!dot) return;
+
+    // Lake Forest guest: light the dot for unseen sendout entries.
+    if (isLakeForest()) {
+        const ackTs = _getChangesAckTs();
+        const hasUnseen = Object.values(changes || {}).some(c =>
+            c && c.kind === 'lf_sendout'
+            && (c.at || 0) > ackTs
+            && c.byPathId !== loggedInPathId
+        );
+        if (hasUnseen) _setNavDot(dot, 'tone-changed', true);
+        else dot.style.display = 'none';
+        return;
+    }
+
+    // Otherwise only pathologist accounts can be change targets.
+    if (typeof loggedInPathId !== 'number') {
+        dot.style.display = 'none';
+        return;
+    }
+
+    const ackTs = _getChangesAckTs();
+    const hasUnseen = Object.values(changes || {}).some(c =>
+        c && (c.at || 0) > ackTs
+        && c.byPathId !== loggedInPathId
+        && _chgAffectsUser(c, loggedInPathId)
+    );
+
+    if (hasUnseen) {
+        _setNavDot(dot, 'tone-changed', true);
+    } else {
+        dot.style.display = 'none';
+    }
+}
+
+// Stamp the visit time so later updateNavChangesIndicator() calls know
+// which changes are "new".
+function markChangesPageSeen() {
+    if (typeof loggedInPathId !== 'number' && !isLakeForest()) return;
+    const key = 'chgSeenAck_' + loggedInPathId;
+    try { localStorage.setItem(key, String(Date.now())); } catch (_) {}
+    updateNavChangesIndicator();
 }
 
 // ────────────── REQUEST → DESCRIPTION FORMATTERS ──────────────
@@ -2256,6 +2360,26 @@ function describeRequest(req) {
             return {
                 title: `${who} → Service change`,
                 body: `Requesting service for <strong>${dateLabel}</strong> changed to <strong>${svc}</strong>.`,
+            };
+        }
+        case 'lf_sendout': {
+            const d = parseDate(req.payload.date);
+            const isRemove = req.payload.action === 'remove';
+            const title = `${who} → Sendout ${isRemove ? 'removal' : 'day'}`;
+            const verb = isRemove ? 'removed' : 'added';
+            if (req.payload.scope === 'week') {
+                const cs = getCallCycleStart(d);
+                const ce = getCallCycleEnd(cs);
+                const weekLabel = `${MONTHS_SHORT[cs.getMonth()]} ${cs.getDate()} – ${MONTHS_SHORT[ce.getMonth()]} ${ce.getDate()}, ${ce.getFullYear()}`;
+                return {
+                    title,
+                    body: `Requesting Lake Forest sendout be <strong>${verb}</strong> for the <strong>full call week</strong> of <strong>${weekLabel}</strong>.`,
+                };
+            }
+            const dateLabel = `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+            return {
+                title,
+                body: `Requesting Lake Forest sendout be <strong>${verb}</strong> for <strong>${dateLabel}</strong>.`,
             };
         }
         default:
@@ -2475,6 +2599,27 @@ async function approveRequest(reqKey) {
                 rcDayBeforeFix = true;
                 rcMessage = 'Service request approved. Recompute the future schedule for everyone using the rotation rules?';
             }
+        } else if (req.type === 'lf_sendout') {
+            // Mirror the admin LF modal writes. Sendout flags don't touch
+            // the service rotation, so no recompute offer.
+            const dKey = req.payload.date;
+            const scope = req.payload.scope || 'day';
+            const wKey = fmt(getCallCycleStart(parseDate(dKey)));
+            if (req.payload.action === 'remove') {
+                if (scope === 'week') {
+                    await db.ref('scheduler/lfSendoutWeeks/' + wKey).remove();
+                    await _clearLfDayFlagsForCycle(parseDate(dKey));
+                } else {
+                    await db.ref('scheduler/lfSendoutDays/' + dKey).remove();
+                }
+            } else {
+                if (scope === 'week') {
+                    await db.ref('scheduler/lfSendoutWeeks/' + wKey).set(true);
+                    await _clearLfDayFlagsForCycle(parseDate(dKey));
+                } else {
+                    await db.ref('scheduler/lfSendoutDays/' + dKey).set(true);
+                }
+            }
         }
 
         // Mark approved
@@ -2540,6 +2685,19 @@ async function approveRequest(reqKey) {
                         reqPid, req.payload.date, null, scope
                     )));
                 }
+            } else if (req.type === 'lf_sendout') {
+                const scope = req.payload.scope || 'day';
+                const isRemove = req.payload.action === 'remove';
+                logChange(Object.assign({
+                    kind: 'lf_sendout',
+                    type: isRemove ? 'lf_clear' : 'lf_set',
+                    source: 'request_approved', requestKey: reqKey,
+                    forPathId: reqPid,
+                    date: req.payload.date,
+                    scope: scope,
+                }, isRemove
+                    ? _chgSummaryLfClear(req.payload.date, scope)
+                    : _chgSummaryLfSet(req.payload.date, scope)));
             }
         } catch (logErr) {
             console.error('logChange (approveRequest) error:', logErr);
@@ -2663,6 +2821,29 @@ async function revokeApproval(reqKey) {
                 rcDayBeforeFix = true;
                 rcMessage     = 'Approval revoked and service override removed. Recompute the future schedule?';
             }
+
+        } else if (req.type === 'lf_sendout') {
+            // Reverse the flag change that was applied on approval.
+            const dKey  = req.payload.date;
+            const scope = req.payload.scope || 'day';
+            const wKey  = fmt(getCallCycleStart(parseDate(dKey)));
+            if (req.payload.action === 'remove') {
+                // Approval removed the flag — restore it.
+                if (scope === 'week') {
+                    await db.ref('scheduler/lfSendoutWeeks/' + wKey).set(true);
+                    await _clearLfDayFlagsForCycle(parseDate(dKey));
+                } else {
+                    await db.ref('scheduler/lfSendoutDays/' + dKey).set(true);
+                }
+            } else {
+                // Approval added the flag — clear it.
+                if (scope === 'week') {
+                    await db.ref('scheduler/lfSendoutWeeks/' + wKey).remove();
+                    await _clearLfDayFlagsForCycle(parseDate(dKey));
+                } else {
+                    await db.ref('scheduler/lfSendoutDays/' + dKey).remove();
+                }
+            }
         }
 
         // ── Mark as denied so the requester is notified ──────────────────────
@@ -2712,6 +2893,20 @@ async function revokeApproval(reqKey) {
                     date: req.payload.date,
                     scope: scope,
                 }, _chgSummaryServiceReset(req.payload.date, scope)));
+            } else if (req.type === 'lf_sendout') {
+                // Revocation applied the OPPOSITE of the original request.
+                const scope = req.payload.scope || 'day';
+                const restored = req.payload.action === 'remove';
+                logChange(Object.assign({
+                    kind: 'lf_sendout',
+                    type: restored ? 'lf_set' : 'lf_clear',
+                    source: 'request_revoked', requestKey: reqKey,
+                    forPathId: req.requesterId,
+                    date: req.payload.date,
+                    scope: scope,
+                }, restored
+                    ? _chgSummaryLfSet(req.payload.date, scope)
+                    : _chgSummaryLfClear(req.payload.date, scope)));
             }
         } catch (logErr) {
             console.error('logChange (revokeApproval) error:', logErr);
@@ -2854,6 +3049,7 @@ function renderRequestsList(targetEl, tabState) {
             'pto_remove': 'PTO REMOVE',
             'oncall_change': 'ON-CALL',
             'service_change': 'SERVICE',
+            'lf_sendout': 'LF SENDOUT',
         })[req.type] || req.type;
 
         // Approved service changes that are still locked on the schedule get
@@ -2957,6 +3153,8 @@ function renderRequestsPage() {
             'align-items: center',
         ].join(';');
         newBtn.addEventListener('click', () => {
+            // Lake Forest requests sendout days; everyone else requests PTO.
+            if (isLakeForest()) { openLfRequestModal(today); return; }
             const addBtn = document.getElementById('addPtoBtn');
             if (addBtn) addBtn.click();
         });
@@ -2970,6 +3168,8 @@ function renderRequestsPage() {
         }
     }
     newBtn.style.display = admin ? 'none' : 'inline-flex';
+    newBtn.innerHTML = '<span aria-hidden="true" style="margin-right:6px;font-weight:700;">+</span>'
+        + (isLakeForest() ? 'New Sendout Request' : 'New PTO Request');
 
     // Compute counts visible to this user (admin = all, else own only)
     let visible = Object.entries(requests || {}).filter(([, r]) => !!r);
@@ -3054,11 +3254,16 @@ regListener('scheduler/changes', snap => {
     changes = snap.exists() ? snap.val() : {};
     changesReady = true;
 
-    // If the Changes page is the active page, refresh it live
+    // If the Changes page is the active page, refresh it live — and count
+    // the new entries as seen, since the user is looking right at them.
     const _appEl = document.getElementById('app');
     if (_appEl && _appEl.getAttribute('data-page') === 'changes'
         && typeof renderChangesPage === 'function') {
         renderChangesPage();
+        markChangesPageSeen();
+    } else {
+        // Otherwise light the nav dot if something new affects this user
+        updateNavChangesIndicator();
     }
 }, err => {
     console.error('Firebase changes error:', err);
@@ -3323,7 +3528,19 @@ function _chgDescribeForUser(c, pid) {
         return { summary: s, details: '' };
     }
 
-    // Recompute: applies to everyone — leave the team-wide summary as-is.
+    // Recompute: applies to everyone's service schedule. Newer entries
+    // carry the actual changed-date range; older ones fall back to the
+    // team-wide summary.
+    if (c.kind === 'recompute') {
+        if (c.startDate && c.endDate) {
+            const whenBit = c.startDate === c.endDate
+                ? `on ${_chgFmtDate(c.startDate)}`
+                : `from ${_chgFmtDate(c.startDate)} to ${_chgFmtDate(c.endDate)}`;
+            return { summary: `Your service schedule has been changed ${whenBit}.`, details: '' };
+        }
+        return orig;
+    }
+
     return orig;
 }
 
@@ -3345,8 +3562,15 @@ function renderChangesPage() {
         activeChangesScope = 'all';
     }
 
+    // Lake Forest guest: the log is just sendout entries — no Mine/All
+    // split, so the scope tabs are hidden entirely.
+    const lfGuest = isLakeForest();
+    const tabsWrap = document.getElementById('changesPageTabs');
+    if (tabsWrap) tabsWrap.style.display = lfGuest ? 'none' : '';
+
     const allEntries = Object.entries(changes || {})
         .filter(([, c]) => !!c)
+        .filter(([, c]) => !lfGuest || c.kind === 'lf_sendout')
         .sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
 
     const mineEntries = meIsPath
@@ -3378,18 +3602,23 @@ function renderChangesPage() {
 
     // Subtitle + summary stat reflect the active scope
     if (subEl) {
-        subEl.textContent = showMine
-            ? 'Recent updates that affect your schedule, newest first.'
-            : 'Every recent update to the schedule, newest first.';
+        subEl.textContent = lfGuest
+            ? 'Lake Forest sendout updates, newest first.'
+            : showMine
+                ? 'Recent updates that affect your schedule, newest first.'
+                : 'Every recent update to the schedule, newest first.';
     }
     if (labelEl) labelEl.textContent = showMine ? 'Affecting you' : 'Logged';
     if (totalEl) totalEl.textContent = String(entries.length);
 
     if (entries.length === 0) {
-        const emptyHeadline = showMine ? 'Nothing for you yet.' : 'Nothing yet.';
-        const emptyBody = showMine
-            ? 'Changes that affect your schedule will appear here. Switch to <strong>All changes</strong> to see team-wide updates.'
-            : 'Schedule changes will appear here as they happen.';
+        const emptyHeadline = lfGuest ? 'No sendout updates yet.'
+            : showMine ? 'Nothing for you yet.' : 'Nothing yet.';
+        const emptyBody = lfGuest
+            ? 'Lake Forest sendout changes will appear here as they happen.'
+            : showMine
+                ? 'Changes that affect your schedule will appear here. Switch to <strong>All changes</strong> to see team-wide updates.'
+                : 'Schedule changes will appear here as they happen.';
         listEl.innerHTML = `
             <div class="empty">
                 <span class="empty-headline">${emptyHeadline}</span>
@@ -3474,6 +3703,9 @@ document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
 // the requests page does (defer a tick so setPage un-hides the shell first)
 document.querySelectorAll('.nav-item[data-page="changes"]').forEach(btn => {
     btn.addEventListener('click', () => {
+        // Mark changes seen before re-rendering so the nav dot clears at
+        // the same moment the content appears (no flash of old dot).
+        markChangesPageSeen();
         setTimeout(renderChangesPage, 0);
     });
 });
@@ -3790,13 +4022,14 @@ function renderTrackingPto() {
 }
 
 // ── Holiday call tracker ─────────────────────────────────────────────────
-// Who was on call for each of the six federal holidays, cumulative across
-// years — never resets, independent of the Period selector. Derived from
+// Who is on call for each of the six federal holidays from the fixed start
+// of FY26 (Sept 1, 2025) through 12 months from today — past holidays stay
+// counted forever, upcoming ones are projected from the rotation, but never
+// more than a year ahead. Independent of the Period selector. Derived from
 // onCallIdForDay (rotation + overrides), so swaps credit the actual coverer;
-// nothing is logged by hand. Counted from HOLIDAY_CALL_START_YEAR (2024,
-// when the rotation anchors begin) through today, on the true calendar date
-// (July 4 even on a Saturday — weekly call covers weekends).
-const HOLIDAY_CALL_START_YEAR = 2024;
+// nothing is logged by hand. Counted on the true calendar date (July 4 even
+// on a Saturday — weekly call covers weekends).
+const HOLIDAY_CALL_START = new Date(2025, 8, 1);   // Sept 1, 2025 (month 0-indexed)
 
 // Six federal holidays in calendar order (Jan → Dec). `name` matches what
 // getActualFederalHoliday returns; `label` is the column heading. Single
@@ -3811,18 +4044,19 @@ const HOLIDAY_ORDER = [
     { name: 'Christmas Day',    label: 'Christmas' },
 ];
 
-// Every actual federal holiday from HOLIDAY_CALL_START_YEAR through today,
-// resolved to whoever is on call that date: [{ date, name, pathId }].
-// `now` is injectable for tests; omit it in app code.
+// Every actual federal holiday from HOLIDAY_CALL_START (Sept 1, 2025)
+// through 12 months from today, resolved to whoever is on call that date:
+// [{ date, name, pathId }]. `now` is injectable for tests; omit it in
+// app code.
 function holidayCallEntries(now) {
     const today = now ? new Date(now) : new Date();
     today.setHours(0, 0, 0, 0);
+    const end = new Date(today);
+    end.setFullYear(end.getFullYear() + 1);
     const out = [];
-    for (let y = HOLIDAY_CALL_START_YEAR; y <= today.getFullYear(); y++) {
-        for (let d = new Date(y, 0, 1); d.getFullYear() === y && d <= today; d = addDays(d, 1)) {
-            const name = getActualFederalHoliday(d);
-            if (name) out.push({ date: new Date(d), name: name, pathId: onCallIdForDay(d) });
-        }
+    for (let d = new Date(HOLIDAY_CALL_START); d <= end; d = addDays(d, 1)) {
+        const name = getActualFederalHoliday(d);
+        if (name) out.push({ date: new Date(d), name: name, pathId: onCallIdForDay(d) });
     }
     return out;
 }
@@ -3836,7 +4070,12 @@ function renderTrackingHolidayCall() {
     const capEl = document.getElementById('trackingHolidayPeriod');
     if (!bodyEl) return;
 
-    if (capEl) capEl.textContent = HOLIDAY_CALL_START_YEAR + ' \u2013 present \u00b7 never resets';
+    if (capEl) {
+        const end = new Date();
+        end.setFullYear(end.getFullYear() + 1);
+        capEl.textContent = 'Sep 1, 2025 – ' + MONTHS_SHORT[end.getMonth()] + ' '
+            + end.getDate() + ', ' + end.getFullYear() + ' · includes upcoming call';
+    }
 
     // Header row: Pathologist | <each holiday> | Total.
     if (headEl) {
@@ -6500,6 +6739,20 @@ function cellContent(date) {
     // Pre-cutoff dates render as blank in year view too.
     if (isBeforeEarliest(date)) return null;
 
+    // Lake Forest guest: the only calendar content is sendout days, drawn
+    // with the same square-and-label treatment as call/PTO, badged "LF".
+    if (isLakeForest()) {
+        if (!isLfSendoutDay(date)) return null;
+        return {
+            folks: [],
+            background: '#4E2E85', // matches .lf-sendout banner purple
+            label: 'LF',
+            title: 'Lake Forest sendout',
+            multi: false,
+            count: false,
+        };
+    }
+
     // Check if a specific pathologist is selected in the dropdown
     const filterId = currentPathFilter === 'all' ? null : parseInt(currentPathFilter);
 
@@ -6556,7 +6809,7 @@ function renderYear() {
     // PTO day chips — shown alongside the mode toggle when in PTO mode.
     // Computes used/allotted days per pathologist for the displayed fiscal year.
     let ptoDaysSummaryHtml = '';
-    if (yearMode === 'pto' && pathologists && pathologists.length > 0) {
+    if (yearMode === 'pto' && !isLakeForest() && pathologists && pathologists.length > 0) {
         const fyRange = getFiscalYearRange(ayStart);
         ptoDaysSummaryHtml = `<div class="year-pto-summary">` +
             pathologists.map(p => {
@@ -6583,7 +6836,15 @@ function renderYear() {
       </div>
       ${ptoDaysSummaryHtml}`;
 
-    const keyHtml = `
+    // Lake Forest guest: no PTO/Call modes and no pathologist roster — the
+    // legend is a single key pill matching the LF sendout squares.
+    const keyHtml = isLakeForest()
+        ? `
+      <div class="key">
+        <span class="key-label">Key</span>
+        <span class="key-pill"><span class="swatch" style="--c:#4E2E85">LF</span>Lake Forest sendout</span>
+      </div>`
+        : `
       <div class="key">
         <span class="key-label">Pathologists</span>
         ${pathologists.map(p =>
@@ -6592,7 +6853,7 @@ function renderYear() {
       </div>`;
     let html = `<div class="year-view">
       <div class="year-legend">
-        ${modeTabsHtml}
+        ${isLakeForest() ? '' : modeTabsHtml}
         ${keyHtml}
       </div>`;
 
@@ -6617,8 +6878,6 @@ function renderYear() {
             if (td) classes.push('today');
             const holiday = inMonth ? getFederalHoliday(date) : null;
             if (holiday) classes.push('holiday');
-            // LF guest mode: mark sendout days (styled via body.lf-guest CSS)
-            if (inMonth && isLakeForest() && isLfSendoutDay(date)) classes.push('lf');
             if (content) {
                 classes.push('has-data');
                 if (content.multi) classes.push('multi');
@@ -6652,12 +6911,15 @@ function renderYear() {
         });
     });
 
-    // Click any day in the year view → open day detail modal (edit PTO / on-call)
+    // Click any day in the year view → open day detail modal (edit PTO /
+    // on-call). Lake Forest instead gets the sendout request modal
+    // prefilled with the clicked day.
     main.querySelectorAll('.md').forEach(el => {
         if (el.classList.contains('outside')) return;
         el.addEventListener('click', () => {
             const ds = el.dataset.date;
             if (!ds) return;
+            if (isLakeForest()) { openLfRequestModal(parseDate(ds)); return; }
             openDayDetail(parseDate(ds));
         });
     });
@@ -7728,10 +7990,11 @@ document.getElementById('lfModalBack').addEventListener('click', e => {
     if (e.target.id === 'lfModalBack') e.target.classList.remove('open');
 });
 
-// Helper: clear all per-day LF flags within the active call cycle. Called
-// after a week-scope add so day flags can't silently shadow it.
-async function _clearLfDayFlagsForCycle() {
-    const cs = getCallCycleStart(activeLfDate);
+// Helper: clear all per-day LF flags within the call cycle containing
+// `date`. Called after a week-scope add/remove so day flags can't silently
+// shadow the week flag (admin modal and request approvals both use it).
+async function _clearLfDayFlagsForCycle(date) {
+    const cs = getCallCycleStart(date);
     const ce = getCallCycleEnd(cs);
     const writes = {};
     for (let d = new Date(cs); d.getTime() <= ce.getTime(); d = addDays(d, 1)) {
@@ -7752,7 +8015,7 @@ document.getElementById('lfSave').addEventListener('click', async () => {
         await db.ref('scheduler/lfSendoutDays/' + activeLfDayKey).set(true);
     } else {
         await db.ref('scheduler/lfSendoutWeeks/' + activeLfWeekKey).set(true);
-        await _clearLfDayFlagsForCycle();
+        await _clearLfDayFlagsForCycle(activeLfDate);
     }
     try {
         logChange(Object.assign({
@@ -7776,7 +8039,7 @@ document.getElementById('lfRemove').addEventListener('click', async () => {
         await db.ref('scheduler/lfSendoutWeeks/' + activeLfWeekKey).remove();
         // Also clear any day-level flags inside the cycle so the cycle fully
         // reverts to "no LF sendout" without leftover crumbs.
-        await _clearLfDayFlagsForCycle();
+        await _clearLfDayFlagsForCycle(activeLfDate);
     }
     try {
         logChange(Object.assign({
@@ -7789,6 +8052,98 @@ document.getElementById('lfRemove').addEventListener('click', async () => {
         console.error('logChange (lf_clear) error:', e);
     }
     document.getElementById('lfModalBack').classList.remove('open');
+});
+
+// ────────────── LAKE FOREST SENDOUT REQUEST MODAL (LF guest) ──────────────
+// The read-only Lake Forest account can't write flags directly. Instead it
+// files an 'lf_sendout' request — payload { date, scope: 'day'|'week',
+// action: 'add'|'remove' } — that the admin approves or denies from the
+// regular requests queue. The modal reads the current flag state for the
+// chosen date/scope and offers whichever action makes sense.
+let _lfReqAction = null; // 'add' | 'remove' | null (nothing sensible to ask)
+
+function _refreshLfReqModalUi() {
+    const statusEl = document.getElementById('lfReqStatus');
+    const submitBtn = document.getElementById('lfReqSubmit');
+    const v = document.getElementById('lfReqDate').value;
+    _lfReqAction = null;
+
+    if (!v) {
+        statusEl.textContent = 'Pick a date to get started.';
+        statusEl.style.background = 'var(--bg-2)';
+        statusEl.style.color = 'var(--ink-2)';
+        submitBtn.disabled = true;
+        return;
+    }
+
+    const date = parseDate(v);
+    const scope = document.querySelector('input[name="lfReqScope"]:checked').value;
+    const dayOn = _lfDayFlag(date);
+    const weekOn = _lfWeekFlag(date);
+    const cs = getCallCycleStart(date);
+    const ce = getCallCycleEnd(cs);
+    const weekLabel = `${MONTHS_SHORT[cs.getMonth()]} ${cs.getDate()} – ${MONTHS_SHORT[ce.getMonth()]} ${ce.getDate()}, ${ce.getFullYear()}`;
+
+    if (scope === 'day') {
+        if (dayOn) {
+            _lfReqAction = 'remove';
+            statusEl.textContent = 'This day is currently a sendout day. Submit to request its removal.';
+            submitBtn.textContent = 'Request removal for this day';
+        } else if (weekOn) {
+            statusEl.textContent = `The full call week (${weekLabel}) is flagged — switch to "Full call week" to request removal.`;
+            submitBtn.textContent = 'Submit request';
+        } else {
+            _lfReqAction = 'add';
+            statusEl.textContent = 'Not currently a sendout day. Submit to request it be added.';
+            submitBtn.textContent = 'Request sendout for this day';
+        }
+    } else {
+        if (weekOn) {
+            _lfReqAction = 'remove';
+            statusEl.textContent = `The call week of ${weekLabel} is currently flagged. Submit to request its removal.`;
+            submitBtn.textContent = 'Request removal for full week';
+        } else {
+            _lfReqAction = 'add';
+            statusEl.textContent = `Submit to request sendout for every day in the call week of ${weekLabel}.`;
+            submitBtn.textContent = 'Request sendout for full week';
+        }
+    }
+    statusEl.style.background = _lfReqAction ? 'var(--bg-2)' : 'var(--accent-soft)';
+    statusEl.style.color = 'var(--ink-2)';
+    submitBtn.disabled = !_lfReqAction;
+}
+
+function openLfRequestModal(date) {
+    if (!isLakeForest()) return;
+    document.getElementById('lfReqDate').value = fmt(date || today);
+    document.getElementById('lfReqScopeDay').checked = true;
+    document.getElementById('lfReqNote').value = '';
+    _refreshLfReqModalUi();
+    document.getElementById('lfReqModalBack').classList.add('open');
+}
+
+document.getElementById('lfReqDate').addEventListener('change', _refreshLfReqModalUi);
+document.querySelectorAll('input[name="lfReqScope"]').forEach(radio => {
+    radio.addEventListener('change', _refreshLfReqModalUi);
+});
+document.getElementById('lfReqCancel').addEventListener('click', () => {
+    document.getElementById('lfReqModalBack').classList.remove('open');
+});
+document.getElementById('lfReqModalBack').addEventListener('click', e => {
+    if (e.target.id === 'lfReqModalBack') e.target.classList.remove('open');
+});
+document.getElementById('lfReqSubmit').addEventListener('click', async () => {
+    if (!isLakeForest() || !_lfReqAction) return;
+    const v = document.getElementById('lfReqDate').value;
+    if (!v) return;
+    const scope = document.querySelector('input[name="lfReqScope"]:checked').value;
+    const note = document.getElementById('lfReqNote').value;
+    const ok = await submitRequest('lf_sendout', {
+        date: v,
+        scope: scope,
+        action: _lfReqAction,
+    }, note);
+    if (ok) document.getElementById('lfReqModalBack').classList.remove('open');
 });
 
 // ────────────── NATALIE PTO MODAL (Gross Room + admin) ──────────────
@@ -9273,9 +9628,17 @@ document.getElementById('exportDownload').addEventListener('click', () => {
             const b = e.target.closest('.seg-btn');
             if (!b) return;
             const v = b.dataset.value;
-            if (!VALID_DEFAULT_VIEWS.includes(v)) return;
-            if (settings.defaultView === v) return;
-            settings.defaultView = v;
+            // Lake Forest's choice lands in its own field so it never
+            // clobbers a pathologist's saved default on a shared browser.
+            if (isLakeForest()) {
+                if (!VALID_LF_DEFAULT_VIEWS.includes(v)) return;
+                if (settings.lfDefaultView === v) return;
+                settings.lfDefaultView = v;
+            } else {
+                if (!VALID_DEFAULT_VIEWS.includes(v)) return;
+                if (settings.defaultView === v) return;
+                settings.defaultView = v;
+            }
             saveSettings();
             applySettings();
         });
@@ -9339,7 +9702,7 @@ document.getElementById('exportDownload').addEventListener('click', () => {
     // Switch the visible "page": schedule shows toolbar+main; others show
     // their page-shell; settings is the full settings page.
     function setPage(page) {
-        if (isLakeForest() && page !== 'schedule') page = 'schedule'; // LF guest: schedule only
+        if (isLakeForest() && page === 'tracking') page = 'schedule'; // LF guest: no tracking page
         if (!VALID_PAGES.includes(page)) page = 'schedule';
         currentPage = page;
 

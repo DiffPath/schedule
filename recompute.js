@@ -18,6 +18,7 @@
 //   recomputeFutureSchedule(pinnedByDay, opts)
 //   maybeOfferRecompute(pinnedByDay, opts)
 //   triggerManualRecompute()
+//   backFixDayBefore(pinnedByDay, fromDate)
 //
 // Globals this file reads from schedule.js:
 //   state:    pathologists, vacations, requests, requestsReady,
@@ -26,7 +27,8 @@
 //   helpers:  isOffSiteServiceId, isBeforeEarliest, fmt, parseDate, addDays,
 //             isWeekend, getFederalHoliday, prevWorkday, nextWorkday,
 //             workdaysInCallCycle, getDayAssignments, isOnPto, isAdmin,
-//             showToast, escapeHtml, logChange
+//             showToast, escapeHtml, logChange, _chgShortName,
+//             _chgServiceName, _chgFmtDate
 // ════════════════════════════════════════════════════════════════════════
 
 // ────────────── ROTATION OPTIMIZER (recompute future schedule) ──────────────
@@ -624,6 +626,453 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
     };
 }
 
+// ────────────── BACK-FIX (repair "Bigs the day before" conflicts) ──────────
+//
+// Runs right after an admin change saves (from maybeOfferRecompute, which
+// every change flow funnels through — day edits, resets, request approvals,
+// PTO changes). When the just-made change puts a pathologist on Breast
+// Bx/WFH (or starts their PTO) on day X while they hold McH Bigs on the
+// workday before, the soft-rule flag lights up on X−1. The render-time
+// hard-rule layer can't always fix that: once X−1 has been materialized
+// into serviceOverrides by an earlier recompute, every slot on it is
+// treated as locked and nothing can move. And the optimizer's day-before
+// pass can't see the conflict either — its scoring intentionally has no
+// forward bigs-before-WFH component (see _scoreAssignment). This pass
+// repairs the day(s) before the change explicitly:
+//
+//   1. Re-arrange X−1 to take the pathologist off Bigs — Huntley is the
+//      PREFERRED pre-WFH service. (PTO triggers prefer any non-Huntley
+//      service — no stated Huntley preference before PTO.) In a natural
+//      rotation a two-way swap on X−1 alone is NEVER rule-clean (the
+//      Huntley holder came from Bigs on X−2, the fixed pathologist came
+//      from Cyto on X−2 — either swap direction repeats a service), so
+//      when X−1 alone can't be fixed the search widens to re-arranging
+//      X−2 as well. Never further back than that.
+//   2. Huntley is the light service, so netting an EXTRA Huntley day out
+//      of the fix would skew fairness. When the fix lands on Huntley, one
+//      of the pathologist's OTHER Huntley days nearby (previous days
+//      first, never in the past; upcoming days as fallback) is handed to
+//      the displaced partner in a second swap — everyone's Huntley count
+//      ends up exactly where it started. WFH days are never taken in
+//      trade (also a light day — trading one away would still lighten
+//      the fixed pathologist's week).
+//   3. If no compensating swap exists, prefer Cyto/Gross for X−1;
+//      Huntley-without-compensation is the last resort before leaving
+//      the flag in place.
+//
+// Every swap is vetted against the cross-day service rules in both
+// directions (no Bigs before PTO/WFH, no WFH after Bigs, no same-service
+// repeats) and never touches admin-locked (serviceLocks) or caller-pinned
+// slots. If no clean swap exists the day is left alone and the flag stays
+// — exactly the pre-existing behavior.
+//
+// Touched days are written as full-day override maps (the same shape
+// recompute writes) and merged into pinnedByDay, so an immediately-
+// following recompute preserves the repair.
+
+const BACKFIX_COMP_WINDOW = 14;   // workdays scanned each direction for the fairness swap
+
+function _bfIsBigs(sid) { return sid === 'bigs' || sid === 'cytobigs'; }
+
+function _bfLockedAt(dayKey, pid) {
+    const l = (typeof serviceLocks === 'object' && serviceLocks) ? serviceLocks[dayKey] : null;
+    return !!(l && (l[pid] !== undefined || l[String(pid)] !== undefined));
+}
+
+function _bfPinnedAt(pinnedByDay, dayKey, pid) {
+    const p = pinnedByDay && pinnedByDay[dayKey];
+    return !!(p && (p[pid] !== undefined || p[String(pid)] !== undefined));
+}
+
+// Effective service id for pid on date, with caller pins overlaid on the
+// rendered assignment (the pins are the just-saved change, which the
+// Firebase listener may not have echoed back yet). null when not working
+// a regular service that day.
+function _bfServiceAt(pinnedByDay, date, pid) {
+    const pins = pinnedByDay && pinnedByDay[fmt(date)];
+    const pinned = pins && (pins[pid] !== undefined ? pins[pid] : pins[String(pid)]);
+    if (pinned !== undefined) {
+        return (pinned && !isOffSiteServiceId(pinned)) ? pinned : null;
+    }
+    const a = getDayAssignments(date)[pid];
+    return (a && a.type === 'service' && a.service) ? a.service.id : null;
+}
+
+// Would giving `pid` service `sid` on `date` break a cross-day rule against
+// its workday neighbours? `planned` maps dayKey → {pid: sid} for swaps this
+// back-fix has already decided, so adjacent decisions see each other.
+function _bfCreatesViolation(pinnedByDay, planned, date, pid, sid) {
+    const svcAt = (d, p) => {
+        const k = fmt(d);
+        if (planned[k] && planned[k][p] !== undefined) return planned[k][p];
+        return _bfServiceAt(pinnedByDay, d, p);
+    };
+    const ySid = svcAt(prevWorkday(date), pid);
+    const tmrw = nextWorkday(date);
+    const tSid = svcAt(tmrw, pid);
+    // Same-service repeat (bigs and cytobigs count as the same station).
+    if (sid === ySid || sid === tSid) return true;
+    if (_bfIsBigs(sid) && (_bfIsBigs(ySid) || _bfIsBigs(tSid))) return true;
+    // No Bigs the day before PTO or WFH.
+    if (_bfIsBigs(sid) && (isOnPto(pid, tmrw) || tSid === 'wfh')) return true;
+    // No WFH the day after Bigs.
+    if (sid === 'wfh' && _bfIsBigs(ySid)) return true;
+    return false;
+}
+
+// Effective {pid: serviceId} map for a day (regular services only).
+function _bfDayMap(pinnedByDay, date) {
+    const m = {};
+    pathologists.forEach(p => {
+        const sid = _bfServiceAt(pinnedByDay, date, p.id);
+        if (sid) m[p.id] = sid;
+    });
+    return m;
+}
+
+// Same-station repeat: identical service, or both in the bigs family.
+function _bfRepeat(a, b) {
+    return !!a && !!b && (a === b || (_bfIsBigs(a) && _bfIsBigs(b)));
+}
+
+// Rule violations for a candidate day map given its neighbour maps (either
+// may itself be a candidate). Cross-boundary rules are visible from both
+// sides, so checking each candidate day against both neighbours covers
+// every boundary.
+function _bfMapViolations(date, dayMap, prevMap, nextMap) {
+    let v = 0;
+    const tmrw = nextWorkday(date);
+    for (const pid in dayMap) {
+        const sid = dayMap[pid];
+        const prevSid = prevMap ? prevMap[pid] : null;
+        const nextSid = nextMap ? nextMap[pid] : null;
+        if (_bfRepeat(sid, prevSid) || _bfRepeat(sid, nextSid)) v++;
+        const p = pathologists.find(x => String(x.id) === String(pid));
+        if (_bfIsBigs(sid) && ((p && isOnPto(p.id, tmrw)) || nextSid === 'wfh')) v++;
+        if (sid === 'wfh' && _bfIsBigs(prevSid)) v++;
+    }
+    return v;
+}
+
+// All rule-checkable arrangements for a day: locked/pinned slots keep their
+// service, the remaining required services permute over the free slots.
+// Returns [] when the day can't be searched (too few working, pins outside
+// the required set, …) — the caller then leaves the day alone.
+function _bfCandidateMaps(pinnedByDay, date) {
+    const cur = _bfDayMap(pinnedByDay, date);
+    const pids = Object.keys(cur);
+    const required = requiredServicesFor(pids.length);
+    if (!required) return [];
+    const k = fmt(date);
+    const fixed = {};
+    const remaining = required.slice();
+    const free = [];
+    pids.forEach(pid => {
+        if (_bfLockedAt(k, pid) || _bfPinnedAt(pinnedByDay, k, pid)) {
+            fixed[pid] = cur[pid];
+            const i = remaining.indexOf(cur[pid]);
+            if (i < 0) return;   // pinned outside required → handled below
+            remaining.splice(i, 1);
+        } else {
+            free.push(pid);
+        }
+    });
+    if (remaining.length !== free.length) return [];
+    const seen = new Set();
+    const out = [];
+    _allPermutations(remaining).forEach(perm => {
+        const key = perm.join('|');
+        if (seen.has(key)) return;   // extra-wfh days produce duplicate perms
+        seen.add(key);
+        const m = Object.assign({}, fixed);
+        free.forEach((pid, i) => { m[pid] = perm[i]; });
+        out.push(m);
+    });
+    return out;
+}
+
+// Search for a rule-clean re-arrangement of X−1 (and, only when X−1 alone
+// can't be fixed, X−2 jointly — "adjust 1–2 days beforehand") that takes P
+// off Bigs on X−1. preferHuntley ranks P-on-Huntley solutions first (the
+// pre-WFH preference); banHuntleyForP forbids them outright (used to avoid
+// an uncompensated extra Huntley day). Ties break on fewest changed slots.
+// Returns {maps: {dayKey: fullDayMap}, pHuntley, changed} or null.
+function _bfSolve(pinnedByDay, P, X, Xm1, preferHuntley, banHuntleyForP) {
+    const kXm1 = fmt(Xm1);
+    const curXm1 = _bfDayMap(pinnedByDay, Xm1);
+    const nextMap = _bfDayMap(pinnedByDay, X);
+    const Xm2 = prevWorkday(Xm1);
+    const canTouchXm2 = Xm2.getTime() >= today.getTime() && !isBeforeEarliest(Xm2);
+    const curXm2 = _bfDayMap(pinnedByDay, Xm2);
+    const xm3Map = _bfDayMap(pinnedByDay, prevWorkday(Xm2));
+
+    const pSidOf = m => (m[P] !== undefined ? m[P] : m[String(P)]);
+    const okForP = m => {
+        const sid = pSidOf(m);
+        if (!sid || _bfIsBigs(sid)) return false;
+        if (banHuntleyForP && sid === 'huntley') return false;
+        return true;
+    };
+    const changedCount = (m, cur) => {
+        let c = 0;
+        for (const pid in m) if (m[pid] !== cur[pid]) c++;
+        return c;
+    };
+
+    let best = null;
+    const consider = (maps, pSid, changed) => {
+        const cand = { maps: maps, pHuntley: pSid === 'huntley', changed: changed };
+        const rank = c => [
+            preferHuntley ? (c.pHuntley ? 0 : 1) : (c.pHuntley ? 1 : 0),
+            c.changed,
+        ];
+        if (!best) { best = cand; return; }
+        const a = rank(cand), b = rank(best);
+        if (a[0] !== b[0] ? a[0] < b[0] : a[1] < b[1]) best = cand;
+    };
+
+    // Pass 1: X−1 alone (X−2 stays as-is).
+    _bfCandidateMaps(pinnedByDay, Xm1).forEach(m => {
+        if (!okForP(m)) return;
+        if (_bfMapViolations(Xm1, m, curXm2, nextMap) > 0) return;
+        const maps = {};
+        maps[kXm1] = m;
+        consider(maps, pSidOf(m), changedCount(m, curXm1));
+    });
+    if (best) return best;
+    if (!canTouchXm2) return null;
+
+    // Pass 2: joint X−2 + X−1 (at most 24×24 combos — trivial to search).
+    const kXm2 = fmt(Xm2);
+    const xm1Cands = _bfCandidateMaps(pinnedByDay, Xm1);
+    _bfCandidateMaps(pinnedByDay, Xm2).forEach(m2 => {
+        if (banHuntleyForP && pSidOf(m2) === 'huntley') return;
+        if (_bfMapViolations(Xm2, m2, xm3Map, null) > 0) return;   // prefilter vs X−3
+        xm1Cands.forEach(m1 => {
+            if (!okForP(m1)) return;
+            if (_bfMapViolations(Xm1, m1, m2, nextMap) > 0) return;
+            if (_bfMapViolations(Xm2, m2, xm3Map, m1) > 0) return;
+            const maps = {};
+            maps[kXm2] = m2;
+            maps[kXm1] = m1;
+            consider(maps, pSidOf(m1),
+                changedCount(m1, curXm1) + changedCount(m2, curXm2));
+        });
+    });
+    return best;
+}
+
+// Find the fairness-compensation swap: a nearby day where `pid` already has
+// Huntley that can be handed to a partner in exchange for the partner's
+// McHenry station service that day. Previous days first ("a previous
+// Huntley day"), never before today; upcoming days after X as a fallback.
+// Partner preference: `preferredPartner` (whoever lost Huntley in the X−1
+// repair) first, then whoever has the fewest Huntley days coming up (they
+// benefit most from receiving one). Structurally the loser often CAN'T
+// trade — in a clean rotation they hold WFH on every one of pid's Huntley
+// days — which is why other partners are considered at all.
+// Returns {date, partner, pSvc} or null.
+function _bfFindCompSwap(pinnedByDay, planned, pid, preferredPartner, X, Xm1) {
+    const huntCount = q => {
+        let c = 0;
+        let d2 = new Date(today);
+        for (let i = 0; i < 28; i++, d2 = addDays(d2, 1)) {
+            if (isWeekend(d2) || getFederalHoliday(d2)) continue;
+            if (_bfServiceAt(pinnedByDay, d2, q) === 'huntley') c++;
+        }
+        return c;
+    };
+    const others = pathologists.map(p => p.id)
+        .filter(q => String(q) !== String(pid) && String(q) !== String(preferredPartner))
+        .sort((a, b) => huntCount(a) - huntCount(b));
+    const partners = (preferredPartner !== null && preferredPartner !== undefined
+        ? [preferredPartner] : []).concat(others);
+
+    const tryDay = d => {
+        const k = fmt(d);
+        if (planned[k]) return null;
+        if (_bfServiceAt(pinnedByDay, d, pid) !== 'huntley') return null;
+        if (_bfLockedAt(k, pid) || _bfPinnedAt(pinnedByDay, k, pid)) return null;
+        for (const q of partners) {
+            const qSid = _bfServiceAt(pinnedByDay, d, q);
+            // Only trade for a McHenry station day (cyto/bigs/cytobigs):
+            // taking a WFH day in trade would still lighten pid's week.
+            if (!qSid || qSid === 'huntley' || qSid === 'wfh') continue;
+            if (_bfLockedAt(k, q) || _bfPinnedAt(pinnedByDay, k, q)) continue;
+            if (_bfCreatesViolation(pinnedByDay, planned, d, pid, qSid)) continue;
+            if (_bfCreatesViolation(pinnedByDay, planned, d, q, 'huntley')) continue;
+            return { date: new Date(d), partner: q, pSvc: qSid };
+        }
+        return null;
+    };
+    let d = prevWorkday(Xm1);
+    for (let i = 0; i < BACKFIX_COMP_WINDOW && d.getTime() >= today.getTime(); i++) {
+        const hit = tryDay(d);
+        if (hit) return hit;
+        d = prevWorkday(d);
+    }
+    d = nextWorkday(X);
+    for (let i = 0; i < BACKFIX_COMP_WINDOW; i++) {
+        const hit = tryDay(d);
+        if (hit) return hit;
+        d = nextWorkday(d);
+    }
+    return null;
+}
+
+// Main entry — see the section comment above. Mutates pinnedByDay (adds
+// pins for repaired days) and writes serviceOverrides. Returns the number
+// of days repaired (0 = nothing needed or nothing safely fixable).
+async function backFixDayBefore(pinnedByDay, fromDate) {
+    // ── Collect triggers: {pid, date, kind} ─────────────────────────────
+    const triggers = [];
+    const seen = new Set();
+    const addTrigger = (pid, date, kind) => {
+        const p = pathologists.find(x => String(x.id) === String(pid));
+        if (!p) return;
+        const key = p.id + '|' + fmt(date);
+        if (seen.has(key)) return;
+        seen.add(key);
+        triggers.push({ pid: p.id, date: date, kind: kind });
+    };
+    for (const dayKey in (pinnedByDay || {})) {
+        const pins = pinnedByDay[dayKey];
+        for (const pid in pins) {
+            if (pins[pid] !== 'wfh') continue;
+            const d = parseDate(dayKey);
+            if (!d || d.getTime() < today.getTime()) continue;
+            addTrigger(pid, d, 'wfh');
+        }
+    }
+    // PTO beginning on fromDate (PTO adds/approvals don't pin services).
+    if (fromDate && fromDate.getTime() >= today.getTime()) {
+        pathologists.forEach(p => {
+            if (!isOnPto(p.id, fromDate)) return;
+            if (isOnPto(p.id, prevWorkday(fromDate))) return;   // not the start day
+            addTrigger(p.id, fromDate, 'pto');
+        });
+    }
+    if (triggers.length === 0) return 0;
+    triggers.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    // ── Plan repairs ────────────────────────────────────────────────────
+    const planned = {};   // dayKey → {pid: serviceId}
+    const notes = [];
+    for (const t of triggers.slice(0, 4)) {
+        const Xm1 = prevWorkday(t.date);
+        if (Xm1.getTime() < today.getTime() || isBeforeEarliest(Xm1)) continue;
+        const kXm1 = fmt(Xm1);
+        if (planned[kXm1]) continue;   // already repaired for an earlier trigger
+        const pSid = _bfServiceAt(pinnedByDay, Xm1, t.pid);
+        if (!_bfIsBigs(pSid)) continue;   // no bigs-the-day-before conflict
+        if (_bfLockedAt(kXm1, t.pid) || _bfPinnedAt(pinnedByDay, kXm1, t.pid)) continue;
+
+        // Huntley is preferred before WFH; before PTO any non-Bigs service
+        // is equally fine, so prefer NOT consuming a Huntley slot there.
+        const preferHun = t.kind === 'wfh';
+        let solution = _bfSolve(pinnedByDay, t.pid, t.date, Xm1, preferHun, false);
+        if (!solution) continue;   // no clean arrangement — leave the flag
+
+        // Net change in `pid`'s Huntley-day count across the solution days.
+        const huntDelta = (sol, pid) => {
+            let dlt = 0;
+            for (const k in sol.maps) {
+                const d = parseDate(k);
+                const beforeSid = _bfServiceAt(pinnedByDay, d, pid);
+                const afterSid = sol.maps[k][pid];
+                if (afterSid === 'huntley' && beforeSid !== 'huntley') dlt++;
+                if (beforeSid === 'huntley' && afterSid !== 'huntley') dlt--;
+            }
+            return dlt;
+        };
+
+        // ── Fairness ── the fix must not hand the pathologist a net extra
+        // Huntley day. If it does, trade one of their OTHER Huntley days to
+        // whoever lost Huntley in the repair; failing that, re-solve with
+        // Huntley banned for them; failing that too, the extra-Huntley fix
+        // stands (clearing the flag beats perfect fairness).
+        let comp = null;
+        if (huntDelta(solution, t.pid) > 0) {
+            const loser = pathologists.find(p =>
+                String(p.id) !== String(t.pid) && huntDelta(solution, p.id) < 0);
+            const prov = Object.assign({}, planned, solution.maps);
+            comp = _bfFindCompSwap(pinnedByDay, prov, t.pid,
+                loser ? loser.id : null, t.date, Xm1);
+            if (!comp) {
+                const noHun = _bfSolve(pinnedByDay, t.pid, t.date, Xm1, false, true);
+                if (noHun) solution = noHun;
+            }
+        }
+
+        const who = _chgShortName(parseInt(t.pid, 10));
+        for (const k in solution.maps) {
+            const d = parseDate(k);
+            const changes = [];
+            for (const pid in solution.maps[k]) {
+                const beforeSid = _bfServiceAt(pinnedByDay, d, pid);
+                const afterSid = solution.maps[k][pid];
+                if (beforeSid !== afterSid) {
+                    changes.push(_chgShortName(parseInt(pid, 10)) + ' → ' + _chgServiceName(afterSid));
+                }
+            }
+            if (changes.length > 0) notes.push(_chgFmtDate(k) + ': ' + changes.join(', '));
+            planned[k] = solution.maps[k];
+        }
+        if (comp) {
+            const kY = fmt(comp.date);
+            planned[kY] = {};
+            planned[kY][t.pid] = comp.pSvc;
+            planned[kY][comp.partner] = 'huntley';
+            notes.push('fairness: ' + who + '’s Huntley on ' + _chgFmtDate(kY)
+                + ' → ' + _chgShortName(parseInt(comp.partner, 10))
+                + ' (' + who + ' takes ' + _chgServiceName(comp.pSvc) + ')');
+        }
+    }
+
+    const dayKeys = Object.keys(planned);
+    if (dayKeys.length === 0) return 0;
+
+    // ── Write full-day override maps (recompute's write shape) ──────────
+    const writes = {};
+    dayKeys.forEach(k => {
+        const d = parseDate(k);
+        const map = {};
+        pathologists.forEach(p => {
+            const swap = planned[k][p.id] !== undefined ? planned[k][p.id] : planned[k][String(p.id)];
+            const sid = swap !== undefined ? swap : _bfServiceAt(pinnedByDay, d, p.id);
+            if (sid) map[p.id] = sid;
+        });
+        // Preserve override entries for non-working paths (off-site etc.).
+        const dbDay = (typeof serviceOverrides === 'object' && serviceOverrides && serviceOverrides[k]) || {};
+        const preserved = {};
+        for (const pid in dbDay) {
+            if (!(pid in map)) preserved[pid] = dbDay[pid];
+        }
+        writes['scheduler/serviceOverrides/' + k] = Object.assign({}, preserved, map);
+    });
+    await db.ref().update(writes);
+
+    // Pin the swapped slots so an immediately-following recompute keeps them.
+    dayKeys.forEach(k => {
+        pinnedByDay[k] = Object.assign({}, pinnedByDay[k], planned[k]);
+    });
+
+    if (notes.length > 0) {
+        showToast('Adjusted day(s) before the change — ' + notes.join(' · '));
+        try {
+            logChange({
+                kind: 'service',
+                type: 'service_backfix',
+                days: dayKeys.slice().sort(),
+                summary: 'Auto-adjusted day(s) before a change — ' + notes.join('; '),
+            });
+        } catch (logErr) {
+            console.error('logChange (backFixDayBefore) error:', logErr);
+        }
+    }
+    return dayKeys.length;
+}
+
 // ────────────── MANUAL RECOMPUTE ──────────────
 // Standalone trigger: opens the Recompute Schedule modal so the admin can
 // either pick a "from today" horizon (30/90/180/365 days) or specify a
@@ -783,11 +1232,22 @@ function showRecomputeDialog(opts) {
 // Wrapper used from save handlers: only offers recompute to admins, only
 // when fromDate is today or later, then runs recomputeFutureSchedule().
 async function maybeOfferRecompute(pinnedByDay, opts) {
+    pinnedByDay = pinnedByDay || {};
     opts = opts || {};
     if (!isAdmin()) return;
     if (!opts.fromDate) return;
     // Don't rewrite history
     if (opts.fromDate.getTime() < today.getTime()) return;
+
+    // Repair any "Bigs the day before WFH/PTO" conflict the change just
+    // created (see backFixDayBefore). Runs before the recompute dialog so
+    // the fix happens even when the admin picks "Just apply this change";
+    // repaired days are merged into pinnedByDay so a recompute keeps them.
+    try {
+        await backFixDayBefore(pinnedByDay, opts.fromDate);
+    } catch (bfErr) {
+        console.error('backFixDayBefore error:', bfErr);
+    }
 
     let choice;
     try {

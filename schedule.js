@@ -1877,9 +1877,11 @@ function renderSidebar() {
     const exportBtn = document.getElementById('exportBtn');
     if (exportBtn) exportBtn.style.display = admin ? '' : 'none';
 
-    // ── Recompute Schedule button (admin-only) ──
+    // ── Recompute Schedule buttons (admin-only) ──
     const rcBtn = document.getElementById('recomputeBtn');
     if (rcBtn) rcBtn.style.display = admin ? '' : 'none';
+    const sbRcBtn = document.getElementById('sidebarRecomputeBtn');
+    if (sbRcBtn) sbRcBtn.style.display = admin ? '' : 'none';
 
     // Gross room / manager / histology cannot manage PTO or view requests at all — hide those buttons
     const addPtoBtnEl = document.getElementById('addPtoBtn');

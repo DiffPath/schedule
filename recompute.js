@@ -1318,6 +1318,16 @@ document.getElementById('recomputeBtn').addEventListener('click', () => {
     triggerManualRecompute();
 });
 
+// Visible sidebar entry point (admin-only; renderSidebar toggles visibility).
+// Delegates to the #recomputeBtn proxy so the open logic stays in one place.
+(function wireSidebarRecompute() {
+    const btn = document.getElementById('sidebarRecomputeBtn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+        document.getElementById('recomputeBtn').click();
+    });
+})();
+
 // Mode toggle: switch between "from today" horizon and a custom date range
 (function wireRecomputeModeToggle() {
     const modeHorizon = document.getElementById('rcModeHorizon');

@@ -1690,6 +1690,9 @@ auth.onAuthStateChanged(user => {
         hideLoginOverlay();
         // Reset Changes page scope to its default for the new session.
         activeChangesScope = 'mine';
+        // Requests page likewise lands on the Pending tab — without this the
+        // tab selection leaks from the previous user in the same session.
+        activeRequestsPageTab = 'pending';
         // Start the data listeners now that reads are permitted. When data
         // arrives, checkReady() handles filter defaults + render.
         startDataListeners();
@@ -1835,12 +1838,25 @@ regListener('scheduler/requests', snap => {
 
     // After the first load, detect newly-added pending requests so we can
     // show a small alert to the admin (one toast per refresh, not spammy).
+    // Requests the admin sent out themselves (lf_dates_request) don't count —
+    // those wait on the target, not on the admin.
     if (_seenRequestKeys && isAdmin()) {
         const newPending = Object.entries(next).filter(([k, r]) =>
             !_seenRequestKeys.has(k) && r && r.status === 'pending'
+            && r.requesterId !== loggedInPathId
         );
         if (newPending.length > 0) {
             showToast(`${newPending.length} new request${newPending.length === 1 ? '' : 's'} pending review.`);
+        }
+    } else if (_seenRequestKeys && loggedInPathId !== null && !isAdmin()) {
+        // Non-admins get a toast when a new pending request is aimed AT them
+        // (admin asking Lake Forest for sendout dates).
+        const newForMe = Object.entries(next).filter(([k, r]) =>
+            !_seenRequestKeys.has(k) && r && r.status === 'pending'
+            && r.targetId === loggedInPathId
+        );
+        if (newForMe.length > 0) {
+            showToast('The admin has requested your sendout dates — see Requests.');
         }
     }
     _seenRequestKeys = new Set(Object.keys(next));
@@ -2024,7 +2040,9 @@ function showToast(msg, opts) {
 
 // ────────────── REQUEST QUEUE HELPERS ──────────────
 // Push a new pending request into Firebase.  payload is type-specific.
-async function submitRequest(type, payload, note) {
+// opts (optional): { targetId } aims the request at another account
+// (admin → Lake Forest asks); { toast } overrides the confirmation text.
+async function submitRequest(type, payload, note, opts) {
     if (loggedInPathId === null) {
         alert('You must be signed in to submit a request.');
         return false;
@@ -2032,13 +2050,14 @@ async function submitRequest(type, payload, note) {
     try {
         await db.ref('scheduler/requests').push({
             requesterId: loggedInPathId,
+            targetId: (opts && opts.targetId) || null,
             type: type,
             status: 'pending',
             createdAt: Date.now(),
             payload: payload || {},
             note: (note || '').trim() || null,
         });
-        showToast('Request submitted — admin will review.');
+        showToast((opts && opts.toast) || 'Request submitted — admin will review.');
         return true;
     } catch (err) {
         console.error('submitRequest error:', err);
@@ -2048,11 +2067,16 @@ async function submitRequest(type, payload, note) {
 }
 
 // Counts of pending requests visible to the current user.  Admin sees all
-// pending across the team; non-admin sees only their own pending count.
+// pending across the team; non-admin sees their own pending count plus any
+// pending requests aimed at them (targetId).
 function getVisiblePendingCount() {
     const arr = Object.entries(requests).filter(([, r]) => r && r.status === 'pending');
-    if (isAdmin()) return arr.length;
-    return arr.filter(([, r]) => r.requesterId === loggedInPathId).length;
+    // Admin's badge means "needs my review" — asks the admin sent out
+    // (lf_dates_request) wait on the target instead, so exclude them.
+    if (isAdmin()) return arr.filter(([, r]) => r.type !== 'lf_dates_request').length;
+    return arr.filter(([, r]) =>
+        r.requesterId === loggedInPathId || r.targetId === loggedInPathId
+    ).length;
 }
 
 // Sidebar Requests button + badge; also drives the mobile hamburger's
@@ -2168,16 +2192,20 @@ function updateNavRequestsIndicator() {
         return;
     }
 
-    // Non-admins: check for unseen decisions, then pending
+    // Non-admins: check for unseen decisions, then pending. Requests aimed
+    // at this user (targetId) count too; decisions the user made themselves
+    // (e.g. LF marking an ask complete) never light the dot.
     const ackTs = _getAckTs();
     const mine = Object.values(requests || {}).filter(
-        r => r && r.requesterId === loggedInPathId
+        r => r && (r.requesterId === loggedInPathId || r.targetId === loggedInPathId)
     );
     const hasUnseenDenied = mine.some(
         r => r.status === 'denied' && (r.decisionAt || 0) > ackTs
+            && r.decisionBy !== loggedInPathId
     );
     const hasUnseenApproved = mine.some(
         r => r.status === 'approved' && (r.decisionAt || 0) > ackTs
+            && r.decisionBy !== loggedInPathId
     );
     const hasPending = mine.some(r => r.status === 'pending');
 
@@ -2382,6 +2410,20 @@ function describeRequest(req) {
             return {
                 title,
                 body: `Requesting Lake Forest sendout be <strong>${verb}</strong> for <strong>${dateLabel}</strong>.`,
+            };
+        }
+        case 'lf_dates_request': {
+            // Admin → Lake Forest: please provide your sendout dates.
+            const p = req.payload || {};
+            const range = (p.start && p.end) ? _reqDateRange(p.start, p.end) : null;
+            const about = p.aboutName
+                ? ` (re: ${escapeHtml(p.aboutName)}'s PTO)`
+                : '';
+            return {
+                title: `${who} → Sendout dates requested`,
+                body: `Asking <strong>Lake Forest</strong> to provide their sendout dates`
+                    + (range ? ` covering <strong>${range}</strong>` : '')
+                    + about + '.',
             };
         }
         default:
@@ -2941,6 +2983,26 @@ async function cancelRequest(reqKey) {
     }
 }
 
+// Target of an lf_dates_request (Lake Forest) marks it complete once they
+// have responded with sendout requests. Reuses the 'approved' status so the
+// existing tabs/history plumbing applies; cards label it "completed".
+async function completeLfDatesRequest(reqKey) {
+    const req = requests[reqKey];
+    if (!req || req.status !== 'pending') return;
+    if (req.targetId !== loggedInPathId) return;
+    try {
+        await db.ref('scheduler/requests/' + reqKey).update({
+            status: 'approved',
+            decisionAt: Date.now(),
+            decisionBy: loggedInPathId,
+        });
+        showToast('Marked complete — the admin can see your response.');
+    } catch (err) {
+        console.error('completeLfDatesRequest error:', err);
+        showToast('Failed to mark complete: ' + (err.message || err), { type: 'error' });
+    }
+}
+
 // ────────────── REQUESTS MODAL ──────────────
 function openRequestsModal() {
     // Default landing tab: Pending
@@ -2968,10 +3030,12 @@ function renderRequestsList(targetEl, tabState) {
     if (!listEl) return;
     const tab = tabState || activeRequestsTab;
 
-    // Filter: admin sees everyone's; non-admin sees only their own
+    // Filter: admin sees everyone's; non-admin sees their own plus any
+    // requests aimed at them (admin → Lake Forest sendout-dates asks)
     let entries = Object.entries(requests).filter(([, r]) => !!r);
     if (!isAdmin()) {
-        entries = entries.filter(([, r]) => r.requesterId === loggedInPathId);
+        entries = entries.filter(([, r]) =>
+            r.requesterId === loggedInPathId || r.targetId === loggedInPathId);
     }
 
     // Tab filter
@@ -3013,8 +3077,12 @@ function renderRequestsList(targetEl, tabState) {
                 month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
             })
             : '';
+        // Admin→LF asks aren't approved/denied in the usual sense — the
+        // target completes them. Relabel while reusing the same statuses.
+        const isAskType = req.type === 'lf_dates_request';
+        const isTarget = req.targetId != null && req.targetId === loggedInPathId;
         const decisionLine = (req.status !== 'pending')
-            ? `<div class="req-meta">${req.status === 'approved' ? '✓ Approved' : '✗ Denied'}${req.decisionAt ? ' · ' + new Date(req.decisionAt).toLocaleString([], {
+            ? `<div class="req-meta">${req.status === 'approved' ? (isAskType ? '✓ Completed' : '✓ Approved') : '✗ Denied'}${req.decisionAt ? ' · ' + new Date(req.decisionAt).toLocaleString([], {
                 month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
             }) : ''
             }${req.decisionBy ? ' · by ' + _pathName(req.decisionBy).replace(/^Dr\. /, '') : ''}${req.decisionNote ? '<div class="req-note">“' + escapeHtml(req.decisionNote) + '”</div>' : ''
@@ -3026,10 +3094,31 @@ function renderRequestsList(targetEl, tabState) {
 
         // Build action buttons depending on viewer + status
         let actions = '';
+        // Admin follow-up on PTO requests: ask Lake Forest for their sendout
+        // dates covering the request's window.
+        const askLfBtnHtml = (isAdmin()
+            && (req.type === 'pto_add' || req.type === 'pto_remove'))
+            ? `<button data-act="asklf" data-key="${key}">Request LF dates</button>`
+            : '';
         if (req.status === 'pending') {
-            if (isAdmin()) {
+            if (isAskType) {
+                if (isTarget) {
+                    // Lake Forest responds via sendout requests, then marks done
+                    actions = `
+                            <div class="req-card-actions">
+                                <button data-act="lfprovide" data-key="${key}">Provide dates…</button>
+                                <button class="approve" data-act="lfdone" data-key="${key}">Mark complete</button>
+                            </div>`;
+                } else if (isAdmin() || req.requesterId === loggedInPathId) {
+                    actions = `
+                            <div class="req-card-actions">
+                                <button data-act="cancel" data-key="${key}">Cancel request</button>
+                            </div>`;
+                }
+            } else if (isAdmin()) {
                 actions = `
                             <div class="req-card-actions">
+                                ${askLfBtnHtml}
                                 <button class="deny" data-act="deny" data-key="${key}">Deny</button>
                                 <button class="approve" data-act="approve" data-key="${key}">Approve</button>
                             </div>`;
@@ -3039,9 +3128,10 @@ function renderRequestsList(targetEl, tabState) {
                                 <button data-act="cancel" data-key="${key}">Cancel request</button>
                             </div>`;
             }
-        } else if (req.status === 'approved' && isAdmin()) {
+        } else if (req.status === 'approved' && isAdmin() && !isAskType) {
             actions = `
                         <div class="req-card-actions">
+                            ${askLfBtnHtml}
                             <button class="revoke" data-act="revoke" data-key="${key}">Revoke approval</button>
                         </div>`;
         }
@@ -3052,6 +3142,7 @@ function renderRequestsList(targetEl, tabState) {
             'oncall_change': 'ON-CALL',
             'service_change': 'SERVICE',
             'lf_sendout': 'LF SENDOUT',
+            'lf_dates_request': 'LF DATES',
         })[req.type] || req.type;
 
         // Approved service changes that are still locked on the schedule get
@@ -3067,7 +3158,7 @@ function renderRequestsList(targetEl, tabState) {
                                 <span class="req-who">${escapeHtml(desc.title)}</span>
                                 <span class="req-type">${typeShort}</span>
                             </div>
-                            <span class="req-status-pill ${req.status}">${req.status}</span>
+                            <span class="req-status-pill ${req.status}">${isAskType && req.status === 'approved' ? 'completed' : req.status}</span>
                         </div>
                         <div class="req-detail">${desc.body}</div>
                         ${noteLine}
@@ -3087,6 +3178,13 @@ function renderRequestsList(targetEl, tabState) {
             else if (act === 'deny') denyRequest(key);
             else if (act === 'cancel') cancelRequest(key);
             else if (act === 'revoke') revokeApproval(key);
+            else if (act === 'asklf') openLfAskModalForRequest(key);
+            else if (act === 'lfprovide') {
+                const r = requests[key];
+                const p = (r && r.payload) || {};
+                openLfRequestModal(p.start ? parseDate(p.start) : today);
+            }
+            else if (act === 'lfdone') completeLfDatesRequest(key);
         });
     });
 }
@@ -3173,10 +3271,44 @@ function renderRequestsPage() {
     newBtn.innerHTML = '<span aria-hidden="true" style="margin-right:6px;font-weight:700;">+</span>'
         + (isLakeForest() ? 'New Sendout Request' : 'New PTO Request');
 
-    // Compute counts visible to this user (admin = all, else own only)
+    // Inject (once) an admin-only button that asks the Lake Forest account
+    // for their sendout dates (files an lf_dates_request aimed at LF).
+    let askLfBtn = document.getElementById('requestsPageAskLfBtn');
+    if (!askLfBtn) {
+        askLfBtn = document.createElement('button');
+        askLfBtn.id = 'requestsPageAskLfBtn';
+        askLfBtn.type = 'button';
+        askLfBtn.className = 'req-new-btn';
+        askLfBtn.innerHTML = '<span aria-hidden="true" style="margin-right:6px;font-weight:700;">+</span>Request LF Sendout Dates';
+        askLfBtn.style.cssText = [
+            'margin: 0 0 12px',
+            'padding: 8px 14px',
+            'border-radius: 8px',
+            'border: 1px solid var(--accent-soft, #2a2a2a)',
+            'background: var(--accent-soft, #2a2a2a)',
+            'color: var(--ink-2, #ddd)',
+            'font: inherit',
+            'font-weight: 600',
+            'cursor: pointer',
+            'display: inline-flex',
+            'align-items: center',
+        ].join(';');
+        askLfBtn.addEventListener('click', () => openLfAskModal());
+        const tabsEl = document.getElementById('requestsPageTabs');
+        if (tabsEl && tabsEl.parentNode) {
+            tabsEl.parentNode.insertBefore(askLfBtn, tabsEl);
+        } else {
+            pg.appendChild(askLfBtn);
+        }
+    }
+    askLfBtn.style.display = admin ? 'inline-flex' : 'none';
+
+    // Compute counts visible to this user (admin = all, else own +
+    // requests aimed at them)
     let visible = Object.entries(requests || {}).filter(([, r]) => !!r);
     if (!admin) {
-        visible = visible.filter(([, r]) => r.requesterId === loggedInPathId);
+        visible = visible.filter(([, r]) =>
+            r.requesterId === loggedInPathId || r.targetId === loggedInPathId);
     }
     const pendingCount = visible.filter(([, r]) => r.status === 'pending').length;
     const resolvedCount = visible.filter(([, r]) => r.status !== 'pending').length;
@@ -8146,6 +8278,82 @@ document.getElementById('lfReqSubmit').addEventListener('click', async () => {
         action: _lfReqAction,
     }, note);
     if (ok) document.getElementById('lfReqModalBack').classList.remove('open');
+});
+
+// ────────────── LAKE FOREST DATES ASK MODAL (admin) ──────────────
+// Admin files an 'lf_dates_request' aimed at the Lake Forest account —
+// payload { start?, end?, aboutName?, aboutRequestKey? } — asking LF to
+// provide their sendout dates. LF responds with regular lf_sendout requests
+// and then marks the ask complete. Opened standalone from the Requests page
+// or pre-filled from a PTO request card.
+let _lfAskAbout = null; // { aboutName, aboutRequestKey } carried into payload
+
+function openLfAskModal(prefill) {
+    if (!isAdmin()) return;
+    prefill = prefill || {};
+    _lfAskAbout = prefill.aboutName
+        ? { aboutName: prefill.aboutName, aboutRequestKey: prefill.aboutRequestKey || null }
+        : null;
+    document.getElementById('lfAskStart').value = prefill.start || '';
+    document.getElementById('lfAskEnd').value = prefill.end || '';
+    document.getElementById('lfAskNote').value = '';
+    const ctx = document.getElementById('lfAskContext');
+    if (_lfAskAbout) {
+        ctx.textContent = `Re: ${_lfAskAbout.aboutName}'s PTO request.`;
+        ctx.style.display = '';
+    } else {
+        ctx.style.display = 'none';
+    }
+    document.getElementById('lfAskModalBack').classList.add('open');
+}
+
+// Pre-filled variant launched from a PTO request card: seed the covering
+// dates from the request's window and tag who it's about.
+function openLfAskModalForRequest(reqKey) {
+    const req = requests[reqKey];
+    if (!req) return;
+    let start = null, end = null;
+    if (req.type === 'pto_add') {
+        start = req.payload.start;
+        end = req.payload.end;
+    } else if (req.type === 'pto_remove') {
+        const v = vacations.find(x => x.key === req.payload.vacationKey);
+        if (v) { start = fmt(v.start); end = fmt(v.end); }
+    }
+    openLfAskModal({
+        start: start,
+        end: end,
+        aboutName: _pathName(req.requesterId).replace(/^Dr\. /, ''),
+        aboutRequestKey: reqKey,
+    });
+}
+
+document.getElementById('lfAskCancel').addEventListener('click', () => {
+    document.getElementById('lfAskModalBack').classList.remove('open');
+});
+document.getElementById('lfAskModalBack').addEventListener('click', e => {
+    if (e.target.id === 'lfAskModalBack') e.target.classList.remove('open');
+});
+document.getElementById('lfAskSubmit').addEventListener('click', async () => {
+    if (!isAdmin()) return;
+    let start = document.getElementById('lfAskStart').value || null;
+    let end = document.getElementById('lfAskEnd').value || null;
+    // Single date filled in either slot → treat as a one-day window;
+    // reversed range → swap.
+    if (start && !end) end = start;
+    if (!start && end) start = end;
+    if (start && end && end < start) { const t = start; start = end; end = t; }
+    const payload = { start: start, end: end };
+    if (_lfAskAbout) {
+        payload.aboutName = _lfAskAbout.aboutName;
+        if (_lfAskAbout.aboutRequestKey) payload.aboutRequestKey = _lfAskAbout.aboutRequestKey;
+    }
+    const note = document.getElementById('lfAskNote').value;
+    const ok = await submitRequest('lf_dates_request', payload, note, {
+        targetId: LAKE_FOREST_ID,
+        toast: 'Request sent to Lake Forest.',
+    });
+    if (ok) document.getElementById('lfAskModalBack').classList.remove('open');
 });
 
 // ────────────── NATALIE PTO MODAL (Gross Room + admin) ──────────────

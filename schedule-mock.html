@@ -4,9 +4,8 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pathology Group Schedule</title>
+    <title>Pathology Group Schedule — MOCK</title>
     <link rel="icon" type="image/x-icon" href="faviconSchedule.png">
-    <link rel="manifest" href="manifest.json">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
@@ -374,7 +373,7 @@
                                 <div class="tracking-pto-list" id="trackingPtoList"></div>
                             </section>
 
-                            <!-- Holiday call tracker — on-call for the six federal holidays from Sept 1, 2025 (FY26 start, fixed) through 12 months from today (ignores the Period selector); derived from onCallIdForDay so swaps credit the actual coverer. -->
+                            <!-- Holiday call tracker — on-call for the six federal holidays, cumulative across years (never resets, ignores the Period selector); derived from onCallIdForDay so swaps credit the actual coverer. -->
                             <section class="tracking-holiday-section">
                                 <div class="tracking-section-label">
                                     <span>Holiday call</span>
@@ -998,10 +997,11 @@
         </div>
     </div>
 
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics-compat.js"></script>
+    <!-- MOCK MODE: the real Firebase SDK is replaced by an in-browser fake.
+         All reads/writes stay in this browser (localStorage); nothing reaches
+         the real database. Use the banner's "Reset demo data" to start over.
+         Password for every account: "demo". -->
+    <script src="mock-firebase.js"></script>
 
     <script src="schedule.js"></script>
     <script src="recompute.js"></script>

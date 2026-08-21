@@ -54,6 +54,11 @@
 //   maxSkip  — largest single-pathologist deviation in the day's effective cycle
 //   totalSkip — sum of deviations across all pathologists
 //
+// After the fixed point converges, a WFH-fairness sweep evens the
+// per-pathologist Breast Bx/WFH counts across the window (spread ≤ 1 day
+// where rule-clean swaps allow) — see the sweep comment in
+// recomputeFutureSchedule. Pinned/locked slots are never moved.
+//
 // Deviation is the MIN cyclical distance (forward or backward) between where
 // a pathologist landed and where the rotation says they should be, measured
 // in the day's effective cycle:
@@ -585,6 +590,82 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
         if (!changedThisPass) break;
     }
 
+    // ── WFH-fairness sweep ──────────────────────────────────────────────
+    // The per-day optimizer keeps the rotation smooth but has no view of
+    // WHO accumulates the Breast Bx/WFH days across the window: a pinned
+    // stretch (an approved WFH request, say) hands its holder a WFH glut
+    // while everyone else rotates around it and never gets those slots
+    // back. After the fixed point converges, even the per-pathologist WFH
+    // counts across the window: while the spread between the most- and
+    // least-served exceeds one day, hand one of the rich path's UNPINNED
+    // WFH days to the poor path in a rule-clean swap (no WFH after Bigs,
+    // no Bigs before PTO/WFH, no same-service repeats). Pins and locks are
+    // never moved. The sweep is deterministic over the converged snapshot,
+    // so re-running the same recompute reproduces the same final state and
+    // idempotency is preserved.
+    let wfhSwaps = 0;
+    {
+        const mapAt = d => snapshot[fmt(d)] || baselineFor(d);
+        const pinnedAt = (k, pid) => {
+            const p = mergedPins[k];
+            return !!(p && (p[pid] !== undefined || p[String(pid)] !== undefined));
+        };
+        const ids = pathologists.map(p => p.id);
+        const countWfh = () => {
+            const c = {};
+            ids.forEach(id => { c[id] = 0; });
+            workdays.forEach(d => {
+                const m = snapshot[fmt(d)];
+                if (!m) return;
+                ids.forEach(id => { if (m[id] === 'wfh') c[id]++; });
+            });
+            return c;
+        };
+        const trySwap = (rich, poor) => {
+            for (const d of workdays) {
+                const k = fmt(d);
+                const m = snapshot[k];
+                if (!m) continue;
+                const poorSid = m[poor];
+                if (m[rich] !== 'wfh' || !poorSid || poorSid === 'wfh') continue;
+                if (pinnedAt(k, rich) || pinnedAt(k, poor)) continue;
+                const prevM = mapAt(prevWorkday(d));
+                const nextM = mapAt(nextWorkday(d));
+                // Poor takes the WFH slot.
+                if (_bfIsBigs(prevM[poor])) continue;                      // WFH after Bigs
+                if (prevM[poor] === 'wfh' || nextM[poor] === 'wfh') continue;  // repeat
+                // Rich takes poor's service.
+                if (_bfRepeat(poorSid, prevM[rich]) || _bfRepeat(poorSid, nextM[rich])) continue;
+                if (_bfIsBigs(poorSid)) {
+                    if (nextM[rich] === 'wfh') continue;                   // Bigs before WFH
+                    if (isOnPto(rich, nextWorkday(d))) continue;           // Bigs before PTO
+                }
+                const m2 = Object.assign({}, m);
+                m2[rich] = poorSid;
+                m2[poor] = 'wfh';
+                snapshot[k] = m2;
+                return true;
+            }
+            return false;
+        };
+        for (let guard = 0; guard < 24; guard++) {
+            const c = countWfh();
+            // Every (rich, poor) pair whose spread exceeds 1, widest first —
+            // if the widest pair has no clean swap day, a narrower pair may.
+            const pairs = [];
+            ids.forEach(a => ids.forEach(b => {
+                if (a !== b && c[a] - c[b] > 1) pairs.push([a, b, c[a] - c[b]]);
+            }));
+            if (pairs.length === 0) break;
+            pairs.sort((x, y) => y[2] - x[2]);
+            let didSwap = false;
+            for (const pair of pairs) {
+                if (trySwap(pair[0], pair[1])) { wfhSwaps++; didSwap = true; break; }
+            }
+            if (!didSwap) break;
+        }
+    }
+
     // ── Compute writes (only days where snapshot ≠ baseline) ────────────
     const writes = {};
     let processed = 0;
@@ -615,6 +696,39 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
         if (lastChangedKey === null || k > lastChangedKey) lastChangedKey = k;
     }
 
+    // ── Materialize the adjacency ring ──────────────────────────────────
+    // An unwritten day sandwiched next to written days re-renders against
+    // its NEW neighbours after the update: the render-time hard-rule layer
+    // (which knows nothing about locks or the converged plan) can shuffle
+    // it away from what the optimizer decided — including moving a LOCKED
+    // assignment off its pinned service. Freeze any planned-but-unwritten
+    // day that touches a written day by writing its planned map too. Its
+    // content equals the pre-recompute baseline, so re-runs remain
+    // idempotent (the ring only exists when real changes were written).
+    // Ring days don't count toward `processed` — nothing about them changed.
+    if (Object.keys(writes).length > 0) {
+        const allDays = prevWd ? workdays.concat([prevWd]) : workdays;
+        let grew = true;
+        while (grew) {
+            grew = false;
+            for (const d of allDays) {
+                const k = fmt(d);
+                if (!snapshot[k]) continue;
+                if (writes['scheduler/serviceOverrides/' + k]) continue;
+                if (!writes['scheduler/serviceOverrides/' + fmt(prevWorkday(d))]
+                    && !writes['scheduler/serviceOverrides/' + fmt(nextWorkday(d))]) continue;
+                const dbDay = (typeof serviceOverrides === 'object' && serviceOverrides && serviceOverrides[k]) || {};
+                const preserved = {};
+                for (const pid in dbDay) {
+                    if (!(pid in snapshot[k])) preserved[pid] = dbDay[pid];
+                }
+                writes['scheduler/serviceOverrides/' + k] =
+                    Object.assign({}, preserved, snapshot[k]);
+                grew = true;
+            }
+        }
+    }
+
     if (Object.keys(writes).length > 0) {
         await db.ref().update(writes);
     }
@@ -623,6 +737,7 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
         dayBeforeProcessed: dayBeforeProcessed,
         firstChangedKey: firstChangedKey,
         lastChangedKey: lastChangedKey,
+        wfhRebalanced: wfhSwaps,
     };
 }
 

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Schedule Firebase Importer</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; background: #f8f8f8; color: #222; }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  .sub { color: #666; font-size: .9rem; margin-bottom: 28px; }
+  .card { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 20px 24px; margin-bottom: 18px; }
+  .card h2 { font-size: 1rem; margin: 0 0 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  th { text-align: left; background: #f3f3f3; padding: 4px 8px; }
+  td { padding: 3px 8px; border-top: 1px solid #f0f0f0; }
+  .badge { display: inline-block; background: #3b82f6; color: #fff; border-radius: 12px; padding: 1px 9px; font-size: .78rem; margin-left: 6px; }
+  button { cursor: pointer; font-size: 1rem; padding: 12px 28px; border: none; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 600; margin-top: 10px; }
+  button:disabled { background: #9ca3af; cursor: not-allowed; }
+  #log { margin-top: 18px; background: #111; color: #4ade80; font-family: monospace; font-size: .8rem; border-radius: 8px; padding: 14px; max-height: 340px; overflow-y: auto; white-space: pre-wrap; }
+  .warn { color: #fbbf24; }
+  .err  { color: #f87171; }
+  .done { color: #86efac; font-weight: bold; }
+  .progress-bar { height: 8px; background: #e5e7eb; border-radius: 4px; margin: 10px 0; overflow: hidden; }
+  .progress-fill { height: 100%; background: #2563eb; border-radius: 4px; transition: width .2s; }
+</style>
+</head>
+<body>
+
+<h1>📅 Pathologist Schedule — Firebase Importer</h1>
+<p class="sub">Restores schedule data parsed from <strong>calendar.ics</strong> into your Firebase database.</p>
+
+<div class="card">
+  <h2>What will be imported</h2>
+  <table>
+    <tr><th>Category</th><th>Count</th><th>Notes</th></tr>
+    <tr><td>Vacation / PTO ranges</td><td><span class="badge" id="cntVac">—</span></td><td>Contiguous off-day ranges per pathologist</td></tr>
+    <tr><td>On-call day overrides</td><td><span class="badge" id="cntOcd">—</span></td><td>Daily on-call assignments (covers weekends &amp; partial weeks)</td></tr>
+    <tr><td>Service override days</td><td><span class="badge" id="cntSvc">—</span></td><td>Per-day service assignments from ICS exceptions</td></tr>
+  </table>
+  <div class="progress-bar"><div class="progress-fill" id="pbar" style="width:0%"></div></div>
+  <button id="importBtn">⬆ Import to Firebase</button>
+  <button id="clearBtn" style="background:#dc2626; margin-left:10px;">🗑 Clear existing data first</button>
+</div>
+
+<div id="log"></div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script>
+// ── Firebase config (from schedule.js) ─────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyDuNpgf8Gtd2treHdaQt66HYcNjCrhBjlM",
+  authDomain: "scheduler-f54c7.firebaseapp.com",
+  databaseURL: "https://scheduler-f54c7-default-rtdb.firebaseio.com",
+  projectId: "scheduler-f54c7",
+  storageBucket: "scheduler-f54c7.firebasestorage.app",
+  messagingSenderId: "529858873691",
+  appId: "1:529858873691:web:2f4f60038da8db4a0af27e",
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// ── Parsed ICS data ─────────────────────────────────────────────────────────
+const VACATIONS   = [{"pathologistId":1,"start":"2025-10-13","end":"2025-10-13"},{"pathologistId":1,"start":"2025-11-14","end":"2025-11-14"},{"pathologistId":1,"start":"2025-12-29","end":"2026-01-02"},{"pathologistId":1,"start":"2026-05-13","end":"2026-05-13"},{"pathologistId":2,"start":"2025-08-28","end":"2025-08-29"},{"pathologistId":2,"start":"2025-09-10","end":"2025-09-10"},{"pathologistId":2,"start":"2025-11-13","end":"2025-11-13"},{"pathologistId":2,"start":"2025-11-20","end":"2025-11-21"},{"pathologistId":2,"start":"2025-12-12","end":"2025-12-30"},{"pathologistId":2,"start":"2026-01-20","end":"2026-01-23"},{"pathologistId":2,"start":"2026-03-10","end":"2026-03-10"},{"pathologistId":2,"start":"2026-03-16","end":"2026-03-17"},{"pathologistId":2,"start":"2026-04-27","end":"2026-05-04"},{"pathologistId":3,"start":"2025-09-04","end":"2025-09-08"},{"pathologistId":3,"start":"2025-11-13","end":"2025-11-13"},{"pathologistId":3,"start":"2025-11-26","end":"2025-12-01"},{"pathologistId":3,"start":"2025-12-29","end":"2026-01-05"},{"pathologistId":3,"start":"2026-01-19","end":"2026-01-19"},{"pathologistId":3,"start":"2026-03-16","end":"2026-03-20"},{"pathologistId":3,"start":"2026-04-01","end":"2026-04-01"},{"pathologistId":3,"start":"2026-04-07","end":"2026-04-07"},{"pathologistId":3,"start":"2026-04-14","end":"2026-04-14"},{"pathologistId":4,"start":"2025-09-02","end":"2025-09-02"},{"pathologistId":4,"start":"2025-09-15","end":"2025-09-15"},{"pathologistId":4,"start":"2025-09-26","end":"2025-09-26"},{"pathologistId":4,"start":"2025-10-27","end":"2025-10-27"},{"pathologistId":4,"start":"2025-11-19","end":"2025-11-19"},{"pathologistId":4,"start":"2025-11-24","end":"2025-11-28"},{"pathologistId":4,"start":"2026-02-20","end":"2026-02-20"},{"pathologistId":4,"start":"2026-03-19","end":"2026-03-20"},{"pathologistId":4,"start":"2026-03-30","end":"2026-04-03"},{"pathologistId":4,"start":"2026-05-11","end":"2026-05-11"}];
+const OC_DAY      = {"2025-08-11":1,"2025-08-12":1,"2025-08-13":1,"2025-08-14":1,"2025-08-15":1,"2025-08-16":1,"2025-08-17":1,"2025-08-18":2,"2025-08-19":2,"2025-08-20":2,"2025-08-21":2,"2025-08-22":2,"2025-08-23":2,"2025-08-24":2,"2025-08-25":2,"2025-08-26":2,"2025-08-27":2,"2025-08-28":2,"2025-08-29":1,"2025-08-30":1,"2025-08-31":1,"2025-09-01":4,"2025-09-02":4,"2025-09-03":4,"2025-09-04":4,"2025-09-05":4,"2025-09-06":4,"2025-09-07":4,"2025-09-15":2,"2025-09-16":2,"2025-09-17":2,"2025-09-18":2,"2025-09-19":2,"2025-09-20":2,"2025-09-21":2,"2025-09-22":3,"2025-09-23":3,"2025-09-24":3,"2025-09-25":3,"2025-09-26":3,"2025-09-27":3,"2025-09-28":3,"2025-10-13":2,"2025-10-14":2,"2025-10-15":2,"2025-10-16":2,"2025-10-17":2,"2025-10-18":2,"2025-10-19":2,"2025-10-20":3,"2025-10-21":3,"2025-10-22":3,"2025-10-23":3,"2025-10-24":3,"2025-10-25":3,"2025-10-26":3,"2025-10-27":4,"2025-10-28":4,"2025-10-29":4,"2025-10-30":4,"2025-10-31":4,"2025-11-01":4,"2025-11-03":1,"2025-11-04":1,"2025-11-05":1,"2025-11-06":1,"2025-11-07":1,"2025-11-08":1,"2025-11-09":1,"2025-11-10":4,"2025-11-11":4,"2025-11-12":4,"2025-11-13":4,"2025-11-14":4,"2025-11-15":4,"2025-11-16":4,"2025-11-17":3,"2025-11-18":3,"2025-11-19":3,"2025-11-20":3,"2025-11-21":3,"2025-11-22":3,"2025-11-23":3,"2025-11-24":2,"2025-11-25":2,"2025-11-26":2,"2025-11-27":2,"2025-11-28":2,"2025-11-29":2,"2025-11-30":2,"2025-12-01":1,"2025-12-02":1,"2025-12-03":1,"2025-12-04":1,"2025-12-05":1,"2025-12-06":1,"2025-12-07":1,"2025-12-08":2,"2025-12-09":2,"2025-12-10":2,"2025-12-11":2,"2025-12-12":3,"2025-12-13":3,"2025-12-14":3,"2025-12-15":3,"2025-12-16":3,"2025-12-17":3,"2025-12-18":3,"2025-12-19":3,"2025-12-20":3,"2025-12-21":3,"2025-12-22":4,"2025-12-23":4,"2025-12-24":4,"2025-12-25":4,"2025-12-26":4,"2025-12-27":4,"2025-12-28":4,"2025-12-29":1,"2025-12-30":1,"2025-12-31":1,"2026-01-01":1,"2026-01-02":1,"2026-01-03":1,"2026-01-04":1,"2026-01-12":1,"2026-01-13":1,"2026-01-14":1,"2026-01-15":1,"2026-01-16":1,"2026-01-17":1,"2026-01-18":1,"2026-01-19":1,"2026-01-20":1,"2026-01-21":1,"2026-01-22":1,"2026-01-23":1,"2026-01-24":1,"2026-01-25":1,"2026-01-26":3,"2026-01-27":3,"2026-01-28":3,"2026-01-29":3,"2026-01-30":3,"2026-01-31":3,"2026-02-01":3,"2026-02-23":4,"2026-02-24":4,"2026-02-25":4,"2026-02-26":4,"2026-02-27":4,"2026-02-28":4,"2026-03-01":4,"2026-03-16":1,"2026-03-17":1,"2026-03-18":1,"2026-03-19":1,"2026-03-20":1,"2026-03-21":1,"2026-03-22":1,"2026-04-27":3,"2026-04-28":3,"2026-04-29":3,"2026-04-30":3,"2026-05-01":3,"2026-05-02":3,"2026-05-03":3,"2026-05-04":4,"2026-05-05":4,"2026-05-06":4,"2026-05-07":4,"2026-05-08":4,"2026-05-09":4,"2026-05-10":4,"2026-05-11":2,"2026-05-12":2,"2026-05-13":2,"2026-05-14":2,"2026-05-15":2,"2026-05-16":2,"2026-05-17":2,"2026-05-18":2,"2026-05-19":2,"2026-05-20":2,"2026-05-21":2,"2026-05-22":2,"2026-05-23":2,"2026-05-24":2,"2026-05-25":2,"2026-05-26":1,"2026-05-27":1,"2026-05-28":1,"2026-05-29":1,"2026-05-30":1,"2026-05-31":1};
+const SVC         = {"2025-08-11":{"1":"cyto","3":"huntley","2":"bigs"},"2025-08-12":{"1":"bigs","3":"cyto","2":"huntley"},"2025-08-13":{"1":"wfh","3":"huntley","2":"cyto","4":"bigs"},"2025-08-14":{"4":"bigs","3":"cyto","2":"wfh","1":"huntley"},"2025-08-15":{"2":"huntley","3":"wfh","4":"bigs","1":"cyto"},"2025-08-18":{"1":"bigs","3":"huntley","2":"cyto","4":"wfh"},"2025-08-19":{"1":"wfh","2":"huntley","4":"bigs","3":"cyto"},"2025-08-20":{"4":"wfh","2":"cyto","1":"huntley","3":"bigs"},"2025-08-21":{"3":"huntley","4":"bigs","2":"wfh","1":"cyto"},"2025-08-22":{"3":"cyto","1":"bigs","4":"wfh","2":"huntley"},"2025-08-25":{"4":"bigs","1":"huntley","2":"cyto","3":"wfh"},"2025-08-26":{"4":"wfh","2":"bigs","3":"huntley","1":"cyto"},"2025-08-27":{"1":"huntley","4":"bigs","3":"cyto","2":"wfh"},"2025-08-28":{"3":"huntley","4":"bigs","1":"cyto"},"2025-08-29":{"3":"huntley","1":"cyto","4":"bigs"},"2025-09-02":{"3":"bigs","2":"huntley","1":"cyto"},"2025-09-03":{"4":"cyto","2":"bigs","1":"wfh","3":"huntley"},"2025-09-04":{"4":"cyto","2":"bigs","1":"huntley"},"2025-09-05":{"1":"cyto","4":"bigs","2":"huntley"},"2025-09-08":{"1":"huntley","2":"cyto","4":"bigs"},"2025-09-09":{"4":"wfh","2":"huntley","3":"bigs","1":"cyto"},"2025-09-10":{"1":"bigs","4":"cyto","3":"huntley"},"2025-09-11":{"4":"wfh","3":"bigs","2":"cyto","1":"huntley"},"2025-09-12":{"1":"wfh","2":"bigs","4":"cyto","3":"huntley"},"2025-09-15":{"1":"bigs","2":"huntley","3":"cyto"},"2025-09-16":{"4":"wfh","3":"bigs","2":"cyto","1":"huntley"},"2025-09-17":{"4":"cyto","1":"bigs","3":"huntley","2":"wfh"},"2025-09-18":{"4":"bigs","1":"wfh","2":"huntley","3":"cyto"},"2025-09-19":{"1":"huntley","2":"cyto","4":"wfh","3":"bigs"},"2025-09-22":{"4":"wfh","1":"cyto","2":"bigs","3":"huntley"},"2025-09-23":{"4":"cyto","1":"bigs","3":"wfh","2":"huntley"},"2025-09-24":{"2":"cyto","4":"bigs","3":"huntley"},"2025-09-25":{"4":"wfh","3":"bigs","2":"huntley","1":"cyto"},"2025-09-26":{"2":"cyto","1":"bigs","3":"huntley"},"2025-09-29":{"3":"bigs","2":"wfh","4":"cyto","1":"huntley"},"2025-09-30":{"1":"cyto","2":"huntley","4":"bigs","3":"wfh"},"2025-10-01":{"1":"wfh","2":"bigs","3":"huntley","4":"cyto"},"2025-10-02":{"1":"huntley","3":"bigs","4":"cyto","2":"wfh"},"2025-10-03":{"2":"huntley","4":"bigs","3":"cyto","1":"wfh"},"2025-10-06":{"3":"huntley","4":"wfh","1":"bigs","2":"cyto"},"2025-10-07":{"2":"wfh","1":"huntley","4":"cyto","3":"bigs"},"2025-10-08":{"3":"wfh","4":"bigs","1":"cyto","2":"huntley"},"2025-10-09":{"2":"huntley","3":"bigs","4":"cyto","1":"wfh"},"2025-10-10":{"3":"huntley","4":"wfh","2":"cyto","1":"bigs"},"2025-10-13":{"4":"bigs","3":"cyto","2":"huntley"},"2025-10-14":{"4":"wfh","3":"huntley","2":"bigs","1":"cyto"},"2025-10-15":{"2":"huntley","3":"bigs","1":"wfh","4":"cyto"},"2025-10-16":{"2":"cyto","3":"wfh","1":"huntley","4":"bigs"},"2025-10-17":{"3":"huntley","4":"wfh","2":"bigs","1":"cyto"},"2025-10-20":{"4":"cyto","3":"huntley","2":"wfh","1":"bigs"},"2025-10-21":{"3":"wfh","2":"cyto","1":"huntley","4":"bigs"},"2025-10-22":{"3":"cyto","1":"wfh","2":"bigs","4":"huntley"},"2025-10-23":{"1":"cyto","3":"bigs","2":"huntley","4":"wfh"},"2025-10-24":{"4":"cyto","3":"huntley","2":"wfh","1":"bigs"},"2025-10-27":{"1":"huntley","2":"cyto","3":"bigs"},"2025-10-28":{"1":"wfh","2":"bigs","4":"cyto","3":"huntley"},"2025-10-29":{"3":"wfh","4":"bigs","2":"huntley","1":"cyto"},"2025-10-30":{"2":"wfh","1":"cyto","3":"huntley","4":"bigs"},"2025-10-31":{"2":"cyto","3":"wfh","1":"bigs","4":"huntley"},"2025-11-03":{"1":"huntley","3":"cyto","4":"wfh","2":"bigs"},"2025-11-04":{"3":"bigs","4":"cyto","2":"huntley","1":"wfh"},"2025-11-05":{"1":"cyto","2":"wfh","3":"huntley","4":"bigs"},"2025-11-06":{"3":"wfh","1":"bigs","4":"huntley","2":"cyto"},"2025-11-07":{"1":"huntley","2":"bigs","3":"cyto","4":"wfh"},"2025-11-10":{"3":"bigs","2":"huntley","4":"cyto","1":"wfh"},"2025-11-11":{"1":"cyto","4":"wfh","3":"huntley","2":"bigs"},"2025-11-12":{"1":"bigs","2":"cyto","4":"huntley","3":"wfh"},"2025-11-13":{"1":"cytobigs","4":"huntley"},"2025-11-14":{"3":"bigs","4":"huntley","2":"cyto"},"2025-11-17":{"2":"wfh","1":"cyto","3":"huntley","4":"bigs"},"2025-11-18":{"4":"cyto","2":"huntley","3":"wfh","1":"bigs"},"2025-11-19":{"2":"huntley","3":"cyto","1":"bigs"},"2025-11-20":{"4":"huntley","1":"cyto","3":"bigs"},"2025-11-21":{"3":"huntley","4":"cyto","1":"bigs"},"2025-11-24":{"3":"cyto","2":"huntley","1":"wfh"},"2025-11-25":{"1":"huntley","2":"cyto","3":"wfh"},"2025-11-26":{"1":"cyto","2":"huntley"},"2025-11-28":{"1":"huntley","2":"cyto"},"2025-12-01":{"4":"huntley","2":"bigs","1":"cyto"},"2025-12-02":{"3":"cyto","4":"bigs","1":"wfh","2":"huntley"},"2025-12-03":{"2":"huntley","3":"bigs","4":"cyto"},"2025-12-04":{"1":"bigs","3":"huntley","4":"wfh","2":"cyto"},"2025-12-05":{"2":"bigs","3":"wfh","4":"huntley","1":"cyto"},"2025-12-08":{"1":"bigs","2":"huntley","3":"cyto","4":"wfh"},"2025-12-09":{"1":"bigs","2":"wfh","3":"huntley","4":"cyto"},"2025-12-10":{"4":"bigs","2":"cyto","3":"huntley"},"2025-12-11":{"1":"cyto","4":"huntley","3":"wfh","2":"bigs"},"2025-12-12":{"3":"cyto","4":"huntley","1":"bigs"},"2025-12-15":{"1":"huntley","4":"cyto","3":"bigs"},"2025-12-16":{"4":"bigs","1":"cyto","3":"huntley"},"2025-12-17":{"1":"bigs","3":"cyto","4":"huntley"},"2025-12-18":{"4":"cyto","1":"huntley","3":"bigs"},"2025-12-19":{"4":"bigs","3":"huntley","1":"cyto"},"2025-12-22":{"1":"bigs","3":"cyto","4":"huntley"},"2025-12-23":{"4":"cyto","3":"bigs","1":"huntley"},"2025-12-24":{"3":"huntley","1":"cyto","4":"bigs"},"2025-12-26":{"3":"cyto","4":"bigs","1":"huntley"},"2025-12-29":{"4":"cyto"},"2025-12-30":{"4":"huntley"},"2025-12-31":{"4":"bigs","2":"huntley"},"2026-01-02":{"4":"huntley","2":"bigs"},"2026-01-05":{"4":"bigs","1":"huntley","2":"cyto"},"2026-01-06":{"1":"wfh","2":"bigs","4":"huntley","3":"cyto"},"2026-01-07":{"1":"cyto","4":"wfh","2":"huntley","3":"bigs"},"2026-01-08":{"4":"cyto","3":"huntley","2":"wfh","1":"bigs"},"2026-01-09":{"2":"cyto","1":"huntley","4":"bigs","3":"wfh"},"2026-01-12":{"4":"huntley","2":"bigs","1":"wfh","3":"cyto"},"2026-01-13":{"1":"cyto","3":"bigs","2":"huntley","4":"wfh"},"2026-01-14":{"3":"huntley","1":"bigs","2":"wfh","4":"cyto"},"2026-01-15":{"1":"huntley","2":"cyto","4":"bigs","3":"wfh"},"2026-01-16":{"2":"bigs","1":"wfh","3":"cyto","4":"huntley"},"2026-01-19":{"4":"bigs","2":"huntley","1":"cyto"},"2026-01-20":{"3":"bigs","4":"huntley","1":"cyto"},"2026-01-21":{"4":"cyto","1":"bigs","3":"huntley"},"2026-01-22":{"4":"bigs","1":"huntley","3":"cyto"},"2026-01-23":{"1":"cyto","4":"huntley","3":"bigs"},"2026-01-26":{"3":"huntley","4":"wfh","1":"bigs","2":"cyto"},"2026-01-27":{"2":"bigs","3":"wfh","1":"huntley","4":"cyto"},"2026-01-28":{"1":"wfh","4":"bigs","2":"huntley","3":"cyto"},"2026-01-29":{"4":"huntley","1":"cyto","2":"wfh","3":"bigs"},"2026-01-30":{"4":"wfh","1":"bigs","2":"cyto","3":"huntley"},"2026-02-02":{"1":"huntley","2":"bigs","3":"wfh","4":"cyto"},"2026-02-03":{"3":"cyto","1":"wfh","2":"huntley","4":"bigs"},"2026-02-04":{"4":"huntley","1":"cyto","3":"bigs","2":"wfh"},"2026-02-05":{"1":"bigs","3":"huntley","2":"cyto","4":"wfh"},"2026-02-06":{"1":"huntley","3":"wfh","4":"cyto","2":"bigs"},"2026-02-09":{"1":"wfh","4":"bigs","3":"cyto","2":"huntley"},"2026-02-10":{"1":"cyto","3":"bigs","4":"huntley","2":"wfh"},"2026-02-11":{"2":"cyto","1":"bigs","3":"huntley","4":"wfh"},"2026-02-12":{"1":"huntley","2":"bigs","4":"cyto","3":"wfh"},"2026-02-13":{"1":"wfh","3":"cyto","2":"huntley","4":"bigs"},"2026-02-16":{"1":"cyto","2":"wfh","4":"huntley","3":"bigs"},"2026-02-17":{"3":"huntley","1":"bigs","2":"cyto","4":"wfh"},"2026-02-18":{"2":"bigs","3":"wfh","1":"huntley","4":"cyto"},"2026-02-19":{"4":"cyto","1":"wfh","3":"bigs","2":"huntley"},"2026-02-20":{"3":"bigs","1":"cyto","2":"huntley"},"2026-02-23":{"2":"wfh","1":"bigs","4":"huntley","3":"cyto"},"2026-02-24":{"2":"cyto","1":"bigs","4":"wfh","3":"huntley"},"2026-02-25":{"3":"wfh","4":"cyto","1":"huntley","2":"bigs"},"2026-02-26":{"3":"cyto","2":"huntley","1":"wfh","4":"bigs"},"2026-02-27":{"3":"bigs","4":"huntley","1":"cyto","2":"wfh"},"2026-03-02":{"1":"bigs","3":"huntley","2":"cyto","4":"wfh"},"2026-03-03":{"3":"wfh","4":"cyto","1":"huntley","2":"bigs"},"2026-03-04":{"2":"huntley","4":"bigs","3":"cyto","1":"wfh"},"2026-03-05":{"1":"cyto","4":"huntley","3":"bigs","2":"wfh"},"2026-03-06":{"2":"cyto","4":"wfh","3":"huntley","1":"bigs"},"2026-03-09":{"3":"wfh","4":"cyto","2":"bigs","1":"huntley"},"2026-03-10":{"1":"huntley","4":"bigs","3":"cyto"},"2026-03-11":{"1":"wfh","4":"huntley","3":"bigs","2":"cyto"},"2026-03-12":{"2":"bigs","3":"huntley","4":"wfh","1":"cyto"},"2026-03-13":{"4":"cyto","3":"wfh","1":"bigs","2":"huntley"},"2026-03-16":{"1":"cyto","4":"huntley"},"2026-03-17":{"1":"huntley","4":"cyto"},"2026-03-18":{"2":"cyto","4":"huntley"},"2026-03-19":{"1":"cyto","2":"huntley"},"2026-03-20":{"2":"huntley","1":"bigs"},"2026-03-23":{"1":"huntley","2":"wfh","3":"bigs","4":"cyto"},"2026-03-24":{"3":"huntley","2":"cyto","4":"bigs","1":"wfh"},"2026-03-25":{"3":"wfh","4":"huntley","2":"bigs","1":"cyto"},"2026-03-26":{"3":"cyto","2":"huntley","1":"bigs","4":"wfh"},"2026-03-27":{"2":"wfh","4":"cyto","3":"bigs","1":"huntley"},"2026-03-30":{"3":"huntley","1":"bigs","2":"cyto"},"2026-03-31":{"1":"huntley","2":"bigs","3":"cyto"},"2026-04-01":{"1":"cyto","2":"huntley"},"2026-04-02":{"3":"huntley","1":"bigs","2":"cyto"},"2026-04-03":{"3":"cyto","1":"huntley","2":"bigs"},"2026-04-06":{"2":"huntley","1":"wfh","4":"cyto","3":"bigs"},"2026-04-07":{"2":"wfh","4":"bigs","1":"cyto"},"2026-04-08":{"4":"huntley","3":"bigs","2":"cyto"},"2026-04-09":{"4":"wfh","2":"bigs","3":"cyto","1":"huntley"},"2026-04-10":{"3":"bigs","1":"wfh","2":"huntley","4":"cyto"},"2026-04-13":{"3":"huntley","2":"wfh","1":"cyto","4":"bigs"},"2026-04-14":{"1":"bigs","2":"cyto","4":"huntley"},"2026-04-15":{"3":"cyto","1":"huntley","2":"bigs","4":"wfh"},"2026-04-16":{"1":"wfh","2":"huntley","4":"cyto","3":"bigs"},"2026-04-17":{"2":"wfh","4":"bigs","3":"huntley","1":"cyto"},"2026-04-20":{"2":"cyto","3":"wfh","1":"bigs","4":"huntley"},"2026-04-21":{"4":"wfh","3":"cyto","2":"bigs","1":"huntley"},"2026-04-22":{"3":"bigs","4":"cyto","2":"huntley","1":"wfh"},"2026-04-23":{"1":"cyto","3":"huntley","2":"wfh","4":"bigs"},"2026-04-24":{"3":"huntley","1":"bigs","2":"cyto","4":"wfh"},"2026-04-27":{"3":"cyto","4":"bigs","1":"huntley"},"2026-04-28":{"1":"cyto","3":"bigs","4":"huntley"},"2026-04-29":{"3":"huntley","1":"bigs","4":"cyto"},"2026-04-30":{"1":"huntley","3":"cyto","4":"bigs"},"2026-05-01":{"3":"bigs","1":"cyto","4":"huntley"},"2026-05-04":{"1":"bigs","4":"wfh","3":"huntley"},"2026-05-05":{"2":"bigs","1":"huntley","3":"wfh","4":"cyto"},"2026-05-06":{"1":"wfh","2":"huntley","4":"bigs","3":"cyto"},"2026-05-07":{"1":"cyto","4":"huntley","3":"bigs","2":"wfh"},"2026-05-08":{"1":"bigs","3":"huntley","2":"cyto","4":"wfh"},"2026-05-11":{"2":"bigs","3":"cyto","1":"huntley"},"2026-05-12":{"1":"wfh","3":"bigs","2":"huntley","4":"cyto"},"2026-05-13":{"4":"bigs","3":"huntley","2":"cyto"},"2026-05-14":{"2":"bigs","1":"cyto","4":"huntley","3":"wfh"},"2026-05-15":{"1":"bigs","3":"wfh","2":"huntley","4":"cyto"},"2026-05-18":{"1":"bigs","3":"cyto","2":"huntley","4":"wfh"}};
+
+// ── UI helpers ───────────────────────────────────────────────────────────────
+const log     = document.getElementById('log');
+const pbar    = document.getElementById('pbar');
+const btn     = document.getElementById('importBtn');
+const clrBtn  = document.getElementById('clearBtn');
+
+document.getElementById('cntVac').textContent = VACATIONS.length;
+document.getElementById('cntOcd').textContent = Object.keys(OC_DAY).length;
+document.getElementById('cntSvc').textContent = Object.keys(SVC).length;
+
+function emit(msg, cls='') {
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setProgress(pct) {
+  pbar.style.width = pct + '%';
+}
+
+// ── Clear existing schedule data ─────────────────────────────────────────────
+clrBtn.addEventListener('click', async () => {
+  if (!confirm('Clear scheduler/vacations, onCallOverrides, onCallDayOverrides, and serviceOverrides from Firebase? (Pathologists and passwords are NOT touched.)')) return;
+  clrBtn.disabled = true;
+  emit('Clearing existing schedule data…', 'warn');
+  try {
+    await db.ref('scheduler/vacations').remove();
+    await db.ref('scheduler/onCallOverrides').remove();
+    await db.ref('scheduler/onCallDayOverrides').remove();
+    await db.ref('scheduler/serviceOverrides').remove();
+    emit('✓ Cleared. Ready to import.', 'done');
+  } catch(e) {
+    emit('Error clearing: ' + e.message, 'err');
+  }
+  clrBtn.disabled = false;
+});
+
+// ── Import ───────────────────────────────────────────────────────────────────
+btn.addEventListener('click', async () => {
+  btn.disabled = true;
+  clrBtn.disabled = true;
+  emit('─── Starting import ───');
+
+  const total = VACATIONS.length + Object.keys(OC_DAY).length + Object.keys(SVC).length;
+  let done = 0;
+  const tick = () => { done++; setProgress(Math.round(done/total*100)); };
+
+  try {
+    // 1. Vacations
+    emit('Writing ' + VACATIONS.length + ' vacation ranges…');
+    for (const v of VACATIONS) {
+      await db.ref('scheduler/vacations').push(v);
+      tick();
+    }
+    emit('✓ Vacations done.');
+
+    // 2. On-call day overrides (batch into one update, 500 keys at a time)
+    emit('Writing ' + Object.keys(OC_DAY).length + ' on-call day overrides…');
+    const ocEntries = Object.entries(OC_DAY);
+    const OC_CHUNK = 500;
+    for (let i = 0; i < ocEntries.length; i += OC_CHUNK) {
+      const chunk = ocEntries.slice(i, i + OC_CHUNK);
+      const update = {};
+      for (const [k, v] of chunk) {
+        update['scheduler/onCallDayOverrides/' + k] = v;
+        tick();
+      }
+      await db.ref().update(update);
+    }
+    emit('✓ On-call day overrides done.');
+
+    // 3. Service overrides (batch 200 days at a time)
+    emit('Writing ' + Object.keys(SVC).length + ' service override days…');
+    const svcEntries = Object.entries(SVC);
+    const SVC_CHUNK = 200;
+    for (let i = 0; i < svcEntries.length; i += SVC_CHUNK) {
+      const chunk = svcEntries.slice(i, i + SVC_CHUNK);
+      const update = {};
+      for (const [dayKey, pathMap] of chunk) {
+        for (const [pathId, svcId] of Object.entries(pathMap)) {
+          update['scheduler/serviceOverrides/' + dayKey + '/' + pathId] = svcId;
+        }
+        tick();
+      }
+      await db.ref().update(update);
+    }
+    emit('✓ Service overrides done.');
+
+    setProgress(100);
+    emit('');
+    emit('🎉 Import complete! Open your schedule app to verify.', 'done');
+  } catch(e) {
+    emit('ERROR: ' + e.message, 'err');
+    emit('Some data may have been partially written. Check Firebase console.', 'warn');
+  }
+
+  btn.disabled = false;
+  clrBtn.disabled = false;
+});
+</script>
+</body>
+</html>

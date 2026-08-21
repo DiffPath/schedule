@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pathology Group Schedule</title>
+    <link rel="icon" type="image/x-icon" href="faviconSchedule.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="schedule.css">
+</head>
+
+<body>
+
+    <!-- Login overlay (first-time use on device) -->
+    <div class="login-overlay" id="loginOverlay" style="display:none;">
+        <div class="login-card">
+            <div class="login-sub">Sign in to your schedule</div>
+
+            <label>Sign in as</label>
+            <select id="loginPath">
+                <option value="">— Select your name —</option>
+            </select>
+
+            <label>Password</label>
+            <input type="password" id="loginPassword" autocomplete="current-password" placeholder="Password" />
+
+            <div class="login-error" id="loginError"></div>
+
+            <button class="login-submit" id="loginSubmit">Sign in</button>
+        </div>
+    </div>
+
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+        <div class="loading-status" id="loadingStatus">Connecting to database…</div>
+    </div>
+
+    <div class="app" id="app">
+
+        <!-- Mobile sidebar backdrop -->
+        <div class="sidebar-backdrop" id="sidebarBackdrop" aria-hidden="true"></div>
+
+        <!-- ────────────── LEFT SIDEBAR (full height) ────────────── -->
+        <aside id="aside">
+            <div class="aside-brand">
+                <img class="aside-brand-icon" src="icon.png" alt="Pathology Schedule" />
+                <h1><em>Pathologist Schedule</em></h1>
+            </div>
+
+            <nav class="page-nav" id="pageNav">
+                <div class="nav-section-label">Pages</div>
+                <button class="nav-item active" data-page="schedule">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="12" height="11" rx="1.5"/>
+                        <line x1="2" y1="6.5" x2="14" y2="6.5"/>
+                        <line x1="5.5" y1="2" x2="5.5" y2="4.5"/>
+                        <line x1="10.5" y1="2" x2="10.5" y2="4.5"/>
+                    </svg>
+                    <span>Schedule</span>
+                </button>
+                <button class="nav-item" data-page="requests">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 2.5h6a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1z"/>
+                        <line x1="6" y1="6" x2="10" y2="6"/>
+                        <line x1="6" y1="9" x2="10" y2="9"/>
+                        <line x1="6" y1="12" x2="9" y2="12"/>
+                    </svg>
+                    <span>Requests</span>
+                    <span class="nav-badge" id="navRequestsBadge" style="display:none;">0</span>
+                </button>
+                <button class="nav-item" data-page="changes">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M2.5 8a5.5 5.5 0 0 1 9.9-3.3"/>
+                        <polyline points="12.5,2 12.5,4.7 9.8,4.7"/>
+                        <path d="M13.5 8a5.5 5.5 0 0 1-9.9 3.3"/>
+                        <polyline points="3.5,14 3.5,11.3 6.2,11.3"/>
+                    </svg>
+                    <span>Changes</span>
+                    <span class="nav-badge" id="navChangesBadge" style="display:none;"></span>
+                </button>
+                <button class="nav-item" data-page="tracking">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="2,12 6,8 9,10 14,4"/>
+                        <polyline points="10,4 14,4 14,8"/>
+                    </svg>
+                    <span>Tracking</span>
+                </button>
+            </nav>
+
+            <div class="aside-spacer"></div>
+
+            <!-- Hidden action proxies — clicked by the toolbar's overflow menu and other JS hooks. -->
+            <div class="hidden-actions" aria-hidden="true">
+                <button id="addPtoBtn"><span id="addPtoBtnLabel">Manage PTO</span></button>
+                <button id="addNataliePtoBtn"><span id="addNataliePtoBtnLabel">Natalie PTO</span></button>
+                <button id="requestsBtn"><span id="requestsBtnLabel">Requests</span><span class="req-badge" id="requestsBadge" style="display:none;">0</span></button>
+                <button id="exportBtn">Export to Outlook</button>
+                <button id="recomputeBtn">Recompute Schedule</button>
+                <button id="todayBtn">Today</button>
+                <!-- Conference-add proxy: kept in the DOM so schedule.js can toggle admin visibility; the tracking-page buttons mirror it and click() it to open the modal. -->
+                <button id="trackingAddBtn" class="tracking-add-btn" style="display:none;" type="button">
+                    <span class="tracking-add-plus" aria-hidden="true">+</span>
+                    <span>Add entry</span>
+                </button>
+            </div>
+
+            <div class="aside-bottom">
+                <!-- Admin-only: opens the manual-recompute modal (from today
+                     with a horizon, or from a custom start date). Visibility
+                     toggled in renderSidebar(); clicks proxy #recomputeBtn. -->
+                <button class="nav-item" id="sidebarRecomputeBtn" style="display:none;" title="Recompute the future service schedule">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/>
+                        <polyline points="11.7,1.6 11.9,4.1 9.4,4.3"/>
+                    </svg>
+                    <span>Recompute</span>
+                </button>
+                <button class="nav-item" data-page="settings">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M6.5 1.5L6 3.2C5.5 3.4 5 3.7 4.6 4L2.9 3.3L1.3 6L2.6 7.1C2.6 7.4 2.5 7.7 2.5 8C2.5 8.3 2.6 8.6 2.6 8.9L1.3 10L2.9 12.7L4.6 12C5 12.3 5.5 12.6 6 12.8L6.5 14.5H9.5L10 12.8C10.5 12.6 11 12.3 11.4 12L13.1 12.7L14.7 10L13.4 8.9C13.4 8.6 13.5 8.3 13.5 8C13.5 7.7 13.4 7.4 13.4 7.1L14.7 6L13.1 3.3L11.4 4C11 3.7 10.5 3.4 10 3.2L9.5 1.5H6.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+                        <circle cx="8" cy="8" r="2" stroke="currentColor" stroke-width="1.4"/>
+                    </svg>
+                    <span>Settings</span>
+                </button>
+                <button class="nav-item nav-signout" id="sidebarSignOutBtn">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M6 14H3.5a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1H6"/>
+                        <path d="M11 11l3-3-3-3"/>
+                        <line x1="14" y1="8" x2="6" y2="8"/>
+                    </svg>
+                    <span>Sign out</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- Sidebar collapse toggle — inside the right edge when expanded, just outside when collapsed; hidden on mobile (off-canvas drawer). -->
+        <button class="sidebar-toggle-btn" id="sidebarToggleBtn" type="button"
+                aria-label="Collapse sidebar" title="Collapse sidebar">
+            <svg class="sidebar-toggle-chevron" viewBox="0 0 16 16" width="10" height="10"
+                 fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="10,4 6,8 10,12"/>
+            </svg>
+        </button>
+
+        <!-- ────────────── CONTENT AREA (right side, full height) ────────────── -->
+        <div class="content-area" id="contentArea">
+
+            <!-- Schedule toolbar — only shown on the Schedule page -->
+            <div class="schedule-toolbar" id="scheduleToolbar">
+                <!-- Hamburger that opens the sidebar (mobile only) -->
+                <button class="aside-toggle-btn" id="asideToggleBtn" aria-label="Open menu">
+                    <span class="hamburger-icon"></span>
+                    <span class="menu-dot" id="asideAlertDot" aria-hidden="true"></span>
+                </button>
+
+                <div class="toolbar-left">
+                    <div class="path-tabs" id="pathTabs">
+                        <button class="path-tab active" data-filter="all"><span class="tab-full">Group</span><span class="tab-short">Group</span></button>
+                        <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;"><span class="tab-full">Individual</span><span class="tab-short">Individual</span></button>
+                    </div>
+                    <button class="toolbar-np-btn" id="toolbarNataliePtoBtn" type="button" style="display:none;" title="Add Natalie PTO to the procedure schedule">
+                        <span class="toolbar-np-plus" aria-hidden="true">+</span>
+                        <span>Natalie PTO</span>
+                    </button>
+                </div>
+
+                <div class="toolbar-center">
+                    <button class="nav-btn" id="prevBtn" title="Previous">‹</button>
+                    <button class="current-period" id="currentPeriod" type="button" title="Tap to jump to today">—</button>
+                    <button class="nav-btn" id="nextBtn" title="Next">›</button>
+                </div>
+
+                <div class="toolbar-right">
+                    <div class="view-tabs" id="viewTabs">
+                        <!-- Day view: mobile-first single-day view with the procedure schedule; hidden on desktop via CSS. -->
+                        <button class="view-tab view-tab-day" data-view="day">Day</button>
+                        <button class="view-tab active" data-view="week">Week</button>
+                        <button class="view-tab" data-view="month">Month</button>
+                        <button class="view-tab" data-view="year">Year</button>
+                    </div>
+
+                </div>
+
+                <!-- Mobile-only compact controls: single-row toolbar [hamburger | date | path ▾ | view ▾]; arrows replaced by swipe. Selects mirror the desktop tab state (setPathFilter() + the view-tabs handler). Hidden on desktop. -->
+                <div class="mobile-toolbar-controls" id="mobileToolbarControls">
+                    <div class="mobile-select-wrap" id="mobilePathSelectWrap">
+                        <select id="mobilePathSelect" class="mobile-toolbar-select" aria-label="Filter">
+                            <option value="all">Group</option>
+                            <option value="me">Individual</option>
+                        </select>
+                    </div>
+                    <div class="mobile-select-wrap">
+                        <select id="mobileViewSelect" class="mobile-toolbar-select" aria-label="View">
+                            <option value="day">Day</option>
+                            <option value="week">Week</option>
+                            <option value="month">Month</option>
+                            <option value="year">Year</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Hidden pathologist list — kept for legacy renderSidebar() compatibility -->
+            <div id="pathList" hidden></div>
+            <!-- Hidden ocCallout — kept so legacy renderSidebar() can still write to it without errors -->
+            <div id="ocCallout" hidden></div>
+
+            <!-- Default page: schedule renders here -->
+            <main id="main"></main>
+
+            <!-- Requests page — admin reviews team requests; non-admin tracks own. -->
+            <div class="page-shell" id="requestsPage" hidden>
+                <div class="requests-page-content">
+                    <header class="requests-page-header">
+                        <div class="requests-page-heading">
+                            <h2 class="requests-page-title" id="requestsPageTitle">Requests</h2>
+                            <p class="requests-page-subtitle" id="requestsPageSubtitle">Review and decide on schedule change requests from the team.</p>
+                        </div>
+                        <div class="requests-page-summary" id="requestsPageSummary">
+                            <div class="requests-summary-stat" data-tone="pending">
+                                <span class="requests-summary-num" id="requestsSummaryPending">0</span>
+                                <span class="requests-summary-label">Pending</span>
+                            </div>
+                            <div class="requests-summary-divider" aria-hidden="true"></div>
+                            <div class="requests-summary-stat">
+                                <span class="requests-summary-num" id="requestsSummaryHistory">0</span>
+                                <span class="requests-summary-label">Resolved</span>
+                            </div>
+                        </div>
+                    </header>
+
+                    <div class="req-tabs requests-page-tabs" id="requestsPageTabs">
+                        <button class="req-tab active" data-rtab="pending">
+                            <span>Pending</span>
+                            <span class="req-tab-count" id="requestsPageTabCountPending">0</span>
+                        </button>
+                        <button class="req-tab" data-rtab="history">
+                            <span>History</span>
+                            <span class="req-tab-count" id="requestsPageTabCountHistory">0</span>
+                        </button>
+                    </div>
+
+                    <div class="req-list requests-page-list" id="requestsPageList"></div>
+                </div>
+            </div>
+
+            <!-- Changes page — log of every applied schedule change. -->
+            <div class="page-shell" id="changesPage" hidden>
+                <div class="changes-page-content">
+                    <header class="changes-page-header">
+                        <div class="changes-page-heading">
+                            <h2 class="changes-page-title">Changes</h2>
+                            <p class="changes-page-subtitle" id="changesPageSubtitle">Recent updates that affect your schedule, newest first.</p>
+                        </div>
+                        <div class="changes-page-summary" id="changesPageSummary">
+                            <div class="changes-summary-stat">
+                                <span class="changes-summary-num" id="changesSummaryTotal">0</span>
+                                <span class="changes-summary-label" id="changesSummaryLabel">Affecting you</span>
+                            </div>
+                        </div>
+                    </header>
+
+                    <div class="req-tabs changes-page-tabs" id="changesPageTabs">
+                        <button class="req-tab active" data-ctab="mine">
+                            <span>Affecting me</span>
+                            <span class="req-tab-count" id="changesTabCountMine">0</span>
+                        </button>
+                        <button class="req-tab" data-ctab="all">
+                            <span>All changes</span>
+                            <span class="req-tab-count" id="changesTabCountAll">0</span>
+                        </button>
+                    </div>
+
+                    <div class="chg-list" id="changesList"></div>
+                </div>
+            </div>
+
+            <!-- Tracking page — Conference Tracker -->
+            <div class="page-shell" id="trackingPage" hidden>
+                <div class="tracking-page-content">
+                    <header class="tracking-page-header">
+                        <div class="tracking-page-heading">
+                            <h2 class="tracking-page-title">Conference/Consult Tracker</h2>
+                            <p class="tracking-page-subtitle">Track conference presentations and cycle consult cases through the pathologists.</p>
+                        </div>
+                        <div class="tracking-page-controls">
+                            <div class="tracking-year-wrap">
+                                <label for="trackingYearSelect">Period</label>
+                                <select id="trackingYearSelect"></select>
+                            </div>
+                        </div>
+                    </header>
+
+                    <!-- One-time historical import banner (admin only,
+                         hidden until conferenceLogImported is set) -->
+                    <div class="tracking-import-banner" id="trackingImportBanner" style="display:none;">
+                        <div class="tracking-import-icon" aria-hidden="true">
+                            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M8 2v8"/>
+                                <polyline points="5,7 8,10 11,7"/>
+                                <path d="M3 13h10"/>
+                            </svg>
+                        </div>
+                        <div class="tracking-import-text">
+                            <div class="tracking-import-title">Historical data available</div>
+                            <div class="tracking-import-sub" id="trackingImportSub">Import past entries from your 2025–2026 spreadsheet.</div>
+                        </div>
+                        <button id="trackingImportBtn" class="tracking-import-btn" type="button">Import</button>
+                    </div>
+
+                    <!-- Two-column body: left = quick-add buttons + counts table; right = history/log -->
+                    <div class="tracking-grid">
+
+                        <!-- ── LEFT COLUMN ─────────────────────────────────────── -->
+                        <div class="tracking-col tracking-col-left">
+
+                            <!-- Consult rotation — next incoming consult; cycle = pathologist list, next recipient highlighted. "Log a consult" only for Kathleen/admin (renderConsultNext()). -->
+                            <section class="tracking-consult-section" id="trackingConsultSection">
+                                <div class="tracking-section-label">Consult rotation</div>
+                                <div class="consult-next-card" id="consultNextCard"></div>
+                                <button class="tracking-conf-btn consult-add-btn" id="consultAddBtn" type="button" style="display:none;">
+                                    <span class="tcb-dot" aria-hidden="true"></span>
+                                    <span class="tcb-label">Log a consult</span>
+                                    <span class="tcb-plus" aria-hidden="true">+</span>
+                                </button>
+                            </section>
+
+                            <!-- Per-conference quick-add buttons (admin only; visibility
+                                 mirrors the hidden #trackingAddBtn proxy in .hidden-actions). -->
+                            <section class="tracking-conf-add" id="trackingConfAdd" style="display:none;">
+                                <div class="tracking-section-label">Log a conference</div>
+                                <div class="tracking-conf-btn-stack">
+                                    <button class="tracking-conf-btn" data-conf="breast" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Breast Conference</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="lung" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Lung Conference</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="thoracic" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Thoracic Conference</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="cdh" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Morning / CDH</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="other" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Other Tumor Board</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                </div>
+                            </section>
+
+                            <!-- PTO tracker — working days used vs allotted in the selected fiscal year; follows the period selector. -->
+                            <section class="tracking-pto-section">
+                                <div class="tracking-section-label">
+                                    <span>PTO this fiscal year</span>
+                                    <span class="tracking-pto-period" id="trackingPtoPeriod" aria-hidden="true"></span>
+                                </div>
+                                <div class="tracking-pto-list" id="trackingPtoList"></div>
+                            </section>
+
+                            <!-- Holiday call tracker — on-call for the six federal holidays from Sept 1, 2025 (FY26 start, fixed) through 12 months from today (ignores the Period selector); derived from onCallIdForDay so swaps credit the actual coverer. -->
+                            <section class="tracking-holiday-section">
+                                <div class="tracking-section-label">
+                                    <span>Holiday call</span>
+                                    <span class="tracking-holiday-period" id="trackingHolidayPeriod" aria-hidden="true"></span>
+                                </div>
+                                <div class="tracking-summary-wrap">
+                                    <div class="tracking-summary-scroll">
+                                        <table class="tracking-summary tracking-holiday-table">
+                                            <thead>
+                                                <tr id="trackingHolidayHead"></tr>
+                                            </thead>
+                                            <tbody id="trackingHolidayBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <!-- Counts table — each pathologist × each conference type,
+                                 plus a separate consult tally for rotation fairness. -->
+                            <section class="tracking-summary-section">
+                                <div class="tracking-section-label">Presentation &amp; consult counts</div>
+                                <div class="tracking-summary-wrap">
+                                    <div class="tracking-summary-scroll">
+                                        <table class="tracking-summary">
+                                            <thead>
+                                                <tr>
+                                                    <th class="t-sum-name-col">Pathologist</th>
+                                                    <th>Breast</th>
+                                                    <th>Lung</th>
+                                                    <th>Thoracic</th>
+                                                    <th>Morning/CDH</th>
+                                                    <th>Other</th>
+                                                    <th class="t-sum-total-col">Total</th>
+                                                    <th class="t-sum-consult-col">Consults</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="trackingSummaryBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </section>
+
+                        </div>
+
+                        <!-- ── RIGHT COLUMN ────────────────────────────────────── -->
+                        <div class="tracking-col tracking-col-right">
+
+                            <div class="tracking-section-label">History</div>
+
+                            <!-- Conference type tabs -->
+                            <div class="tracking-tabs" id="trackingTabs" role="tablist">
+                                <button class="tracking-tab active" data-conf="breast" role="tab">
+                                    <span>Breast</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountBreast">0</span>
+                                </button>
+                                <button class="tracking-tab" data-conf="lung" role="tab">
+                                    <span>Lung</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountLung">0</span>
+                                </button>
+                                <button class="tracking-tab" data-conf="thoracic" role="tab">
+                                    <span>Thoracic</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountThoracic">0</span>
+                                </button>
+                                <button class="tracking-tab" data-conf="cdh" role="tab">
+                                    <span>Morning/CDH</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountCdh">0</span>
+                                </button>
+                                <button class="tracking-tab" data-conf="other" role="tab">
+                                    <span>Other</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountOther">0</span>
+                                </button>
+                                <button class="tracking-tab tracking-tab-consult" data-conf="consult" role="tab">
+                                    <span>Consults</span>
+                                    <span class="tracking-tab-count" id="trackingTabCountConsult">0</span>
+                                </button>
+                            </div>
+
+                            <!-- Entries list for active tab -->
+                            <div class="tracking-entries" id="trackingEntries"></div>
+
+                        </div>
+
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings page (full main-area version of what used to be a small drawer) -->
+            <div class="page-shell" id="settingsPage" hidden>
+                <div class="settings-page-content">
+                    <h2 class="settings-page-title">Settings</h2>
+
+                    <section class="settings-section" id="displaySection">
+                        <h3 class="settings-section-title">Display</h3>
+                        <label class="settings-row">
+                            <span class="settings-row-label">
+                                <span class="settings-row-name">Weekdays only</span>
+                                <span class="settings-row-desc">Hide Saturday &amp; Sunday from the calendar.</span>
+                            </span>
+                            <button class="toggle-switch" id="toggleWeekdays" role="switch" aria-checked="false" aria-label="Show weekdays only"></button>
+                        </label>
+                    </section>
+
+                    <section class="settings-section">
+                        <h3 class="settings-section-title">Defaults when you open the app</h3>
+                        <div class="settings-row settings-row-stack" id="defaultPageRow">
+                            <span class="settings-row-label">
+                                <span class="settings-row-name">Default page</span>
+                                <span class="settings-row-desc">Which page to land on when the app opens.</span>
+                            </span>
+                            <div class="settings-segmented" id="defaultPageSeg" role="radiogroup" aria-label="Default page">
+                                <button class="seg-btn" type="button" role="radio" data-value="schedule">Schedule</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="tracking">Tracking</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="requests">Requests</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="changes">Changes</button>
+                            </div>
+                        </div>
+                        <div class="settings-row settings-row-stack">
+                            <span class="settings-row-label">
+                                <span class="settings-row-name">Default view</span>
+                                <span class="settings-row-desc">Time range shown on launch.</span>
+                            </span>
+                            <div class="settings-segmented" id="defaultViewSeg" role="radiogroup" aria-label="Default view">
+                                <button class="seg-btn" type="button" role="radio" data-value="week">Week</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="month">Month</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="year">Year</button>
+                            </div>
+                        </div>
+                        <div class="settings-row settings-row-stack" id="defaultFilterRow">
+                            <span class="settings-row-label">
+                                <span class="settings-row-name">Default pathologists</span>
+                                <span class="settings-row-desc">Whose schedule to show on launch.</span>
+                            </span>
+                            <div class="settings-segmented" id="defaultFilterSeg" role="radiogroup" aria-label="Default pathologists">
+                                <button class="seg-btn" type="button" role="radio" data-value="all">Group</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="me">Individual</button>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- PTO allotments — admin only. Hidden for non-admins
+                         via JS in renderPtoAllotmentSettings(). -->
+                    <section class="settings-section" id="ptoAllotmentSection" style="display:none;">
+                        <h3 class="settings-section-title">PTO allotments</h3>
+                        <p class="settings-section-desc">Set the number of working days of PTO each pathologist is allotted per fiscal year (Sept 1 – Aug 31). Each fiscal year can have its own allotment; years without one use the default. Changes save automatically.</p>
+                        <div class="pto-allot-year-row">
+                            <span class="pto-allot-year-label">Fiscal year</span>
+                            <div class="pto-allot-year-stepper" role="group" aria-label="Fiscal year">
+                                <button type="button" class="pto-allot-year-btn" id="ptoAllotYearPrev" aria-label="Previous fiscal year" title="Previous fiscal year (←)">‹</button>
+                                <button type="button" class="pto-allot-year-current" id="ptoAllotYearCurrent" aria-live="polite" title="Jump to the current fiscal year">—</button>
+                                <button type="button" class="pto-allot-year-btn" id="ptoAllotYearNext" aria-label="Next fiscal year" title="Next fiscal year (→)">›</button>
+                            </div>
+                            <span class="pto-allot-year-meta" id="ptoAllotYearMeta" aria-hidden="true"></span>
+                            <button type="button" class="pto-allot-default-toggle" id="ptoAllotDefaultToggle">Edit default (all years)</button>
+                        </div>
+                        <div class="pto-allot-list" id="ptoAllotList"></div>
+                    </section>
+
+                    <!-- Hidden legacy elements that initSettings() expects to find. -->
+                    <div hidden>
+                        <button class="toggle-switch" id="toggleSidebar" role="switch" aria-checked="false"></button>
+                        <button id="settingsBtn"></button>
+                        <div id="settingsDrawer"></div>
+                        <button id="settingsSignOutBtn"></button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Add/edit PTO modal -->
+    <div class="modal-back" id="ptoModalBack">
+        <div class="modal">
+            <h3>Manage PTO</h3>
+            <div class="sub">Add a new PTO range or remove an existing one.</div>
+
+            <label>Pathologist</label>
+            <select id="ptoPath"></select>
+            <label>Start date</label>
+            <input type="date" id="ptoStart" />
+            <label>End date (inclusive)</label>
+            <input type="date" id="ptoEnd" />
+
+            <div id="ptoNoteWrap" style="display:none;">
+                <label>Note for admin (optional)</label>
+                <textarea id="ptoNote" rows="2" placeholder="e.g. family wedding, conference travel…"
+                    style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+            </div>
+
+            <label style="margin-top:18px;" id="ptoListLabel">Existing PTO</label>
+            <div class="pto-list" id="ptoList"></div>
+
+            <div class="modal-actions">
+                <button id="ptoCancel">Close</button>
+                <button class="primary" id="ptoSave">Add PTO</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Day detail modal -->
+    <div class="modal-back" id="dayModalBack">
+        <div class="modal">
+            <h3 id="dayModalTitle">Day</h3>
+            <div class="sub" id="dayModalSub">—</div>
+
+            <div class="day-detail-rows" id="dayDetailRows"></div>
+
+            <div class="day-detail-actions">
+                <button id="dayAddPto">Add PTO for this day</button>
+                <button id="dayChangeOnCall">Change who's on call</button>
+                <button id="dayChangeService">Override services this day</button>
+                <button id="dayAddLfSendout">Add Lake Forest</button>
+            </div>
+
+            <div class="modal-actions">
+                <button id="dayClose">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- On-call override modal -->
+    <div class="modal-back" id="ocModalBack">
+        <div class="modal">
+            <h3>Change who's on call</h3>
+            <div class="sub" id="ocModalSub">—</div>
+
+            <div class="oc-scope-toggle">
+                <label class="oc-scope-opt">
+                    <input type="radio" name="ocScope" value="day" id="ocScopeDay">
+                    This day only
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="ocScope" value="week" id="ocScopeWeek">
+                    Full week
+                </label>
+            </div>
+
+            <label>Pathologist on call</label>
+            <select id="ocPath"></select>
+
+            <div id="ocNoteWrap" style="display:none;">
+                <label style="margin-top:14px;">Note for admin (optional)</label>
+                <textarea id="ocNote" rows="2" placeholder="Reason for swap…"
+                    style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+            </div>
+
+            <div class="modal-actions">
+                <button id="ocReset" class="danger">Reset to default</button>
+                <button id="ocCancel">Cancel</button>
+                <button class="primary" id="ocSave">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Service override modal -->
+    <div class="modal-back" id="svcModalBack">
+        <div class="modal">
+            <h3>Override services for this day</h3>
+            <div class="sub" id="svcModalSub">—</div>
+
+            <div id="svcAssignments"></div>
+
+            <div id="svcNoteWrap" style="display:none;">
+                <label style="margin-top:14px;">Note for admin (optional)</label>
+                <textarea id="svcNote" rows="2" placeholder="Reason for change…"
+                    style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+            </div>
+
+            <div class="modal-actions">
+                <button id="svcReset" class="danger">Reset to default</button>
+                <button id="svcCancel">Cancel</button>
+                <button class="primary" id="svcSave">Save</button>
+            </div>
+        </div>
+    </div>
+    <!-- Lake Forest sendout modal -->
+    <div class="modal-back" id="lfModalBack">
+        <div class="modal">
+            <h3 id="lfModalTitle">Add Lake Forest sendout</h3>
+            <div class="sub" id="lfModalSub">—</div>
+
+            <div class="oc-scope-toggle">
+                <label class="oc-scope-opt">
+                    <input type="radio" name="lfScope" value="day" id="lfScopeDay" checked>
+                    This day only
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="lfScope" value="week" id="lfScopeWeek">
+                    Full week
+                </label>
+            </div>
+
+            <div class="lf-status" id="lfStatus" style="margin-top:14px; padding:10px 12px; border-radius:6px; font-size:12.5px;"></div>
+
+            <div class="modal-actions">
+                <button id="lfRemove" class="danger" style="display:none;">Remove sendout</button>
+                <button id="lfCancel">Cancel</button>
+                <button class="primary" id="lfSave">Add sendout</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lake Forest sendout REQUEST modal — LF guest files a request the
+         admin approves; nothing is written directly. -->
+    <div class="modal-back" id="lfReqModalBack">
+        <div class="modal">
+            <h3>Request Lake Forest sendout</h3>
+            <div class="sub">Ask the admin to add or remove a sendout day. You'll see the decision under Requests.</div>
+
+            <label>Date</label>
+            <input type="date" id="lfReqDate" />
+
+            <div class="oc-scope-toggle">
+                <label class="oc-scope-opt">
+                    <input type="radio" name="lfReqScope" value="day" id="lfReqScopeDay" checked>
+                    This day only
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="lfReqScope" value="week" id="lfReqScopeWeek">
+                    Full call week
+                </label>
+            </div>
+
+            <div class="lf-status" id="lfReqStatus" style="margin-top:14px; padding:10px 12px; border-radius:6px; font-size:12.5px;"></div>
+
+            <label>Note for admin (optional)</label>
+            <textarea id="lfReqNote" rows="2" placeholder="e.g. extra sendout volume expected…"
+                style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+
+            <div class="modal-actions">
+                <button id="lfReqCancel">Cancel</button>
+                <button class="primary" id="lfReqSubmit">Submit request</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Lake Forest sendout DATES ASK modal — admin asks the Lake Forest
+         account to provide their sendout dates (lf_dates_request). -->
+    <div class="modal-back" id="lfAskModalBack">
+        <div class="modal">
+            <h3>Request Lake Forest sendout dates</h3>
+            <div class="sub">Ask the Lake Forest office to provide their sendout dates. They'll see this under Requests and can respond with sendout requests.</div>
+
+            <div class="lf-status" id="lfAskContext" style="display:none; margin-top:10px; padding:10px 12px; border-radius:6px; font-size:12.5px; background:var(--bg-2); color:var(--ink-2);"></div>
+
+            <label>Covering dates (optional)</label>
+            <div style="display:flex; gap:10px;">
+                <input type="date" id="lfAskStart" style="flex:1; min-width:0;" />
+                <input type="date" id="lfAskEnd" style="flex:1; min-width:0;" />
+            </div>
+
+            <label>Note for Lake Forest (optional)</label>
+            <textarea id="lfAskNote" rows="2" placeholder="e.g. please confirm your sendout days for this period…"
+                style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+
+            <div class="modal-actions">
+                <button id="lfAskCancel">Cancel</button>
+                <button class="primary" id="lfAskSubmit">Send request</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export to Outlook modal -->
+    <div class="modal-back" id="exportModalBack">
+        <div class="modal">
+            <h3>Export to Outlook</h3>
+            <div class="sub">Download an .ics file you can import into Outlook (or any calendar app). Pick a pathologist and a date range.</div>
+
+            <label>Pathologist</label>
+            <select id="exportPath"></select>
+
+            <label>Start date</label>
+            <input type="date" id="exportStart" />
+            <label>End date (inclusive)</label>
+            <input type="date" id="exportEnd" />
+
+            <label style="margin-top:14px;">Include in export</label>
+            <div style="display:flex; flex-direction:column; gap:8px; margin-top:6px;">
+                <label style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:0; font-size:13px; margin:0;">
+                    <input type="checkbox" id="exportIncludeService" checked style="width:auto; margin:0;" />
+                    Service assignments (Cyto, Bigs, Huntley, WFH)
+                </label>
+                <label style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:0; font-size:13px; margin:0;">
+                    <input type="checkbox" id="exportIncludePto" checked style="width:auto; margin:0;" />
+                    PTO days
+                </label>
+                <label style="display:flex; align-items:center; gap:8px; font-weight:400; text-transform:none; letter-spacing:0; font-size:13px; margin:0;">
+                    <input type="checkbox" id="exportIncludeOnCall" checked style="width:auto; margin:0;" />
+                    On-call days
+                </label>
+            </div>
+
+            <div class="sub" id="exportHint" style="margin-top:14px;">After downloading, open Outlook → File → Open &amp; Export → Import/Export → Import an iCalendar file.</div>
+
+            <div class="modal-actions">
+                <button id="exportCancel">Cancel</button>
+                <button class="primary" id="exportDownload">Download .ics</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recompute schedule modal -->
+    <div class="modal-back" id="recomputeModalBack">
+        <div class="modal">
+            <h3>Recompute future schedule</h3>
+            <div class="sub">Recompute the future service schedule for all pathologists using the rotation rules. Approved &amp; locked assignments (glowing pills) and pinned service overrides will be respected.</div>
+
+            <div class="oc-scope-toggle" style="margin-top:10px;">
+                <label class="oc-scope-opt">
+                    <input type="radio" name="rcMode" value="horizon" id="rcModeHorizon" checked>
+                    Starting from today
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="rcMode" value="range" id="rcModeRange">
+                    Custom date range
+                </label>
+            </div>
+
+            <div id="rcHorizonWrap" style="margin-top:14px;">
+                <label>Horizon</label>
+                <select id="rcHorizonSelect">
+                    <option value="30">Next 30 days</option>
+                    <option value="90">Next 90 days</option>
+                    <option value="180" selected>Next 180 days</option>
+                    <option value="365">Next 365 days</option>
+                </select>
+            </div>
+
+            <div id="rcRangeWrap" style="display:none;">
+                <label>Start date</label>
+                <input type="date" id="rcStart" />
+                <label>End date (inclusive)</label>
+                <input type="date" id="rcEnd" />
+            </div>
+
+            <div class="sub" id="rcRangeError" style="display:none; color:#b94e2a; margin-top:10px; margin-bottom:0;"></div>
+
+            <div class="modal-actions">
+                <button id="rcCancelBtn">Cancel</button>
+                <button class="primary" id="rcConfirmBtn">Recompute</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add procedure modal (week-view hourly grid) -->
+    <div class="modal-back" id="procModalBack">
+        <div class="modal modal-wide">
+            <h3 id="procModalTitle">Add procedure</h3>
+            <div class="sub" id="procModalSub">—</div>
+
+            <label>Location</label>
+            <div class="proc-loc-toggle" id="procLocToggle">
+                <label class="proc-loc-opt">
+                    <input type="radio" name="procLoc" value="HH">
+                    <span>HH</span>
+                </label>
+                <label class="proc-loc-opt">
+                    <input type="radio" name="procLoc" value="MH">
+                    <span>MH</span>
+                </label>
+            </div>
+
+            <label style="margin-top:18px;">Procedure type</label>
+            <div class="proc-type-grid" id="procTypeGrid"></div>
+
+            <div class="modal-actions">
+                <button id="procCancel">Cancel</button>
+                <button class="primary" id="procConfirm" disabled>Add Procedure</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Natalie PTO modal (Gross Room + admin): flag PTO on the procedure
+         schedule for a day, the visible week, or a custom date range. -->
+    <div class="modal-back" id="npModalBack">
+        <div class="modal">
+            <h3>Natalie PTO</h3>
+            <div class="sub">Add or remove "Natalie PTO" on the procedure schedule.</div>
+
+            <div class="oc-scope-toggle">
+                <label class="oc-scope-opt">
+                    <input type="radio" name="npScope" value="day" id="npScopeDay" checked>
+                    This day only
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="npScope" value="week" id="npScopeWeek">
+                    This week
+                </label>
+                <label class="oc-scope-opt">
+                    <input type="radio" name="npScope" value="range" id="npScopeRange">
+                    Date range
+                </label>
+            </div>
+
+            <div id="npDayWrap" style="margin-top:14px;">
+                <label>Date</label>
+                <input type="date" id="npDay" />
+            </div>
+
+            <div id="npRangeWrap" style="display:none;">
+                <label>Start date</label>
+                <input type="date" id="npStart" />
+                <label>End date (inclusive)</label>
+                <input type="date" id="npEnd" />
+            </div>
+
+            <div class="np-status" id="npStatus" style="margin-top:14px; padding:10px 12px; border-radius:6px; font-size:12.5px;"></div>
+
+            <label style="margin-top:18px;">Existing Natalie PTO</label>
+            <div class="pto-list" id="npList"></div>
+
+            <div class="modal-actions">
+                <button id="npCancel">Close</button>
+                <button class="primary" id="npSave">Add PTO</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Requests modal (admin: approve/deny; non-admin: see own history) -->
+    <div class="modal-back" id="requestsModalBack">
+        <div class="modal modal-wide">
+            <h3 id="requestsModalTitle">Pending Requests</h3>
+            <div class="sub" id="requestsModalSub">Review schedule change requests.</div>
+
+            <div class="req-tabs" id="reqTabs">
+                <button class="req-tab active" data-rtab="pending">Pending</button>
+                <button class="req-tab" data-rtab="history">History</button>
+            </div>
+
+            <div class="req-list" id="requestsList"></div>
+
+            <div class="modal-actions">
+                <button id="requestsClose">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Conference entry add/edit modal -->
+    <div class="modal-back" id="confModalBack">
+        <div class="modal">
+            <h3 id="confModalTitle">Add conference entry</h3>
+            <div class="sub" id="confModalSub">Log when a pathologist presented at a conference.</div>
+
+            <label>Conference</label>
+            <select id="confType">
+                <option value="breast">Breast Conference</option>
+                <option value="lung">Lung Conference</option>
+                <option value="thoracic">Thoracic Conference</option>
+                <option value="cdh">Morning / CDH</option>
+                <option value="other">Other Tumor Board</option>
+            </select>
+
+            <div id="confSubtypeWrap" style="display:none;">
+                <label>CDH subtype</label>
+                <select id="confSubtype">
+                    <option value="GI">GI</option>
+                    <option value="Heme">Heme</option>
+                    <option value="Thoracic">Thoracic</option>
+                    <option value="Neuro">Neuro</option>
+                </select>
+            </div>
+
+            <div id="confOtherTitleWrap" style="display:none;">
+                <label>Title</label>
+                <input type="text" id="confOtherTitle" placeholder="e.g. NMH Gyn Onc" maxlength="80" />
+            </div>
+
+            <label>Date</label>
+            <input type="date" id="confDate" />
+
+            <label>Time</label>
+            <input type="time" id="confTime" />
+
+            <!-- Live schedule panel for the selected date (renderConferenceDaySchedule()); click a row to pick that presenter. -->
+            <div class="conf-day-schedule" id="confDaySchedule"></div>
+
+            <label>Presenter</label>
+            <select id="confPathologist"></select>
+
+            <label>Note (optional)</label>
+            <input type="text" id="confNote" placeholder="Any additional context…" maxlength="160" />
+
+            <div class="conf-form-error" id="confFormError" style="display:none;"></div>
+
+            <div class="modal-actions">
+                <button id="confDelete" class="danger" style="display:none;" type="button">Delete</button>
+                <button id="confCancel" type="button">Cancel</button>
+                <button id="confSave" class="primary" type="button">Add entry</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Consult add/edit modal — date, source, recipient (prefilled from rotation), MHSC<yy>-<nnnn> case number (prefilled next-in-sequence). -->
+    <div class="modal-back" id="consultModalBack">
+        <div class="modal">
+            <h3 id="consultModalTitle">Log a consult</h3>
+            <div class="sub" id="consultModalSub">Record an incoming consult case and who takes it.</div>
+
+            <label>Date received</label>
+            <input type="date" id="consultDate" />
+
+            <label>Received from</label>
+            <input type="text" id="consultSource" placeholder="e.g. Northwestern Medicine, outside hospital…" maxlength="80" />
+
+            <label>Pathologist</label>
+            <select id="consultPathologist"></select>
+            <div class="consult-rotation-hint" id="consultRotationHint"></div>
+
+            <label>Case number</label>
+            <input type="text" id="consultCaseNumber" placeholder="MHSC26-0001" maxlength="20" autocomplete="off" spellcheck="false" />
+            <div class="sub" id="consultCaseHint" style="margin-top:6px;">Numbered automatically from the date — the next in sequence for that year.</div>
+
+            <div class="conf-form-error" id="consultFormError" style="display:none;"></div>
+
+            <div class="modal-actions">
+                <button id="consultDelete" class="danger" style="display:none;" type="button">Delete</button>
+                <button id="consultCancel" type="button">Cancel</button>
+                <button id="consultSave" class="primary" type="button">Add consult</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-analytics-compat.js"></script>
+
+    <script src="schedule.js"></script>
+    <script src="recompute.js"></script>
+
+</body>
+</html>

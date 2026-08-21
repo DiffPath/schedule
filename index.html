@@ -712,6 +712,32 @@
         </div>
     </div>
 
+    <!-- Lake Forest sendout DATES ASK modal — admin asks the Lake Forest
+         account to provide their sendout dates (lf_dates_request). -->
+    <div class="modal-back" id="lfAskModalBack">
+        <div class="modal">
+            <h3>Request Lake Forest sendout dates</h3>
+            <div class="sub">Ask the Lake Forest office to provide their sendout dates. They'll see this under Requests and can respond with sendout requests.</div>
+
+            <div class="lf-status" id="lfAskContext" style="display:none; margin-top:10px; padding:10px 12px; border-radius:6px; font-size:12.5px; background:var(--bg-2); color:var(--ink-2);"></div>
+
+            <label>Covering dates (optional)</label>
+            <div style="display:flex; gap:10px;">
+                <input type="date" id="lfAskStart" style="flex:1; min-width:0;" />
+                <input type="date" id="lfAskEnd" style="flex:1; min-width:0;" />
+            </div>
+
+            <label>Note for Lake Forest (optional)</label>
+            <textarea id="lfAskNote" rows="2" placeholder="e.g. please confirm your sendout days for this period…"
+                style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
+
+            <div class="modal-actions">
+                <button id="lfAskCancel">Cancel</button>
+                <button class="primary" id="lfAskSubmit">Send request</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Export to Outlook modal -->
     <div class="modal-back" id="exportModalBack">
         <div class="modal">

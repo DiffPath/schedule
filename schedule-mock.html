@@ -531,6 +531,35 @@
                         <div class="pto-allot-list" id="ptoAllotList"></div>
                     </section>
 
+                    <!-- Email notifications — admin only. Hidden for non-admins
+                         via JS in renderEmailSettings(). -->
+                    <section class="settings-section" id="emailSection" style="display:none;">
+                        <h3 class="settings-section-title">Email notifications</h3>
+                        <p class="settings-section-desc">Email the Lake Forest contact automatically when you request their sendout dates. Powered by <a href="https://www.emailjs.com" target="_blank" rel="noopener">EmailJS</a> — paste the IDs from your EmailJS dashboard (Email Services, Email Templates, and Account → Public Key). Values save automatically and are shared across devices.</p>
+                        <div class="email-cfg-grid">
+                            <label class="email-cfg-field">
+                                <span class="email-cfg-label">Service ID</span>
+                                <input type="text" id="emailCfgServiceId" placeholder="service_xxxxxxx" autocomplete="off" spellcheck="false" />
+                            </label>
+                            <label class="email-cfg-field">
+                                <span class="email-cfg-label">Template ID</span>
+                                <input type="text" id="emailCfgTemplateId" placeholder="template_xxxxxxx" autocomplete="off" spellcheck="false" />
+                            </label>
+                            <label class="email-cfg-field">
+                                <span class="email-cfg-label">Public Key</span>
+                                <input type="text" id="emailCfgPublicKey" placeholder="e.g. Ab1Cd2Ef3Gh4Ij5Kl" autocomplete="off" spellcheck="false" />
+                            </label>
+                            <label class="email-cfg-field">
+                                <span class="email-cfg-label">Lake Forest email</span>
+                                <input type="email" id="emailCfgLfEmail" placeholder="contact@example.com" autocomplete="off" spellcheck="false" />
+                            </label>
+                        </div>
+                        <div class="email-cfg-actions">
+                            <span class="email-cfg-status" id="emailCfgStatus"></span>
+                            <button type="button" class="email-cfg-test-btn" id="emailCfgTestBtn" disabled>Send test email</button>
+                        </div>
+                    </section>
+
                     <!-- Hidden legacy elements that initSettings() expects to find. -->
                     <div hidden>
                         <button class="toggle-switch" id="toggleSidebar" role="switch" aria-checked="false"></button>

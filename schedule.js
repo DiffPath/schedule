@@ -217,6 +217,12 @@ let ptoAllotments = {};
 let lfSendoutDays = {};
 let lfSendoutWeeks = {};
 
+// EmailJS notification config (admin-editable under Settings → Email
+// notifications). Shared via Firebase so asks filed from any device notify.
+// All four fields must be set for sending to be active.
+//   emailConfig → { serviceId, templateId, publicKey, lfEmail }
+let emailConfig = {};
+
 // Gross-room PTO flags: display-only "Natalie PTO" banner on the procedure
 // grid; no effect on rotation/coverage/allotments.
 //   nataliePtoDays → { 'YYYY-MM-DD': true }
@@ -461,6 +467,11 @@ function applySettings() {
     // Render the admin-only PTO allotment editor (hides itself for non-admins).
     if (typeof renderPtoAllotmentSettings === 'function') {
         try { renderPtoAllotmentSettings(); } catch (_) { /* ignore */ }
+    }
+
+    // Render the admin-only email notification settings (same self-hiding).
+    if (typeof renderEmailSettings === 'function') {
+        try { renderEmailSettings(); } catch (_) { /* ignore */ }
     }
 }
 
@@ -1797,6 +1808,16 @@ regListener('scheduler/ptoAllotments', snap => {
     if (pathologistsReady && vacationsReady) renderAll();
 }, err => {
     console.error('Firebase ptoAllotments error:', err);
+});
+
+// EmailJS config — only surfaces in the admin Settings section.
+regListener('scheduler/emailConfig', snap => {
+    emailConfig = snap.exists() ? snap.val() : {};
+    if (typeof renderEmailSettings === 'function') {
+        try { renderEmailSettings(); } catch (_) { /* ignore */ }
+    }
+}, err => {
+    console.error('Firebase emailConfig error:', err);
 });
 
 // Lake Forest sendout flags — see isLfSendoutDay() for how they're consumed.
@@ -8353,8 +8374,150 @@ document.getElementById('lfAskSubmit').addEventListener('click', async () => {
         targetId: LAKE_FOREST_ID,
         toast: 'Request sent to Lake Forest.',
     });
-    if (ok) document.getElementById('lfAskModalBack').classList.remove('open');
+    if (ok) {
+        document.getElementById('lfAskModalBack').classList.remove('open');
+        // Fire-and-forget: toasts its own outcome, no-op if not configured.
+        notifyLfAskByEmail(payload, note);
+    }
 });
+
+// ────────────── EMAIL NOTIFICATIONS (EmailJS) ──────────────
+// Browser-side email via the EmailJS REST API — no server. Config lives at
+// scheduler/emailConfig (admin-edited under Settings → Email notifications);
+// sending is active only when all four fields are present. The EmailJS
+// template is expected to use {{to_email}} as its "To Email" and render
+// {{subject}} / {{message}} / {{requested_by}} / {{app_url}}.
+
+function emailConfigComplete() {
+    const c = emailConfig || {};
+    return !!(c.serviceId && c.templateId && c.publicKey && c.lfEmail);
+}
+
+async function sendEmailViaEmailJs(templateParams) {
+    if (!emailConfigComplete()) return false;
+    try {
+        const res = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                service_id: emailConfig.serviceId,
+                template_id: emailConfig.templateId,
+                user_id: emailConfig.publicKey,
+                template_params: templateParams,
+            }),
+        });
+        if (!res.ok) {
+            console.error('EmailJS send failed:', res.status, await res.text());
+            return false;
+        }
+        return true;
+    } catch (err) {
+        console.error('EmailJS send error:', err);
+        return false;
+    }
+}
+
+// Compose + send the "sendout dates requested" notification for a just-filed
+// lf_dates_request ask. Silent no-op when email isn't configured.
+async function notifyLfAskByEmail(payload, note) {
+    if (!emailConfigComplete()) return;
+    const who = _pathName(loggedInPathId).replace(/^Dr\. /, '');
+    const range = (payload.start && payload.end)
+        ? _reqDateRange(payload.start, payload.end) : null;
+    let message = `${who} has requested your Lake Forest sendout dates`
+        + (range ? ` covering ${range}` : '')
+        + (payload.aboutName ? ` (re: ${payload.aboutName}'s PTO)` : '')
+        + '.';
+    if (note && note.trim()) message += `\n\nNote: "${note.trim()}"`;
+    message += '\n\nSign in to the scheduler and open the Requests page to respond.';
+
+    const ok = await sendEmailViaEmailJs({
+        to_email: emailConfig.lfEmail,
+        subject: 'Lake Forest sendout dates requested',
+        message: message,
+        requested_by: who,
+        app_url: /^https?:$/.test(location.protocol) ? location.href : '',
+    });
+    if (ok) {
+        showToast('Email notification sent to ' + emailConfig.lfEmail + '.');
+    } else {
+        showToast('Request saved, but the email notification failed — check Settings → Email notifications.', { type: 'error' });
+    }
+}
+
+// ── Settings section (admin only) ──
+const EMAIL_CFG_FIELDS = {
+    emailCfgServiceId: 'serviceId',
+    emailCfgTemplateId: 'templateId',
+    emailCfgPublicKey: 'publicKey',
+    emailCfgLfEmail: 'lfEmail',
+};
+
+function renderEmailSettings() {
+    const section = document.getElementById('emailSection');
+    if (!section) return;
+    if (!isAdmin()) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = '';
+
+    Object.entries(EMAIL_CFG_FIELDS).forEach(([elId, key]) => {
+        const el = document.getElementById(elId);
+        // Don't yank a value out from under the admin mid-type; the field
+        // refreshes on the next render after its change commits.
+        if (!el || document.activeElement === el) return;
+        el.value = (emailConfig && emailConfig[key]) || '';
+    });
+
+    const status = document.getElementById('emailCfgStatus');
+    const testBtn = document.getElementById('emailCfgTestBtn');
+    const ready = emailConfigComplete();
+    if (status) {
+        status.textContent = ready
+            ? 'Active — Lake Forest will be emailed when you request sendout dates.'
+            : 'Inactive — fill in all four fields to enable notifications.';
+        status.classList.toggle('is-active', ready);
+    }
+    if (testBtn) testBtn.disabled = !ready;
+}
+
+Object.entries(EMAIL_CFG_FIELDS).forEach(([elId, key]) => {
+    const el = document.getElementById(elId);
+    if (!el) return;
+    el.addEventListener('change', async () => {
+        if (!isAdmin()) return;
+        const val = el.value.trim();
+        try {
+            await db.ref('scheduler/emailConfig/' + key).set(val || null);
+        } catch (err) {
+            console.error('emailConfig save error:', err);
+            showToast('Failed to save email setting: ' + (err.message || err), { type: 'error' });
+        }
+    });
+});
+
+const _emailTestBtn = document.getElementById('emailCfgTestBtn');
+if (_emailTestBtn) {
+    _emailTestBtn.addEventListener('click', async () => {
+        if (!isAdmin() || !emailConfigComplete()) return;
+        _emailTestBtn.disabled = true;
+        _emailTestBtn.textContent = 'Sending…';
+        const ok = await sendEmailViaEmailJs({
+            to_email: emailConfig.lfEmail,
+            subject: 'Test — scheduler email notifications',
+            message: 'This is a test email from the Pathology Group Schedule app.\n\nIf you are reading this, email notifications are set up correctly.',
+            requested_by: _pathName(loggedInPathId).replace(/^Dr\. /, ''),
+            app_url: /^https?:$/.test(location.protocol) ? location.href : '',
+        });
+        _emailTestBtn.textContent = 'Send test email';
+        _emailTestBtn.disabled = !emailConfigComplete();
+        showToast(ok
+            ? 'Test email sent to ' + emailConfig.lfEmail + '.'
+            : 'Test email failed — check the IDs against your EmailJS dashboard (details in the browser console).',
+            ok ? {} : { type: 'error' });
+    });
+}
 
 // ────────────── NATALIE PTO MODAL (Gross Room + admin) ──────────────
 // Scopes: day / week (Mon–Fri, skipping holidays) / range — all resolve to

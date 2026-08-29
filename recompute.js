@@ -1344,6 +1344,18 @@ function showRecomputeDialog(opts) {
     });
 }
 
+// Set by the "Save & recompute" / "Approve & recompute" buttons immediately
+// before their save runs, and consumed once by the next maybeOfferRecompute()
+// call. When it's set the dialog is skipped — the admin already answered it
+// by choosing which button to press. Surfaces that don't offer the pair
+// (PTO list edits, LF sendouts, on-call) leave it null and still get asked.
+//   null | { recompute: boolean, horizonDays: number }
+let _pendingRecomputeChoice = null;
+
+function setPendingRecomputeChoice(choice) {
+    _pendingRecomputeChoice = choice || null;
+}
+
 // Wrapper used from save handlers: only offers recompute to admins, only
 // when fromDate is today or later, then runs recomputeFutureSchedule().
 async function maybeOfferRecompute(pinnedByDay, opts) {
@@ -1365,11 +1377,17 @@ async function maybeOfferRecompute(pinnedByDay, opts) {
     }
 
     let choice;
-    try {
-        choice = await showRecomputeDialog({ message: opts.message });
-    } catch (err) {
-        console.error('recompute dialog error', err);
-        return;
+    if (_pendingRecomputeChoice) {
+        // Answered up front by the button the admin pressed — consume it.
+        choice = _pendingRecomputeChoice;
+        _pendingRecomputeChoice = null;
+    } else {
+        try {
+            choice = await showRecomputeDialog({ message: opts.message });
+        } catch (err) {
+            console.error('recompute dialog error', err);
+            return;
+        }
     }
     if (!choice || !choice.recompute) return;
 

@@ -680,6 +680,14 @@ main {
     border: 1px solid rgba(202, 138, 4, 0.35);
 }
 
+/* Grey: every conflict on this day has been accepted by the admin — kept
+   visible so the day still explains itself, but no longer shouting. */
+.rule-flag-accepted {
+    background: rgba(100, 100, 100, 0.1);
+    color: #6b7280;
+    border: 1px solid rgba(100, 100, 100, 0.28);
+}
+
 .month-view .day .num .rule-flag {
     width: 13px;
     height: 13px;
@@ -4865,11 +4873,13 @@ aside {
     flex-shrink: 0;
 }
 
-/* Requests / Changes nav dots — compact circle; amber pending / green
-   approved / red denied on Requests, blue on Changes; pulses once when
-   something unseen arrives. */
+/* Requests / Changes nav dots — compact circle; bright red for a brand-new
+   unseen request, amber once seen but still pending, green approved /
+   rust denied on Requests, blue on Changes; pulses once when something
+   unseen arrives. */
 #navRequestsBadge,
-#navChangesBadge {
+#navChangesBadge,
+#navConflictsBadge {
     min-width: 8px;
     width: 8px;
     height: 8px;
@@ -4882,10 +4892,15 @@ aside {
     transition: background 0.25s ease;
 }
 
+#navRequestsBadge.tone-new      { background: #d92d20; }
 #navRequestsBadge.tone-pending  { background: #c49620; }
 #navRequestsBadge.tone-approved { background: #2a8c46; }
 #navRequestsBadge.tone-denied   { background: #b94e2a; }
 #navChangesBadge.tone-changed   { background: #2e6a99; }
+/* Conflicts dot: red until the admin has looked, amber while conflicts
+   remain open, gone once they're corrected or accepted. */
+#navConflictsBadge.tone-new     { background: #d92d20; }
+#navConflictsBadge.tone-pending { background: #c49620; }
 
 /* One-shot pulse animation when a new decision lands */
 @keyframes nav-dot-pop {
@@ -4895,9 +4910,11 @@ aside {
     100% { transform: scale(1);   opacity: 1; }
 }
 #navRequestsBadge.pop,
-#navChangesBadge.pop {
+#navChangesBadge.pop,
+#navConflictsBadge.pop {
     animation: nav-dot-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
+
 
 /* Spacer pushes the bottom block to the bottom of the sidebar. */
 .aside-spacer {
@@ -5964,16 +5981,19 @@ body.sidebar-scroll-locked {
    page; page-shells hide via [hidden] ════ */
 
 /* On non-schedule pages, hide the toolbar, oc-callout, and main calendar. */
+.app[data-page="conflicts"] .schedule-toolbar,
 .app[data-page="requests"] .schedule-toolbar,
 .app[data-page="changes"] .schedule-toolbar,
 .app[data-page="tracking"] .schedule-toolbar,
 .app[data-page="settings"] .schedule-toolbar { display: none; }
 
+.app[data-page="conflicts"] .oc-callout-wrap,
 .app[data-page="requests"] .oc-callout-wrap,
 .app[data-page="changes"] .oc-callout-wrap,
 .app[data-page="tracking"] .oc-callout-wrap,
 .app[data-page="settings"] .oc-callout-wrap { display: none; }
 
+.app[data-page="conflicts"] > .content-area > main,
 .app[data-page="requests"] > .content-area > main,
 .app[data-page="changes"] > .content-area > main,
 .app[data-page="tracking"] > .content-area > main,
@@ -5981,6 +6001,7 @@ body.sidebar-scroll-locked {
 
 /* For any non-schedule page, the page-shell needs a tiny breathing room
    at the top since there's no toolbar above it. */
+.app[data-page="conflicts"] .page-shell,
 .app[data-page="requests"] .page-shell,
 .app[data-page="changes"] .page-shell,
 .app[data-page="tracking"] .page-shell,
@@ -5993,7 +6014,8 @@ body.sidebar-scroll-locked {
 @media (max-width: 800px) {
     /* Keep a minimal hamburger-only toolbar on non-schedule mobile pages
        (overrides the desktop hide rule). */
-    .app[data-page="requests"] .schedule-toolbar,
+    .app[data-page="conflicts"] .schedule-toolbar,
+.app[data-page="requests"] .schedule-toolbar,
     .app[data-page="changes"] .schedule-toolbar,
     .app[data-page="tracking"] .schedule-toolbar,
     .app[data-page="settings"] .schedule-toolbar {
@@ -6008,7 +6030,8 @@ body.sidebar-scroll-locked {
     }
 
     /* Hide all toolbar children except the hamburger on those pages */
-    .app[data-page="requests"] .schedule-toolbar > :not(.aside-toggle-btn),
+    .app[data-page="conflicts"] .schedule-toolbar > :not(.aside-toggle-btn),
+.app[data-page="requests"] .schedule-toolbar > :not(.aside-toggle-btn),
     .app[data-page="changes"] .schedule-toolbar > :not(.aside-toggle-btn),
     .app[data-page="tracking"] .schedule-toolbar > :not(.aside-toggle-btn),
     .app[data-page="settings"] .schedule-toolbar > :not(.aside-toggle-btn) {
@@ -7218,3 +7241,271 @@ table.tracking-summary tbody td.t-sum-empty {
 /* Year view: sendout days render as normal call/PTO-style squares with an
    "LF" label (cellContent in schedule.js). Cells stay clickable — for LF a
    day click opens the sendout request modal instead of day drill-in. */
+/* ═══════════════ CONFLICTS PAGE (admin) ═══════════════
+   Everything wrong with the schedule in one list: on-call/PTO overlaps,
+   hard coverage-rule breaks and soft-rule breaks. Structure mirrors the
+   Changes page; the shared .page-shell / .req-tabs styles do the rest. */
+.conflicts-page-content {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 12px 4px 60px;
+}
+
+.conflicts-page-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    padding-bottom: 22px;
+    margin-bottom: 22px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+.conflicts-page-heading { min-width: 0; }
+
+.conflicts-page-title {
+    font-family: var(--serif);
+    font-size: 36px;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+    margin: 0 0 8px;
+}
+
+.conflicts-page-subtitle {
+    font-size: 13.5px;
+    color: var(--ink-2);
+    line-height: 1.55;
+    margin: 0;
+    max-width: 56ch;
+}
+
+.conflicts-page-summary {
+    display: flex;
+    align-items: stretch;
+    gap: 18px;
+    padding: 12px 18px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 8px;
+    flex-shrink: 0;
+}
+
+.conflicts-summary-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 56px;
+    line-height: 1;
+}
+
+.conflicts-summary-num {
+    font-family: var(--serif);
+    font-size: 30px;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+    margin-bottom: 6px;
+}
+
+/* The open count is the one that matters — tint it when it isn't zero. */
+.conflicts-summary-stat[data-tone="open"] .conflicts-summary-num { color: #a41b12; }
+
+.conflicts-summary-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+
+.conflicts-summary-divider {
+    width: 1px;
+    background: var(--rule-soft);
+}
+
+/* Tabs on the left, horizon picker on the right. */
+.conflicts-page-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin: 0 0 18px;
+}
+
+.conflicts-page-tabs { margin: 0; }
+
+.cfl-horizon,
+.rc-horizon {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    white-space: nowrap;
+}
+
+.cfl-horizon select,
+.rc-horizon select {
+    font-family: var(--sans);
+    font-size: 12px;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ink);
+    padding: 4px 7px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--paper);
+    cursor: pointer;
+}
+
+/* In a modal footer the horizon sits left of the buttons. */
+.rc-horizon { margin-right: auto; }
+
+/* Inside a request card it sits inline with the action buttons instead. */
+.rc-horizon-inline { margin-right: 0; }
+
+.cfl-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.cfl-card {
+    padding: 12px 14px;
+    border: 1px solid var(--rule-soft);
+    border-left: 3px solid var(--ink-4);
+    border-radius: 7px;
+    background: var(--paper);
+}
+
+.cfl-card.tone-high { border-left-color: #d92d20; }
+.cfl-card.tone-low { border-left-color: #c49620; }
+.cfl-card.cfl-accepted {
+    border-left-color: var(--ink-4);
+    background: var(--paper-2);
+}
+
+.cfl-card-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+}
+
+.cfl-when {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--ink-2);
+}
+
+.cfl-kind {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    font-weight: 600;
+    letter-spacing: 0.11em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: var(--bg-2);
+    color: var(--ink-2);
+}
+
+/* Red badge for the two that mean the day is actually broken. */
+.cfl-kind-callpto,
+.cfl-kind-hard {
+    background: rgba(217, 45, 32, 0.12);
+    color: #a41b12;
+}
+
+.cfl-kind-soft {
+    background: rgba(202, 138, 4, 0.14);
+    color: #92620a;
+}
+
+/* Marks rows that weren't on the list the last time this admin looked. */
+.cfl-new {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    font-weight: 700;
+    letter-spacing: 0.11em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: #d92d20;
+    color: #fff;
+}
+
+.cfl-detail {
+    font-size: 13.5px;
+    color: var(--ink);
+    line-height: 1.45;
+}
+
+.cfl-ack {
+    margin-top: 5px;
+    font-size: 11.5px;
+    color: var(--ink-3);
+}
+
+.cfl-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.cfl-actions button {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 11px;
+    border-radius: 4px;
+    border: 1px solid var(--rule);
+    background: var(--paper-2);
+    color: var(--ink-2);
+    cursor: pointer;
+}
+
+.cfl-actions button:hover {
+    background: var(--bg-2);
+    color: var(--ink);
+}
+
+.cfl-actions button.cfl-accept {
+    border-color: rgba(217, 45, 32, 0.4);
+    color: #a41b12;
+}
+
+.cfl-actions button.cfl-accept:hover {
+    background: rgba(217, 45, 32, 0.1);
+}
+
+.cfl-empty {
+    padding: 28px 18px;
+    text-align: center;
+    font-size: 13.5px;
+    color: var(--ink-3);
+    line-height: 1.6;
+    border: 1px dashed var(--rule-soft);
+    border-radius: 8px;
+}
+
+@media (max-width: 800px) {
+    .conflicts-page-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 16px;
+    }
+    .conflicts-page-title { font-size: 28px; }
+    /* Modal footers get crowded on a phone — let the horizon wrap. */
+    .rc-horizon { margin-right: 0; }
+}

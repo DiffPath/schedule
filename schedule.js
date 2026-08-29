@@ -228,6 +228,19 @@ let emailConfig = {};
 //   nataliePtoDays → { 'YYYY-MM-DD': true }
 let nataliePtoDays = {};
 
+// Conflicts the admin has accepted. A conflict is derived, never stored;
+// accepting one writes its key here so it stays off the list on every device
+// and for every admin until the underlying schedule changes.
+//   conflictAcks → { '<kind>_<date>_<subject>': { kind, date, end, label,
+//                                                 detail, by, byName, at } }
+let conflictAcks = {};
+
+// Derived-conflict caches; all invalidated by clearDayCache() and whenever
+// conflictAcks changes. See getConflicts().
+let _conflicts = null;          // full horizon scan, sorted
+let _callPtoConflicts = null;   // on-call/PTO overlaps only
+let _callPtoDayIndex = null;    // Map<dayKey, conflict[]>
+
 // Procedures: hourly schedule independent of the rotation. Shape:
 // { 'YYYY-MM-DD': { pushKey: { time:'HH:MM', type:'procedure', createdAt,
 // createdBy } } } — `type` stored for future variants.
@@ -1396,6 +1409,10 @@ function clearDayCache() {
     _dayCache.clear();
     _naturalCache.clear();
     _violationFlags.clear();
+    // Conflicts are derived from the day assignments, so they go stale too.
+    _conflicts = null;
+    _callPtoConflicts = null;
+    _callPtoDayIndex = null;
 }
 
 // (recompute code moved to recompute.js)
@@ -1820,6 +1837,18 @@ regListener('scheduler/emailConfig', snap => {
     console.error('Firebase emailConfig error:', err);
 });
 
+// Accepted conflicts. Acks don't change any assignment, so no day-cache
+// clear — just drop the derived lists and repaint the dot/page/day flags.
+regListener('scheduler/conflictAcks', snap => {
+    conflictAcks = snap.exists() ? snap.val() : {};
+    _conflicts = null;
+    _callPtoConflicts = null;
+    _callPtoDayIndex = null;
+    if (pathologistsReady && vacationsReady) renderAll();
+}, err => {
+    console.error('Firebase conflictAcks error:', err);
+});
+
 // Lake Forest sendout flags — see isLfSendoutDay() for how they're consumed.
 regListener('scheduler/lfSendoutDays', snap => {
     lfSendoutDays = snap.exists() ? snap.val() : {};
@@ -1940,6 +1969,10 @@ function renderSidebar() {
 
     // Changes nav dot (depends on who is signed in)
     updateNavChangesIndicator();
+
+    // Conflicts nav dot + page (admin only)
+    updateNavConflictsIndicator();
+    if (isAdmin()) renderConflictsPage();
 
     const cs = getCallCycleStart(today);
     const ce = getCallCycleEnd(cs);
@@ -2173,9 +2206,11 @@ function updateRequestsBadge() {
 }
 
 // ────────────── SIDEBAR NAV DOT INDICATOR ──────────────
-// Dot on "Requests": amber = pending, green = approved since last visit,
-// red = denied since last visit. Visiting the page stamps
-// reqDecisionAck_{pathId} in localStorage; older decisions count as seen.
+// Dot on "Requests": red = a request that arrived since the last visit,
+// amber = pending but already seen, green = approved since last visit,
+// rust = denied since last visit. Visiting the page (or opening the
+// requests modal) stamps reqDecisionAck_{pathId} in localStorage; anything
+// older than that stamp counts as seen.
 function _getAckTs() {
     if (!loggedInPathId) return Date.now();
     const key = 'reqDecisionAck_' + loggedInPathId;
@@ -2191,6 +2226,23 @@ function _getAckTs() {
     } catch (_) { return 0; }
 }
 
+// Pending requests that landed since the last visit — these light the dot
+// red so a brand-new ask reads differently from one already looked at.
+// Requests the user filed themselves never count (they already know).
+function getUnseenIncomingRequests() {
+    const ackTs = _getAckTs();
+    const fresh = Object.values(requests || {}).filter(r =>
+        r && r.status === 'pending'
+        && r.requesterId !== loggedInPathId
+        && (r.createdAt || 0) > ackTs
+    );
+    // Same visibility rules as getVisiblePendingCount(): admin sees every
+    // ask needing review (asks the admin sent out wait on the target);
+    // everyone else only sees asks aimed at them.
+    if (isAdmin()) return fresh.filter(r => r.type !== 'lf_dates_request');
+    return fresh.filter(r => r.targetId === loggedInPathId);
+}
+
 function updateNavRequestsIndicator() {
     const dot = document.getElementById('navRequestsBadge');
     if (!dot) return;
@@ -2203,10 +2255,12 @@ function updateNavRequestsIndicator() {
     const admin = isAdmin();
 
     if (admin) {
-        // Admins: amber dot when any pending requests exist
+        // Admins: red dot while an unseen request is waiting, amber once
+        // the queue has been viewed but requests are still pending.
         const pendingCount = getVisiblePendingCount();
         if (pendingCount > 0) {
-            _setNavDot(dot, 'tone-pending', false);
+            const isNew = getUnseenIncomingRequests().length > 0;
+            _setNavDot(dot, isNew ? 'tone-new' : 'tone-pending', isNew);
         } else {
             dot.style.display = 'none';
         }
@@ -2229,9 +2283,13 @@ function updateNavRequestsIndicator() {
             && r.decisionBy !== loggedInPathId
     );
     const hasPending = mine.some(r => r.status === 'pending');
+    const hasUnseenNew = getUnseenIncomingRequests().length > 0;
 
-    // Denied takes priority over approved (worst news first)
-    if (hasUnseenDenied) {
+    // A new ask aimed at this user outranks everything — it needs action.
+    // After that, denied takes priority over approved (worst news first).
+    if (hasUnseenNew) {
+        _setNavDot(dot, 'tone-new', true);
+    } else if (hasUnseenDenied) {
         _setNavDot(dot, 'tone-denied', true);
     } else if (hasUnseenApproved) {
         _setNavDot(dot, 'tone-approved', true);
@@ -2260,9 +2318,10 @@ function _setNavDot(dot, toneClass, pop) {
 }
 
 // Stamp the visit time so later updateNavRequestsIndicator() calls know
-// which decisions are "new".
+// which arrivals/decisions are "new". Admins stamp too — that is what
+// flips their dot from red (unseen request) to amber (seen, still pending).
 function markRequestsPageSeen() {
-    if (!loggedInPathId || isAdmin()) return;
+    if (!loggedInPathId) return;
     const key = 'reqDecisionAck_' + loggedInPathId;
     try { localStorage.setItem(key, String(Date.now())); } catch (_) {}
     updateNavRequestsIndicator();
@@ -2332,6 +2391,517 @@ function markChangesPageSeen() {
     const key = 'chgSeenAck_' + loggedInPathId;
     try { localStorage.setItem(key, String(Date.now())); } catch (_) {}
     updateNavChangesIndicator();
+}
+
+// ══════════ CONFLICTS (admin) ══════════
+// One list for everything wrong with the schedule:
+//   callpto — someone is on call while on PTO
+//   hard    — a coverage rule is not met (a required service is unstaffed)
+//   soft    — a rotation rule is broken: Bigs the day before PTO, Bigs the
+//             day before Breast Bx/WFH, or the same service two days running
+//
+// Note on severity: violationsFor() calls Bigs-before-PTO/WFH "Rule 2/3" and
+// applyHardRules treats them as constraints while it permutes the day, but
+// they are soft rules to the group — the schedule still works, it's just not
+// ideal. Only unstaffed coverage and on-call-during-PTO are hard.
+//
+// Conflicts are derived on every scan; nothing about them is stored except
+// the admin's decision to ACCEPT one, which lives in
+// scheduler/conflictAcks/<key> and therefore applies on every device and for
+// every admin. Accepting never changes the schedule — it only stops the
+// nagging. Each key is built from the kind, the date and the subject, so if
+// the schedule shifts the key shifts with it and an accepted conflict can
+// never silently swallow a different, later one.
+//
+// Indicators mirror Requests: red = at least one conflict not seen yet,
+// yellow = all seen but still not corrected, hidden = nothing open.
+// "Seen" is per-device (localStorage); acceptance is shared (Firebase).
+
+const CONFLICT_HORIZONS = [30, 90, 180, 365];
+const CONFLICT_HORIZON_DEFAULT = 180;
+
+// How far ahead the Conflicts page and its dot look. Admin-changeable on the
+// page itself; remembered per browser.
+let conflictHorizonDays = (() => {
+    try {
+        const v = parseInt(localStorage.getItem('conflictHorizonDays'), 10);
+        return CONFLICT_HORIZONS.includes(v) ? v : CONFLICT_HORIZON_DEFAULT;
+    } catch (_) { return CONFLICT_HORIZON_DEFAULT; }
+})();
+
+function setConflictHorizon(days) {
+    const v = CONFLICT_HORIZONS.includes(days) ? days : CONFLICT_HORIZON_DEFAULT;
+    if (v === conflictHorizonDays) return;
+    conflictHorizonDays = v;
+    try { localStorage.setItem('conflictHorizonDays', String(v)); } catch (_) {}
+    _conflicts = null;
+    renderConflictsPage();
+    updateNavConflictsIndicator();
+}
+
+// Firebase keys can't hold . # $ [ ] / — slug the message down to a safe,
+// stable token so the same issue always produces the same key.
+function _conflictSlug(text) {
+    return String(text)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80);
+}
+
+function _ruleConflictKey(kind, dayKey, msg) {
+    return `${kind}_${dayKey}_${_conflictSlug(msg)}`;
+}
+
+function callPtoConflictKey(pathId, startStr, endStr) {
+    return `callpto_${pathId}_${startStr}_${endStr}`;
+}
+
+// ── On-call / PTO overlaps ──────────────────────────────────────────────
+// A day counts when the pathologist's EFFECTIVE assignment is 'pto' (so a
+// service override that pulls them back on duty resolves it) and they are
+// the on-call pathologist that day. Walks PTO ranges rather than the
+// calendar, so cost scales with scheduled PTO, and collapses contiguous
+// days into one conflict.
+function getCallPtoConflicts() {
+    if (_callPtoConflicts) return _callPtoConflicts;
+    if (!today || pathologists.length === 0) return [];
+
+    const from = today.getTime() > EARLIEST_DATE.getTime() ? today : EARLIEST_DATE;
+    const out = [];
+
+    vacations.forEach(v => {
+        if (!v || v.end.getTime() < from.getTime()) return;   // fully in the past
+        const first = v.start.getTime() < from.getTime() ? from : v.start;
+
+        let run = null;
+        const flush = () => {
+            if (!run) return;
+            const startStr = fmt(run.start);
+            const endStr = fmt(run.end);
+            out.push(_decorateConflict({
+                key: callPtoConflictKey(v.pathologistId, startStr, endStr),
+                kind: 'callpto',
+                date: run.start,
+                dateStr: startStr,
+                endStr,
+                days: run.days,
+                pathId: v.pathologistId,
+                label: 'On call during PTO',
+                detail: _describeCallPto(v, run, startStr, endStr),
+            }));
+            run = null;
+        };
+
+        for (let d = new Date(first); d.getTime() <= v.end.getTime(); d = addDays(d, 1)) {
+            const a = getDayAssignments(d)[v.pathologistId];
+            if (a && a.type === 'pto' && a.onCall) {
+                if (run) { run.end = new Date(d); run.days++; }
+                else run = { start: new Date(d), end: new Date(d), days: 1 };
+            } else {
+                flush();
+            }
+        }
+        flush();
+    });
+
+    out.sort((a, b) => (a.date - b.date) || (a.pathId - b.pathId));
+    _callPtoConflicts = out;
+    return out;
+}
+
+function _describeCallPto(vacation, run, startStr, endStr) {
+    const range = _reqDateRange(startStr, endStr);
+    const vac = _reqDateRange(fmt(vacation.start), fmt(vacation.end));
+    const dayCount = `${run.days} day${run.days === 1 ? '' : 's'}`;
+    const sameRange = startStr === fmt(vacation.start) && endStr === fmt(vacation.end);
+    return `${_shortPathName(vacation.pathologistId)} is on call ${range} (${dayCount})`
+        + (sameRange ? ' while on PTO' : ` during PTO ${vac}`);
+}
+
+// Which on-call/PTO conflicts cover a given date (usually none).
+function callPtoConflictsForDay(date) {
+    if (!_callPtoDayIndex) {
+        _callPtoDayIndex = new Map();
+        getCallPtoConflicts().forEach(c => {
+            for (let d = new Date(c.date); fmt(d) <= c.endStr; d = addDays(d, 1)) {
+                const k = fmt(d);
+                if (!_callPtoDayIndex.has(k)) _callPtoDayIndex.set(k, []);
+                _callPtoDayIndex.get(k).push(c);
+            }
+        });
+    }
+    return _callPtoDayIndex.get(fmt(date)) || [];
+}
+
+function _shortPathName(pathId) {
+    return _pathName(pathId).replace(/^Dr\. /, '');
+}
+
+// Stamp the shared acceptance state onto a freshly-built conflict.
+function _decorateConflict(c) {
+    const ack = conflictAcks[c.key] || null;
+    c.accepted = !!ack;
+    c.ack = ack;
+    return c;
+}
+
+// ── Everything wrong on one specific date ───────────────────────────────
+// Computed live, so it works for any date — past, future, or beyond the
+// Conflicts page horizon.
+function conflictsForDate(date) {
+    const out = callPtoConflictsForDay(date).slice();
+
+    // Rule checks are weekday-only and never look before EARLIEST_DATE.
+    if (!isWeekend(date) && !getFederalHoliday(date) && !isBeforeEarliest(date)) {
+        const dayKey = fmt(date);
+        const add = (kind, label, msg) => out.push(_decorateConflict({
+            key: _ruleConflictKey(kind, dayKey, msg),
+            kind,
+            date: new Date(date),
+            dateStr: dayKey,
+            endStr: dayKey,
+            days: 1,
+            pathId: null,
+            label,
+            detail: msg,
+        }));
+        // Hard: coverage rules. A required service is unstaffed — the day
+        // does not work, and no rotation shuffle can fix it.
+        (coverageViolationsForDay(date) || []).forEach(m => add('hard', 'Coverage rule', m));
+
+        // Soft: the rotation preferences. softRuleViolationsForDay() reports
+        // Bigs-before-PTO and Bigs-before-WFH in the language the rest of the
+        // app uses, so those are the rows we keep.
+        (softRuleViolationsForDay(date) || []).forEach(m => add('soft', 'Soft rule', m));
+
+        // violationsFor() checks the SAME two conditions as Rules 2 and 3 —
+        // it's the optimizer's phrasing of them, left behind when the swap
+        // pass couldn't resolve the day. Listing those again would duplicate
+        // the soft rows above under a second key, so only Rule 4 (repeated
+        // service), which has no soft-checker equivalent, is carried over.
+        (violationsForDay(date) || [])
+            .filter(m => /Rule 4:/.test(m))
+            .forEach(m => add('soft', 'Soft rule', m));
+    }
+
+    return out;
+}
+
+// ── The full list behind the Conflicts page and its nav dot ─────────────
+const CONFLICT_KIND_RANK = { callpto: 0, hard: 1, soft: 2 };
+
+function getConflicts() {
+    if (_conflicts) return _conflicts;
+    if (!today || pathologists.length === 0) return [];
+
+    const from = today.getTime() > EARLIEST_DATE.getTime() ? new Date(today) : new Date(EARLIEST_DATE);
+    const to = addDays(from, conflictHorizonDays);
+    const seen = new Set();
+    const out = [];
+
+    for (let d = new Date(from); d.getTime() <= to.getTime(); d = addDays(d, 1)) {
+        conflictsForDate(d).forEach(c => {
+            // Multi-day conflicts surface on each of their days — keep the first.
+            if (seen.has(c.key)) return;
+            seen.add(c.key);
+            out.push(c);
+        });
+    }
+
+    out.sort((a, b) =>
+        (a.date - b.date)
+        || (CONFLICT_KIND_RANK[a.kind] - CONFLICT_KIND_RANK[b.kind])
+        || a.key.localeCompare(b.key));
+    _conflicts = out;
+    return out;
+}
+
+function getOpenConflicts() {
+    return getConflicts().filter(c => !c.accepted);
+}
+
+// ── Seen state (per device, like the Requests/Changes dots) ─────────────
+// Stores the keys that were open at the last visit, so "new" means "a
+// conflict that wasn't on the list when you last looked".
+function _conflictSeenKeys() {
+    if (!loggedInPathId) return new Set();
+    try {
+        const raw = localStorage.getItem('conflictSeenKeys_' + loggedInPathId);
+        if (!raw) return new Set();
+        const arr = JSON.parse(raw);
+        return new Set(Array.isArray(arr) ? arr : []);
+    } catch (_) { return new Set(); }
+}
+
+// Snapshot taken when the page is opened, so the visit that clears the dot
+// can still mark which rows were new. Reset on navigation away.
+let _conflictVisitSeen = null;
+
+function markConflictsPageSeen() {
+    if (!loggedInPathId || !isAdmin()) return;
+    try {
+        localStorage.setItem(
+            'conflictSeenKeys_' + loggedInPathId,
+            JSON.stringify(getOpenConflicts().map(c => c.key))
+        );
+    } catch (_) {}
+    updateNavConflictsIndicator();
+}
+
+// ── Nav dot: red = something unseen, yellow = seen but not yet corrected ─
+function updateNavConflictsIndicator() {
+    const dot = document.getElementById('navConflictsBadge');
+    const item = document.querySelector('.nav-item[data-page="conflicts"]');
+    const admin = isAdmin();
+
+    if (item) item.style.display = admin ? '' : 'none';
+    if (!dot) return;
+
+    if (!admin) {
+        dot.style.display = 'none';
+        dot.className = 'nav-badge';
+        dot.removeAttribute('title');
+        return;
+    }
+
+    const open = getOpenConflicts();
+    if (open.length === 0) {
+        dot.style.display = 'none';
+        dot.removeAttribute('title');
+        return;
+    }
+
+    const seen = _conflictSeenKeys();
+    const unseen = open.filter(c => !seen.has(c.key));
+    const tone = unseen.length > 0 ? 'tone-new' : 'tone-pending';
+    dot.title = unseen.length > 0
+        ? `${unseen.length} new conflict${unseen.length === 1 ? '' : 's'} (${open.length} open)`
+        : `${open.length} open conflict${open.length === 1 ? '' : 's'}`;
+    _setNavDot(dot, tone, unseen.length > 0);
+}
+
+// ── Accept / un-accept ──────────────────────────────────────────────────
+async function acceptConflict(key) {
+    if (!isAdmin()) return;
+    const c = getConflicts().find(x => x.key === key);
+    if (!c) return;
+    const ok = confirm(
+        `Accept this conflict?\n\n${c.detail}\n\n`
+        + 'The schedule is not changed — this only takes it off the conflict '
+        + 'list. It comes back if the underlying assignment changes.'
+    );
+    if (!ok) return;
+    try {
+        await db.ref('scheduler/conflictAcks/' + key).set({
+            kind: c.kind,
+            date: c.dateStr,
+            end: c.endStr,
+            label: c.label,
+            detail: c.detail,
+            by: loggedInPathId,
+            byName: _pathName(loggedInPathId),
+            at: Date.now(),
+        });
+        showToast('Conflict accepted — the schedule was not changed.');
+    } catch (err) {
+        console.error('acceptConflict error:', err);
+        showToast('Failed to accept conflict: ' + (err.message || err), { type: 'error' });
+    }
+}
+
+async function unacceptConflict(key) {
+    if (!isAdmin()) return;
+    try {
+        await db.ref('scheduler/conflictAcks/' + key).remove();
+        showToast('Conflict back on the list.');
+    } catch (err) {
+        console.error('unacceptConflict error:', err);
+        showToast('Failed to restore conflict: ' + (err.message || err), { type: 'error' });
+    }
+}
+
+// Jump the calendar to a conflict and open that day for editing.
+function goToConflict(key) {
+    const c = getConflicts().find(x => x.key === key);
+    if (!c) return;
+    cursor = new Date(c.date);
+    if (typeof window.__setPage === 'function') window.__setPage('schedule');
+    renderMain();
+    openDayDetail(new Date(c.date));
+}
+
+// ── Conflicts page ──────────────────────────────────────────────────────
+let activeConflictsTab = 'open';
+
+const CONFLICT_KIND_META = {
+    callpto: { short: 'ON CALL / PTO', tone: 'high' },
+    hard: { short: 'COVERAGE', tone: 'high' },
+    soft: { short: 'SOFT RULE', tone: 'low' },
+};
+
+function renderConflictsPage() {
+    const listEl = document.getElementById('conflictsList');
+    if (!listEl) return;
+    if (!isAdmin()) { listEl.innerHTML = ''; return; }
+
+    const all = getConflicts();
+    const open = all.filter(c => !c.accepted);
+    const accepted = all.filter(c => c.accepted);
+    const seen = _conflictVisitSeen || _conflictSeenKeys();
+
+    // Header counts
+    const setText = (id, txt) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = txt;
+    };
+    setText('conflictsSummaryOpen', String(open.length));
+    setText('conflictsSummaryNew', String(open.filter(c => !seen.has(c.key)).length));
+    setText('conflictsTabCountOpen', String(open.length));
+    setText('conflictsTabCountAccepted', String(accepted.length));
+
+    const horizonSel = document.getElementById('conflictsHorizon');
+    if (horizonSel) horizonSel.value = String(conflictHorizonDays);
+
+    document.querySelectorAll('#conflictsPageTabs .req-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.ctab === activeConflictsTab);
+    });
+
+    const rows = activeConflictsTab === 'open' ? open : accepted;
+
+    if (rows.length === 0) {
+        listEl.innerHTML = `<div class="cfl-empty">${
+            activeConflictsTab === 'open'
+                ? `No conflicts in the next ${conflictHorizonDays} days. `
+                  + 'Coverage rules, soft rules and on-call/PTO overlaps all check out.'
+                : 'Nothing accepted yet. Accepting a conflict takes it off the open '
+                  + 'list without changing the schedule.'
+        }</div>`;
+        return;
+    }
+
+    listEl.innerHTML = rows.map(c => {
+        const meta = CONFLICT_KIND_META[c.kind] || { short: c.kind, tone: 'low' };
+        const isNew = !c.accepted && !seen.has(c.key);
+        const when = c.dateStr === c.endStr
+            ? _conflictDayLabel(c.date)
+            : _reqDateRange(c.dateStr, c.endStr);
+        const ackLine = c.accepted && c.ack
+            ? `<div class="cfl-ack">Accepted${c.ack.byName ? ' by ' + escapeHtml(String(c.ack.byName).replace(/^Dr\. /, '')) : ''}${
+                c.ack.at ? ' · ' + _conflictDayLabel(new Date(c.ack.at)) : ''}</div>`
+            : '';
+        return `
+            <div class="cfl-card tone-${meta.tone}${c.accepted ? ' cfl-accepted' : ''}" data-key="${escapeHtml(c.key)}">
+              <div class="cfl-card-head">
+                <span class="cfl-when">${escapeHtml(when)}</span>
+                <span class="cfl-kind cfl-kind-${c.kind}">${meta.short}</span>
+                ${isNew ? '<span class="cfl-new">NEW</span>' : ''}
+              </div>
+              <div class="cfl-detail">${escapeHtml(c.detail)}</div>
+              ${ackLine}
+              <div class="cfl-actions">
+                <button type="button" data-cact="goto">Go to day</button>
+                ${c.accepted
+                    ? '<button type="button" data-cact="unaccept">Put back on the list</button>'
+                    : '<button type="button" class="cfl-accept" data-cact="accept">Accept</button>'}
+              </div>
+            </div>`;
+    }).join('');
+}
+
+function _conflictDayLabel(d) {
+    return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+// Expose for callers that refresh the page after sign-in.
+window.__renderConflictsPage = renderConflictsPage;
+
+// Delegated handlers — the list is rebuilt on every data change.
+(function wireConflictsPage() {
+    const listEl = document.getElementById('conflictsList');
+    if (listEl) {
+        listEl.addEventListener('click', e => {
+            const btn = e.target.closest('button[data-cact]');
+            if (!btn) return;
+            const card = btn.closest('.cfl-card');
+            if (!card) return;
+            const key = card.dataset.key;
+            const act = btn.dataset.cact;
+            if (act === 'goto') goToConflict(key);
+            else if (act === 'accept') acceptConflict(key);
+            else if (act === 'unaccept') unacceptConflict(key);
+        });
+    }
+
+    const tabsEl = document.getElementById('conflictsPageTabs');
+    if (tabsEl) {
+        tabsEl.addEventListener('click', e => {
+            const btn = e.target.closest('.req-tab');
+            if (!btn) return;
+            activeConflictsTab = btn.dataset.ctab;
+            renderConflictsPage();
+        });
+    }
+
+    const horizonSel = document.getElementById('conflictsHorizon');
+    if (horizonSel) {
+        horizonSel.addEventListener('change', () => {
+            setConflictHorizon(parseInt(horizonSel.value, 10));
+        });
+    }
+})();
+
+// ────────────── CONFLICT PRE-CHECKS (point of action) ──────────────
+// Used before an admin writes PTO or an on-call assignment, so the conflict
+// is flagged while it is still one click to avoid.
+
+// Dates in [start, end] where pathId is the on-call pathologist. Reads the
+// raw rotation/overrides, so it works before the PTO exists.
+function onCallDaysInRange(pathId, start, end) {
+    const days = [];
+    for (let d = new Date(start); d.getTime() <= end.getTime(); d = addDays(d, 1)) {
+        if (isBeforeEarliest(d)) continue;
+        if (onCallIdForDay(d) === pathId) days.push(new Date(d));
+    }
+    return days;
+}
+
+function _callPtoDayList(days) {
+    const labels = days.map(d => `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`);
+    if (labels.length <= 6) return labels.join(', ');
+    return labels.slice(0, 6).join(', ') + ` … (+${labels.length - 6} more)`;
+}
+
+// True to proceed. `verb` is the button the admin is about to press.
+function confirmPtoDuringOnCall(pathId, start, end, verb) {
+    const days = onCallDaysInRange(pathId, start, end);
+    if (days.length === 0) return true;
+    const name = _shortPathName(pathId);
+    return confirm(
+        `⚠ On-call / PTO conflict\n\n`
+        + `${name} is on call on ${days.length} day${days.length === 1 ? '' : 's'} of this PTO:\n`
+        + `${_callPtoDayList(days)}\n\n`
+        + `${verb} anyway? It will be listed on the Conflicts page until the `
+        + `call block is reassigned or you accept it.`
+    );
+}
+
+// Mirror check for the other direction: assigning call over existing PTO.
+function confirmOnCallDuringPto(pathId, start, end, verb) {
+    const days = [];
+    for (let d = new Date(start); d.getTime() <= end.getTime(); d = addDays(d, 1)) {
+        if (isBeforeEarliest(d)) continue;
+        if (isOnPto(pathId, d)) days.push(new Date(d));
+    }
+    if (days.length === 0) return true;
+    const name = _shortPathName(pathId);
+    return confirm(
+        `⚠ On-call / PTO conflict\n\n`
+        + `${name} is on PTO on ${days.length} day${days.length === 1 ? '' : 's'} of this call assignment:\n`
+        + `${_callPtoDayList(days)}\n\n`
+        + `${verb} anyway? It will be listed on the Conflicts page until it `
+        + `is resolved or you accept it.`
+    );
 }
 
 // ────────────── REQUEST → DESCRIPTION FORMATTERS ──────────────
@@ -2570,7 +3140,9 @@ function renderFreetextDatalist() {
 }
 
 // ────────────── ADMIN ACTIONS: APPROVE / DENY ──────────────
-async function approveRequest(reqKey) {
+// choice: null → ask with the recompute dialog afterwards; { recompute,
+// horizonDays } → the admin already answered by which button they pressed.
+async function approveRequest(reqKey, choice) {
     if (!isAdmin()) { showToast('Only the admin can approve.', { type: 'error' }); return; }
     const req = requests[reqKey];
     if (!req || req.status !== 'pending') return;
@@ -2580,6 +3152,20 @@ async function approveRequest(reqKey) {
     let rcDayBeforeFix = false;
     let rcPinnedByDay = {};
     let rcMessage = null;
+
+    // On-call / PTO pre-checks — bail before anything is written, so
+    // cancelling leaves the request pending and the schedule untouched.
+    if (req.type === 'pto_add') {
+        if (!confirmPtoDuringOnCall(
+            req.requesterId, parseDate(req.payload.start), parseDate(req.payload.end),
+            'Approve the PTO')) return;
+    } else if (req.type === 'oncall_change') {
+        const ocDate = parseDate(req.payload.date);
+        const ocFrom = req.payload.scope === 'week' ? getCallCycleStart(ocDate) : ocDate;
+        const ocTo = req.payload.scope === 'week' ? getCallCycleEnd(getCallCycleStart(ocDate)) : ocDate;
+        if (!confirmOnCallDuringPto(
+            req.payload.newPathId, ocFrom, ocTo, 'Approve the change')) return;
+    }
 
     try {
         // Apply the underlying change first; if that fails we don't mark approved
@@ -2768,8 +3354,10 @@ async function approveRequest(reqKey) {
             console.error('logChange (approveRequest) error:', logErr);
         }
 
-        // After successful approval, offer to recompute if relevant
+        // After successful approval, recompute per the button pressed (or
+        // offer the dialog when the caller didn't pre-answer).
         if (rcFromDate) {
+            setPendingRecomputeChoice(choice);
             await maybeOfferRecompute(rcPinnedByDay, {
                 fromDate: rcFromDate,
                 dayBeforeFix: rcDayBeforeFix,
@@ -3042,6 +3630,9 @@ function openRequestsModal() {
     }
     renderRequestsList();
     document.getElementById('requestsModalBack').classList.add('open');
+    // Viewing the list here counts the same as visiting the Requests page:
+    // the nav dot drops from red (unseen) to amber (seen, still pending).
+    markRequestsPageSeen();
 }
 
 function renderRequestsList(targetEl, tabState) {
@@ -3137,11 +3728,26 @@ function renderRequestsList(targetEl, tabState) {
                             </div>`;
                 }
             } else if (isAdmin()) {
+                // Only PTO and service approvals move the rotation, so only
+                // those get the recompute pair; on-call/LF approvals don't.
+                const affectsRotation = req.type === 'pto_add'
+                    || req.type === 'pto_remove' || req.type === 'service_change';
+                const rcHtml = affectsRotation ? `
+                                <label class="rc-horizon rc-horizon-inline">Horizon
+                                    <select data-rchorizon="${key}">
+                                        <option value="30">30 days</option>
+                                        <option value="90">90 days</option>
+                                        <option value="180" selected>180 days</option>
+                                        <option value="365">365 days</option>
+                                    </select>
+                                </label>
+                                <button class="approve" data-act="approverc" data-key="${key}">Approve &amp; recompute</button>` : '';
                 actions = `
                             <div class="req-card-actions">
                                 ${askLfBtnHtml}
                                 <button class="deny" data-act="deny" data-key="${key}">Deny</button>
                                 <button class="approve" data-act="approve" data-key="${key}">Approve</button>
+                                ${rcHtml}
                             </div>`;
             } else if (req.requesterId === loggedInPathId) {
                 actions = `
@@ -3195,7 +3801,12 @@ function renderRequestsList(targetEl, tabState) {
         btn.addEventListener('click', () => {
             const act = btn.dataset.act;
             const key = btn.dataset.key;
-            if (act === 'approve') approveRequest(key);
+            if (act === 'approve') approveRequest(key, { recompute: false });
+            else if (act === 'approverc') {
+                const sel = listEl.querySelector(`select[data-rchorizon="${key}"]`);
+                const h = sel ? parseInt(sel.value, 10) : CONFLICT_HORIZON_DEFAULT;
+                approveRequest(key, { recompute: true, horizonDays: h || CONFLICT_HORIZON_DEFAULT });
+            }
             else if (act === 'deny') denyRequest(key);
             else if (act === 'cancel') cancelRequest(key);
             else if (act === 'revoke') revokeApproval(key);
@@ -5700,30 +6311,36 @@ function softRuleViolationsForDay(date) {
 }
 
 // ────────────── FLAG HTML ──────────────
-// Returns zero, one, or two "!" pill spans for the day header:
-//   Red  pill → hard coverage rule not met (required service missing)
-//   Yellow pill → soft rule conflict (bigs the day before PTO or Breast Bx/WFH)
+// Pill spans for the day header, driven by the same conflict list the
+// Conflicts page uses — so accepting a conflict quiets the calendar too:
+//   Red pill    → hard rule broken, or someone on call while on PTO
+//   Yellow pill → soft rule broken
+//   Grey pill   → every conflict on this day has been accepted
+// On-call/PTO conflicts are admin-facing only; rule flags stay visible to
+// everyone, as they always have been.
 function flagHtml(date) {
-    if (isWeekend(date)) return '';
+    const admin = isAdmin();
+    const all = conflictsForDate(date).filter(c => admin || c.kind !== 'callpto');
+    if (all.length === 0) return '';
 
-    const coverageIssues = coverageViolationsForDay(date);
-    const softIssues = softRuleViolationsForDay(date);
+    const open = all.filter(c => !c.accepted);
+    if (open.length === 0) {
+        const tip = 'Accepted by the admin:\n• ' + all.map(c => c.detail).join('\n• ');
+        return `<span class="rule-flag rule-flag-accepted" title="${escapeHtml(tip)}">!</span>`;
+    }
+
     let html = '';
+    const high = open.filter(c => c.kind === 'callpto' || c.kind === 'hard');
+    const low = open.filter(c => c.kind === 'soft');
 
-    if (coverageIssues) {
-        const working = pathologists.filter(p => {
-            const a = getDayAssignments(date)[p.id];
-            return a && a.type === 'service';
-        }).length;
-        const tip = `Coverage rule not met (${working} pathologist${working === 1 ? '' : 's'} working):\n\u2022 ` + coverageIssues.join('\n\u2022 ');
-        html += `<span class="rule-flag rule-flag-red" title="${tip.replace(/"/g, '&quot;')}">!</span>`;
+    if (high.length > 0) {
+        const tip = 'Conflict:\n• ' + high.map(c => c.detail).join('\n• ');
+        html += `<span class="rule-flag rule-flag-red" title="${escapeHtml(tip)}">!</span>`;
     }
-
-    if (softIssues) {
-        const tip = 'Soft rule conflict:\n\u2022 ' + softIssues.join('\n\u2022 ');
-        html += `<span class="rule-flag rule-flag-yellow" title="${tip.replace(/"/g, '&quot;')}">!</span>`;
+    if (low.length > 0) {
+        const tip = 'Soft rule conflict:\n• ' + low.map(c => c.detail).join('\n• ');
+        html += `<span class="rule-flag rule-flag-yellow" title="${escapeHtml(tip)}">!</span>`;
     }
-
     return html;
 }
 
@@ -7110,9 +7727,14 @@ function openDayDetail(date) {
         : `Call block: ${MONTHS_SHORT[cs.getMonth()]} ${cs.getDate()} – ${MONTHS_SHORT[ce.getMonth()]} ${ce.getDate()}`;
     if (holiday) subText += `  •  ⭐ Federal Holiday: ${holiday}`;
     sub.textContent = subText;
-    const issues = (isWk || holiday) ? null : violationsForDay(date);
-    if (issues) {
-        subText += '  •  ⚠ Hard-rule conflict: ' + issues.join('; ');
+    // Everything the Conflicts page knows about this day, accepted ones
+    // included, so the day explains itself either way. On-call/PTO overlaps
+    // are admin-facing; rule breaks show for everyone as they always have.
+    const dayConflicts = conflictsForDate(date)
+        .filter(c => isAdmin() || c.kind !== 'callpto');
+    if (dayConflicts.length > 0) {
+        subText += '  •  ⚠ ' + dayConflicts.map(c =>
+            c.detail + (c.accepted ? ' (accepted)' : '')).join('; ');
     }
     sub.textContent = subText;
 
@@ -7204,6 +7826,15 @@ function openDayDetail(date) {
             svcBtn.style.display = '';
             svcBtn.textContent = admin ? 'Override services this day' : 'Request service change';
         }
+    }
+
+    // Put-back button (admin-only) — only when this day carries a conflict
+    // that was accepted, so an accidental accept is one click to undo.
+    const restoreBtn = document.getElementById('dayRestoreConflict');
+    if (restoreBtn) {
+        const acceptedHere = dayConflicts.filter(c => c.accepted);
+        restoreBtn.style.display = (admin && acceptedHere.length > 0) ? '' : 'none';
+        restoreBtn.dataset.key = acceptedHere.length > 0 ? acceptedHere[0].key : '';
     }
 
     // LF sendout button (admin-only) — label flips between add and remove.
@@ -7717,6 +8348,39 @@ document.getElementById('dayAddLfSendout').addEventListener('click', () => {
     document.getElementById('dayModalBack').classList.remove('open');
     openLfModal(activeDayDate);
 });
+const _dayRestoreConflictBtn = document.getElementById('dayRestoreConflict');
+if (_dayRestoreConflictBtn) {
+    _dayRestoreConflictBtn.addEventListener('click', async () => {
+        const key = _dayRestoreConflictBtn.dataset.key;
+        if (!key) return;
+        document.getElementById('dayModalBack').classList.remove('open');
+        await unacceptConflict(key);
+    });
+}
+
+// ────────────── SAVE / SAVE & RECOMPUTE CONTROLS ──────────────
+// Admin-only modals carry a horizon select plus a second primary button.
+// Plain Save applies the change and stops; Save & recompute applies it and
+// immediately recomputes the rest of the schedule over the chosen horizon.
+// Either way the post-save "Recompute future schedule?" dialog is skipped —
+// pressing one of the two buttons IS the answer (see maybeOfferRecompute).
+function _showRecomputeControls(horizonId, buttonId, show) {
+    const wrap = document.getElementById(horizonId + 'Wrap');
+    const btn = document.getElementById(buttonId);
+    if (wrap) wrap.style.display = show ? '' : 'none';
+    if (btn) btn.style.display = show ? '' : 'none';
+    // Always reopen on the default so a one-off 365 doesn't stick around.
+    const sel = document.getElementById(horizonId);
+    if (sel && show) sel.value = String(CONFLICT_HORIZON_DEFAULT);
+}
+
+// { recompute:false } | { recompute:true, horizonDays:n } from a modal's select.
+function _recomputeChoiceFrom(horizonId, recompute) {
+    if (!recompute) return { recompute: false };
+    const sel = document.getElementById(horizonId);
+    const h = sel ? parseInt(sel.value, 10) : CONFLICT_HORIZON_DEFAULT;
+    return { recompute: true, horizonDays: h || CONFLICT_HORIZON_DEFAULT };
+}
 
 // ────────────── PTO MODAL ──────────────
 function openPtoModal(prefillDate) {
@@ -7755,6 +8419,9 @@ function openPtoModal(prefillDate) {
     document.getElementById('ptoSave').textContent = admin ? 'Add PTO' : 'Submit Request';
     document.getElementById('ptoListLabel').textContent =
         admin ? 'Existing PTO' : 'My PTO';
+
+    // The recompute pair is admin-only — a request doesn't change anything yet.
+    _showRecomputeControls('ptoHorizon', 'ptoSaveRecompute', admin);
 
     renderPtoList();
     document.getElementById('ptoModalBack').classList.add('open');
@@ -7863,7 +8530,17 @@ document.getElementById('ptoCancel').addEventListener('click', () => {
 document.getElementById('ptoModalBack').addEventListener('click', e => {
     if (e.target.id === 'ptoModalBack') e.target.classList.remove('open');
 });
-document.getElementById('ptoSave').addEventListener('click', async () => {
+document.getElementById('ptoSave').addEventListener('click', () =>
+    savePtoFromModal(_recomputeChoiceFrom('ptoHorizon', false)));
+const _ptoSaveRcBtn = document.getElementById('ptoSaveRecompute');
+if (_ptoSaveRcBtn) {
+    _ptoSaveRcBtn.addEventListener('click', () =>
+        savePtoFromModal(_recomputeChoiceFrom('ptoHorizon', true)));
+}
+
+// choice: null → ask afterwards (non-admin path never asks anyway);
+// { recompute } → the admin already answered by which button they pressed.
+async function savePtoFromModal(choice) {
     const admin = isAdmin();
     const pid = admin
         ? parseInt(document.getElementById('ptoPath').value, 10)
@@ -7877,6 +8554,8 @@ document.getElementById('ptoSave').addEventListener('click', async () => {
     if (isNaN(s) || isNaN(e) || e < s) { alert('Please enter a valid date range.'); return; }
 
     if (admin) {
+        // On call during this PTO? Flag it while it is still one click to avoid.
+        if (!confirmPtoDuringOnCall(pid, s, e, 'Add the PTO')) return;
         await db.ref('scheduler/vacations').push({
             pathologistId: pid,
             start: fmt(s),
@@ -7895,6 +8574,7 @@ document.getElementById('ptoSave').addEventListener('click', async () => {
 
         renderPtoList();
         document.getElementById('ptoModalBack').classList.remove('open');
+        setPendingRecomputeChoice(choice);
         await maybeOfferRecompute({}, {
             fromDate: s,
             dayBeforeFix: true,
@@ -7911,7 +8591,7 @@ document.getElementById('ptoSave').addEventListener('click', async () => {
             document.getElementById('ptoModalBack').classList.remove('open');
         }
     }
-});
+}
 
 // ────────────── ON-CALL OVERRIDE MODAL ──────────────
 let activeOcWeekKey = null;
@@ -7991,6 +8671,10 @@ document.getElementById('ocSave').addEventListener('click', async () => {
     const pid = parseInt(document.getElementById('ocPath').value, 10);
     const scope = document.querySelector('input[name="ocScope"]:checked').value;
     if (isAdmin()) {
+        // Assigning call over existing PTO? Same pre-check, other direction.
+        const ocStart = scope === 'day' ? activeOcDate : getCallCycleStart(activeOcDate);
+        const ocEnd = scope === 'day' ? activeOcDate : getCallCycleEnd(getCallCycleStart(activeOcDate));
+        if (!confirmOnCallDuringPto(pid, ocStart, ocEnd, 'Assign the call')) return;
         if (scope === 'day') {
             await db.ref('scheduler/onCallDayOverrides/' + activeOcDayKey).set(pid);
         } else {
@@ -8759,6 +9443,7 @@ function openServiceModal(date) {
     if (svcNote) svcNote.value = '';
     document.getElementById('svcReset').style.display = admin ? '' : 'none';
     document.getElementById('svcSave').textContent = admin ? 'Save' : 'Submit Request';
+    _showRecomputeControls('svcHorizon', 'svcSaveRecompute', admin);
 
     // Default to "this day only" (preserves existing behaviour)
     updateSvcSubLabel();
@@ -8877,7 +9562,17 @@ document.getElementById('svcCancel').addEventListener('click', () => {
 document.getElementById('svcModalBack').addEventListener('click', e => {
     if (e.target.id === 'svcModalBack') e.target.classList.remove('open');
 });
-document.getElementById('svcSave').addEventListener('click', async () => {
+document.getElementById('svcSave').addEventListener('click', () =>
+    saveServiceFromModal(_recomputeChoiceFrom('svcHorizon', false)));
+const _svcSaveRcBtn = document.getElementById('svcSaveRecompute');
+if (_svcSaveRcBtn) {
+    _svcSaveRcBtn.addEventListener('click', () =>
+        saveServiceFromModal(_recomputeChoiceFrom('svcHorizon', true)));
+}
+
+// choice: null → ask afterwards; { recompute } → the admin already answered
+// by choosing Save or Save & recompute.
+async function saveServiceFromModal(choice) {
     const selects = document.querySelectorAll('#svcAssignments select[data-pid]');
     const scope = 'day';
 
@@ -9040,6 +9735,7 @@ document.getElementById('svcSave').addEventListener('click', async () => {
         document.getElementById('svcModalBack').classList.remove('open');
 
         if (recomputeFromDate) {
+            setPendingRecomputeChoice(choice);
             await maybeOfferRecompute(recomputePins, {
                 fromDate: recomputeFromDate,
                 dayBeforeFix: true,
@@ -9064,7 +9760,7 @@ document.getElementById('svcSave').addEventListener('click', async () => {
         }, note);
         if (ok) document.getElementById('svcModalBack').classList.remove('open');
     }
-});
+}
 document.getElementById('svcReset').addEventListener('click', async () => {
     const scope = 'day';
     let recomputeFromDate = null;
@@ -10066,7 +10762,7 @@ document.getElementById('exportDownload').addEventListener('click', () => {
 // Requests / Export / Recompute.
 
 (function initPageNavigation() {
-    const VALID_PAGES = ['schedule', 'requests', 'changes', 'tracking', 'settings'];
+    const VALID_PAGES = ['schedule', 'conflicts', 'requests', 'changes', 'tracking', 'settings'];
     let currentPage = 'schedule';
 
     const app = document.getElementById('app');
@@ -10090,12 +10786,14 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         // Toggle visibility of the page surfaces
         const mainEl = document.getElementById('main');
         const reqPg = document.getElementById('requestsPage');
+        const cflPg = document.getElementById('conflictsPage');
         const chgPg = document.getElementById('changesPage');
         const trkPg = document.getElementById('trackingPage');
         const settingsPg = document.getElementById('settingsPage');
 
         if (mainEl) mainEl.hidden = (page !== 'schedule');
         if (reqPg) reqPg.hidden = (page !== 'requests');
+        if (cflPg) cflPg.hidden = (page !== 'conflicts');
         if (chgPg) chgPg.hidden = (page !== 'changes');
         if (trkPg) trkPg.hidden = (page !== 'tracking');
         if (settingsPg) settingsPg.hidden = (page !== 'settings');
@@ -10108,6 +10806,16 @@ document.getElementById('exportDownload').addEventListener('click', () => {
 
         // When switching to changes, re-render the log (it may have grown
         // while the user was on another page)
+        // Conflicts: snapshot what was already seen BEFORE stamping, so this
+        // visit can still mark the new rows, then clear the dot.
+        if (page === 'conflicts' && typeof renderConflictsPage === 'function') {
+            _conflictVisitSeen = _conflictSeenKeys();
+            try { renderConflictsPage(); } catch (_) { /* ignore */ }
+            markConflictsPageSeen();
+        } else if (page !== 'conflicts') {
+            _conflictVisitSeen = null;
+        }
+
         if (page === 'changes' && typeof renderChangesPage === 'function') {
             try { renderChangesPage(); } catch (_) { /* ignore */ }
         }

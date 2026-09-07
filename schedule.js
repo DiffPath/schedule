@@ -343,6 +343,23 @@ function isReadOnlyGuest() {
     return isHistology() || isLakeForest();
 }
 
+// True only for the pathologist accounts — the ones that appear in
+// scheduler/pathologists. The special logins (manager, gross room,
+// histology, Lake Forest) all fail this.
+function isPathologistAccount(pathId) {
+    const id = (pathId !== undefined && pathId !== null) ? pathId : loggedInPathId;
+    if (id === null || id === undefined) return false;
+    return !!pathologists.find(p => p.id === id);
+}
+
+// Who may file a PTO / on-call / service request: pathologists only. Their
+// own schedule is the thing being changed, and only they carry PTO
+// allotments and call blocks. Everyone else views the schedule; they don't
+// negotiate it.
+function canRequestScheduleChange() {
+    return isPathologistAccount();
+}
+
 // Update the path-tab toggle to reflect val ('all' or a stringified pathId)
 function setPathFilter(val) {
     currentPathFilter = val;
@@ -2096,9 +2113,28 @@ function showToast(msg, opts) {
 // Push a new pending request into Firebase.  payload is type-specific.
 // opts (optional): { targetId } aims the request at another account
 // (admin → Lake Forest asks); { toast } overrides the confirmation text.
+// Request types a non-pathologist account may still file. Lake Forest
+// returns its sendout dates through the same queue, which is a reply to an
+// ask rather than a schedule change — see openLfRequestModal().
+const NON_PATHOLOGIST_REQUEST_TYPES = { lakeforest: ['lf_sendout'] };
+
+function canSubmitRequestType(type) {
+    if (loggedInPathId === null) return false;
+    if (isPathologistAccount()) return true;
+    const allowed = NON_PATHOLOGIST_REQUEST_TYPES[loggedInPathId] || [];
+    return allowed.includes(type);
+}
+
 async function submitRequest(type, payload, note, opts) {
     if (loggedInPathId === null) {
         alert('You must be signed in to submit a request.');
+        return false;
+    }
+    // Last line of defence: every UI path that files a request funnels
+    // through here, so a button that escapes its role check still can't
+    // put anything in the queue.
+    if (!canSubmitRequestType(type)) {
+        showToast('Only pathologists can submit schedule requests.', { type: 'error' });
         return false;
     }
     try {
@@ -7805,22 +7841,23 @@ function openDayDetail(date) {
     const svcBtn = document.getElementById('dayChangeService');
     if (svcBtn) svcBtn.style.display = (isWk || holiday) ? 'none' : '';
 
-    // Day-modal action labels by role: gross room gets no
-    // pathologist-schedule changes; histology is read-only.
-    const grossRoom = isGrossRoom();
-    const readOnlyGuest = grossRoom || isReadOnlyGuest();
+    // Day-modal action labels by role. These three buttons all end in the
+    // request queue for non-admins, so they follow canRequestScheduleChange()
+    // — the manager, gross room and the read-only guests see the day, but
+    // never a way to file against it.
+    const canRequest = canRequestScheduleChange();
     const ptoBtn = document.getElementById('dayAddPto');
     const ocBtn = document.getElementById('dayChangeOnCall');
     if (ptoBtn) {
-        ptoBtn.style.display = readOnlyGuest ? 'none' : '';
-        if (!readOnlyGuest) ptoBtn.textContent = admin ? 'Add PTO for this day' : '+ Request PTO for this day';
+        ptoBtn.style.display = canRequest ? '' : 'none';
+        if (canRequest) ptoBtn.textContent = admin ? 'Add PTO for this day' : '+ Request PTO for this day';
     }
     if (ocBtn) {
-        ocBtn.style.display = readOnlyGuest ? 'none' : '';
-        if (!readOnlyGuest) ocBtn.textContent = admin ? "Change who's on call" : "Request on-call change";
+        ocBtn.style.display = canRequest ? '' : 'none';
+        if (canRequest) ocBtn.textContent = admin ? "Change who's on call" : "Request on-call change";
     }
     if (svcBtn && !(isWk || holiday)) {
-        if (readOnlyGuest) {
+        if (!canRequest) {
             svcBtn.style.display = 'none';
         } else {
             svcBtn.style.display = '';

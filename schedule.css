@@ -3454,8 +3454,16 @@ main {
        evenly — no page scroll. :has() scopes this to day view only. */
 
     /* Lock the schedule page to the viewport in day view: toolbar natural
-       height, <main> fills the rest. */
-    .content-area:has(> main > .day-view) {
+       height, <main> fills the rest.
+
+       The [data-page="schedule"] guard is load-bearing. <main> keeps its
+       rendered .day-view markup in the DOM while another page is showing —
+       it's only hidden — and :has() matches on structure, not visibility.
+       Without the guard these rules stay active on Conflicts / Requests /
+       Changes / Tracking / Settings, pinning the content area to the
+       viewport and clipping the page shell with nothing left able to
+       scroll. */
+    .app[data-page="schedule"] .content-area:has(> main > .day-view) {
         height: 100vh;
         height: 100dvh;
         min-height: 0;
@@ -3464,7 +3472,7 @@ main {
         flex-direction: column;
     }
 
-    .content-area > main:has(> .day-view) {
+    .app[data-page="schedule"] .content-area > main:has(> .day-view) {
         flex: 1 1 0;
         min-height: 0;
         overflow: hidden;
@@ -5840,7 +5848,8 @@ body.sidebar-scroll-locked {
         min-height: 0;
         /* Without this, main inherits the desktop flex:1 1 0 and caps at viewport
            height (below-fold day cards unreachable). Day view re-enables flex via
-           its higher-specificity `.content-area > main:has(> .day-view)` rule. */
+           its higher-specificity
+           `.app[data-page="schedule"] .content-area > main:has(> .day-view)` rule. */
         flex: none;
     }
 

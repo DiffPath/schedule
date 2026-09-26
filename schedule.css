@@ -61,6 +61,9 @@
     --proc-fs:       #b8900a;   /* 4. Free-text starting with FS → golden-yellow */
     --proc-hh:       #7050b0;   /* 5. Other HH procedures → purple */
     --proc-mh:       #3a8ab5;   /* 6. Other MH procedures → blue   */
+    /* Outlook meeting pills: outlined in the app's navy accent. */
+    --meeting-ink:   #1a5276;
+    --meeting-line:  #8fb3cc;
 
     --serif: 'Instrument Serif', Georgia, serif;
     --sans: 'Geist', system-ui, sans-serif;
@@ -1215,53 +1218,47 @@ main {
     box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px #1e1b4b;
 }
 
-/* ── Outlook meeting pill ── synced from the published Outlook calendar
-   (functions/). Read-only. Quiet slate styling with an MTG badge so it reads
-   as "calendar context", distinct from procedure colors and the CONF banner. */
+/* ── Outlook meeting pill ── synced from the pathologist's published Outlook
+   calendar (functions/). Same shape, size and type as the procedure pills so
+   the grid reads as one schedule; OUTLINED (not filled) with a calendar icon
+   so meetings read as context, not procedures. Read-only. */
 .meeting-item,
 .meeting-allday {
-    display: flex;
-    width: 100%;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 2px 7px 2px 6px;
+    gap: 4px;
+    padding: 1px 6px;              /* 1px border + 1px = the proc pill's 2px */
     border-radius: 4px;
-    background: #f1f5f9;
-    color: #1e293b;
-    border: 1px solid #cbd5e1;
-    border-left: 3px solid #475569;
+    border: 1px solid var(--meeting-line);
+    background: var(--paper);
+    color: var(--meeting-ink);
     font-size: 10px;
-    font-weight: 600;
-    line-height: 1.35;
+    font-weight: 500;
+    line-height: 1.3;
     cursor: default;
     white-space: normal;
     word-break: break-word;
+    max-width: 100%;
     box-sizing: border-box;
 }
+.meeting-item:hover { background: var(--accent-soft); }
 .meeting-allday {
-    width: auto;
+    display: flex;
     margin: 4px 6px 2px;
 }
-.meeting-item .meeting-item-badge,
-.meeting-allday .meeting-item-badge {
+/* Small calendar glyph (mask, so it follows the text color). */
+.meeting-icon {
     flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    padding: 0 4px;
-    height: 13px;
-    border-radius: 3px;
-    background: #475569;
-    color: #fff;
-    font-size: 8px;
-    font-weight: 800;
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
+    width: 9px;
+    height: 9px;
+    background: currentColor;
+    opacity: 0.75;
+    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><rect x='1.5' y='3' width='13' height='11.5' rx='2'/><path d='M1.5 7h13M5 1v3.5M11 1v3.5'/></svg>") center / contain no-repeat;
+            mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'><rect x='1.5' y='3' width='13' height='11.5' rx='2'/><path d='M1.5 7h13M5 1v3.5M11 1v3.5'/></svg>") center / contain no-repeat;
 }
-.meeting-item .meeting-item-badge::before,
-.meeting-allday .meeting-item-badge::before { content: 'Mtg'; }
 .meeting-item:focus { outline: none; }
 .meeting-item:focus-visible {
-    box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px #475569;
+    box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px var(--meeting-line);
 }
 
 /* ─────────────────── ADD PROCEDURE PANEL ─────────────────── */
@@ -3692,22 +3689,27 @@ main {
     }
 
     /* Re-enable flex for the hour grid (the generic mobile rule set
-       display:block); overflow:hidden keeps pill overflow off the page scroll. */
+       display:block). A busy day that can't fit scrolls INSIDE the grid, so
+       the page itself stays locked (vertical gestures pass through the
+       swipe handler to native scroll). */
     .day-view .wd-hours {
         flex: 1 1 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
-        overflow: hidden;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
     }
 
     .day-view .wd-hours-head {
         flex-shrink: 0;
     }
 
-    /* Distribute the 20 half-hour rows evenly (flex:1 1 0; min-height:0). */
+    /* Distribute the 20 half-hour rows evenly, but never shorter than their
+       pills (a slot holding a procedure AND a meeting needs two lines). */
     .day-view .wd-hours .hour-row {
-        flex: 1 1 0;
+        flex: 1 0 auto;
         min-height: 0;
     }
 
@@ -3740,6 +3742,11 @@ main {
     .proc-item {
         font-size: 11px;
         padding: 3px 8px;
+    }
+
+    .meeting-item {
+        font-size: 11px;
+        padding: 2px 7px;
     }
 
     /* Month view: tighter cells, hide service text labels to fit */
@@ -8084,3 +8091,21 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
 .ol-help summary { cursor: pointer; color: var(--accent); }
 .ol-help ol { margin: 6px 0; padding-left: 20px; }
 .ol-help p { margin: 4px 0 0; color: var(--ink-3); }
+
+/* Phone toolbar: the hourly-content select is the fourth control on one row,
+   so keep it as narrow as possible to leave room for the date. */
+@media (max-width: 480px) {
+    #mobileHourlySelect {
+        padding-left: 7px;
+        padding-right: 18px;
+        letter-spacing: 0.02em;
+    }
+    #mobileHourlySelectWrap::after { right: 6px; }
+}
+
+/* Narrow desktop: no room beside the centered date for the hourly select
+   (Settings → Hourly schedule still has it). !important beats the inline
+   display that syncHourlyShowsControls() sets. */
+@media (min-width: 801px) and (max-width: 1090px) {
+    #hourlySelectWrap { display: none !important; }
+}

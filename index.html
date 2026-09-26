@@ -184,6 +184,14 @@
                         <button class="path-tab active" data-filter="all"><span class="tab-full">Group</span><span class="tab-short">Group</span></button>
                         <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;"><span class="tab-full">Individual</span><span class="tab-short">Individual</span></button>
                     </div>
+                    <!-- Hourly grid content (pathologists, Day/Week only); mirrors Settings → Hourly schedule. -->
+                    <div class="mobile-select-wrap" id="hourlySelectWrap" style="display:none;" title="Hourly schedule: procedures, Outlook meetings, or both">
+                        <select id="hourlySelect" class="mobile-toolbar-select" aria-label="Hourly schedule shows">
+                            <option value="both">Both</option>
+                            <option value="procedures">Proc</option>
+                            <option value="meetings">Mtg</option>
+                        </select>
+                    </div>
                     <button class="toolbar-np-btn" id="toolbarNataliePtoBtn" type="button" style="display:none;" title="Add Natalie PTO to the procedure schedule">
                         <span class="toolbar-np-plus" aria-hidden="true">+</span>
                         <span>Natalie PTO</span>
@@ -209,6 +217,13 @@
 
                 <!-- Mobile-only compact controls: single-row toolbar [hamburger | date | path ▾ | view ▾]; arrows replaced by swipe. Selects mirror the desktop tab state (setPathFilter() + the view-tabs handler). Hidden on desktop. -->
                 <div class="mobile-toolbar-controls" id="mobileToolbarControls">
+                    <div class="mobile-select-wrap" id="mobileHourlySelectWrap" style="display:none;">
+                        <select id="mobileHourlySelect" class="mobile-toolbar-select" aria-label="Hourly schedule shows">
+                            <option value="both">Both</option>
+                            <option value="procedures">Proc</option>
+                            <option value="meetings">Mtg</option>
+                        </select>
+                    </div>
                     <div class="mobile-select-wrap" id="mobilePathSelectWrap">
                         <select id="mobilePathSelect" class="mobile-toolbar-select" aria-label="Filter">
                             <option value="all">Group</option>

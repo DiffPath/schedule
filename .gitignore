@@ -1,2 +1,5 @@
 # Local Claude Code project tooling (contains machine-local paths)
 .claude/
+
+# Cloud Functions dependencies
+functions/node_modules/

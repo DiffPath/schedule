@@ -246,6 +246,12 @@ let _callPtoDayIndex = null;    // Map<dayKey, conflict[]>
 // createdBy } } } — `type` stored for future variants.
 let procedures = {};
 
+// The signed-in pathologist's own Outlook meetings, loaded by
+// outlook-meetings.js and synced every 15 min by Cloud Functions
+// (functions/). Read-only, display-only. Shape:
+// { 'YYYY-MM-DD': [ { title, start:'HH:MM', end:'HH:MM' } | { title, allDay:true } ] }
+let outlookMeetings = {};
+
 let pathologistsReady = false;
 let vacationsReady = false;
 let currentPathFilter = 'all';
@@ -391,6 +397,7 @@ const VALID_DEFAULT_VIEWS = ['day', 'week', 'month', 'year'];
 const VALID_LF_DEFAULT_VIEWS = ['week', 'month', 'year'];
 const VALID_DEFAULT_FILTERS = ['all', 'me'];
 const VALID_DEFAULT_PAGES = ['schedule', 'requests', 'changes', 'tracking'];
+const VALID_HOURLY_SHOWS = ['both', 'procedures', 'meetings'];
 const DEFAULT_SETTINGS = {
     weekdaysOnly: false,
     hideSidebar: false,
@@ -403,6 +410,8 @@ const DEFAULT_SETTINGS = {
     // Launch view for the Lake Forest guest account — its only setting.
     // 'year' shows the sendout days at a glance.
     lfDefaultView: 'year',
+    // What the hourly grid shows: procedures, Outlook meetings, or both.
+    hourlyShows: 'both',
 };
 let settings = (() => {
     try {
@@ -416,6 +425,7 @@ if (!VALID_DEFAULT_VIEWS.includes(settings.defaultView)) settings.defaultView = 
 if (!VALID_DEFAULT_FILTERS.includes(settings.defaultPathFilter)) settings.defaultPathFilter = 'me';
 if (!VALID_DEFAULT_PAGES.includes(settings.defaultPage)) settings.defaultPage = 'schedule';
 if (!VALID_LF_DEFAULT_VIEWS.includes(settings.lfDefaultView)) settings.lfDefaultView = 'year';
+if (!VALID_HOURLY_SHOWS.includes(settings.hourlyShows)) settings.hourlyShows = 'both';
 
 // Seed active view from the saved default (fallback 'week'). Mobile always
 // starts in Day view (only mobile view with the procedure schedule) — not
@@ -467,6 +477,18 @@ function applySettings() {
             b.setAttribute('aria-checked', isActive ? 'true' : 'false');
         });
     }
+    const hsSeg = document.getElementById('hourlyShowsSeg');
+    if (hsSeg) {
+        hsSeg.querySelectorAll('.seg-btn').forEach(b => {
+            const isActive = b.dataset.value === settings.hourlyShows;
+            b.classList.toggle('active', isActive);
+            b.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        });
+    }
+    // Only pathologists have Outlook meetings, so the choice is moot for
+    // everyone else.
+    const hsRow = document.getElementById('hourlyShowsRow');
+    if (hsRow) hsRow.style.display = typeof loggedInPathId === 'number' ? '' : 'none';
     const dfSeg = document.getElementById('defaultFilterSeg');
     if (dfSeg) {
         dfSeg.querySelectorAll('.seg-btn').forEach(b => {
@@ -503,6 +525,11 @@ function applySettings() {
     // Render the admin-only email notification settings (same self-hiding).
     if (typeof renderEmailSettings === 'function') {
         try { renderEmailSettings(); } catch (_) { /* ignore */ }
+    }
+
+    // Outlook calendar connect/status (outlook-meetings.js).
+    if (typeof renderOutlookSettings === 'function') {
+        try { renderOutlookSettings(); } catch (_) { /* ignore */ }
     }
 
     // Per-user procedure options editor (procedure-options.js).
@@ -1761,6 +1788,8 @@ auth.onAuthStateChanged(user => {
         startDataListeners();
         // This user's own procedure options (procedure-options.js).
         if (typeof procOptionsSignedIn === 'function') procOptionsSignedIn(id);
+        // This pathologist's own Outlook meetings (outlook-meetings.js).
+        if (typeof outlookSignedIn === 'function') outlookSignedIn(id);
         // After re-login without reload, cached-warm listeners may not re-fire —
         // refresh filter + view directly.
         if (pathologistsReady && vacationsReady) {
@@ -1777,6 +1806,7 @@ auth.onAuthStateChanged(user => {
         loggedInPathId = null;
         stopDataListeners();
         if (typeof procOptionsSignedOut === 'function') procOptionsSignedOut();
+        if (typeof outlookSignedOut === 'function') outlookSignedOut();
         hideLoading();
         if (typeof showLoginOverlay === 'function') showLoginOverlay();
     }
@@ -6628,7 +6658,10 @@ function renderWeek() {
 // enabled to add a procedure; existing procedures render as removable pills.
 function renderHourGrid(date) {
     const dayKey = fmt(date);
-    const procs = getProceduresForDay(dayKey);
+    const showProcs = settings.hourlyShows !== 'meetings';
+    const showMeetings = settings.hourlyShows !== 'procedures';
+    const procs = showProcs ? getProceduresForDay(dayKey) : [];
+    const meetings = showMeetings ? getMeetingsForDay(dayKey) : [];
     // The signed-in presenter's own conferences for the day (see
     // getConferencesForDay); they share the hourly grid but render as a
     // distinct banner.
@@ -6653,6 +6686,19 @@ function renderHourGrid(date) {
         if (!confBySlot[slotKey]) confBySlot[slotKey] = [];
         confBySlot[slotKey].push(c);
     });
+
+    // Meetings outside the visible window pin to the first/last slot (their
+    // pill still shows the real time) so none silently disappear.
+    const meetingsBySlot = {};
+    meetings.filter(m => !m.allDay).forEach(m => {
+        const slotKey = clampedSlotKeyForTime(m.start);
+        if (!slotKey) return;
+        (meetingsBySlot[slotKey] || (meetingsBySlot[slotKey] = [])).push(m);
+    });
+    const allDayHtml = meetings.filter(m => m.allDay).map(m =>
+        `<div class="meeting-allday" title="${escapeHtml(m.title + ' — all day')}"><span class="meeting-item-badge" aria-hidden="true"></span>${escapeHtml(m.title)}</div>`
+    ).join('');
+    const rowTitle = showProcs ? 'Double-click an empty slot to add a procedure' : '';
 
     let rowsHtml = '';
     for (let h = HOURS_START; h <= HOURS_END; h++) {
@@ -6682,9 +6728,13 @@ function renderHourGrid(date) {
                 const tooltip = `${baseLbl} — ${formatTimeRange(p.time, p.durationMin)}`;
                 return `<span class="proc-item ${pa.cls}"${pa.style} data-day="${dayKey}" data-key="${p.key}" tabindex="0" draggable="true" title="${escapeHtml(tooltip)}">${escapeHtml(lbl)}</span>`;
             }).join('');
-            rowsHtml += `<div class="hour-row ${cls}" data-day="${dayKey}" data-time="${timeKey}" title="Double-click an empty slot to add a procedure">
+            const meetingItems = (meetingsBySlot[timeKey] || []).map(m => {
+                const tooltip = `${m.title} — ${formatTime12(m.start)} – ${formatTime12(m.end)}`;
+                return `<span class="meeting-item" tabindex="0" title="${escapeHtml(tooltip)}"><span class="meeting-item-badge" aria-hidden="true"></span>${escapeHtml(formatTime12Short(m.start) + ' ' + m.title)}</span>`;
+            }).join('');
+            rowsHtml += `<div class="hour-row ${cls}" data-day="${dayKey}" data-time="${timeKey}" title="${rowTitle}">
               <div class="hour-label">${label}</div>
-              <div class="hour-slot">${confItems}${items}</div>
+              <div class="hour-slot">${confItems}${meetingItems}${items}</div>
             </div>`;
         }
     }
@@ -6692,6 +6742,7 @@ function renderHourGrid(date) {
     // to the procedure schedule.
     return `<div class="wd-hours">
       ${nataliePtoBannerHtml(date)}
+      ${allDayHtml}
       <div class="wd-hours-head"></div>
       ${rowsHtml}
     </div>`;
@@ -6739,6 +6790,51 @@ function getProceduresForDay(dayKey) {
         createdAt: p.createdAt,
         createdBy: p.createdBy,
     })).sort((a, b) => a.time.localeCompare(b.time));
+}
+
+// The signed-in pathologist's Outlook meetings for the day, sorted by start
+// (all-day first). A meeting that is really one of their logged conferences
+// (conference-like title, starts within 30 min of it) is dropped so the
+// conference pill isn't duplicated.
+const MEETING_CONF_TITLE_RE = /tumou?r\s*board|\bTB\b|\bconf(erence)?\b|\bCDH\b|morning\s*report/i;
+const MEETING_CONF_MATCH_MIN = 30;
+
+function getMeetingsForDay(dayKey) {
+    const raw = outlookMeetings[dayKey];
+    if (!raw) return [];
+    const confMins = getConferencesForDay(dayKey)
+        .filter(c => isValidClockTime(c.time)).map(c => clockMinutes(c.time));
+    const isConference = m => !m.allDay && MEETING_CONF_TITLE_RE.test(m.title)
+        && confMins.some(c => Math.abs(c - clockMinutes(m.start)) <= MEETING_CONF_MATCH_MIN);
+    return Object.values(raw)
+        .filter(m => m && m.title && (m.allDay || isValidClockTime(m.start)))
+        .filter(m => !isConference(m))
+        .map(m => ({
+            title: String(m.title),
+            allDay: !!m.allDay,
+            start: m.start || null,
+            end: isValidClockTime(m.end) ? m.end : (m.start || null),
+        }))
+        .sort((a, b) => (a.allDay ? 0 : 1) - (b.allDay ? 0 : 1)
+            || String(a.start).localeCompare(String(b.start)));
+}
+
+function clockMinutes(t) {
+    return parseInt(t.slice(0, 2), 10) * 60 + parseInt(t.slice(3, 5), 10);
+}
+
+function isValidClockTime(t) {
+    return typeof t === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(t);
+}
+
+// Like slotKeyForTime, but times before/after the grid land in the
+// first/last slot instead of being dropped.
+function clampedSlotKeyForTime(timeKey) {
+    if (!isValidClockTime(timeKey)) return null;
+    const h = parseInt(timeKey.slice(0, 2), 10);
+    if (h < HOURS_START) return pad2(HOURS_START) + ':00';
+    if (h > HOURS_END) return pad2(HOURS_END) + ':30';
+    return slotKeyForTime(timeKey);
 }
 
 // Pill label, e.g. "HH - CT Random Kidney bx"; "Procedure" for legacy
@@ -6903,7 +6999,10 @@ function attachHourGridHandlers() {
             if (isReadOnlyGuest()) return;
             // Dblclick on a pill → its own edit handler; conference pills are
             // read-only here (managed from Tracking).
-            if (e.target.closest('.proc-item') || e.target.closest('.conf-item')) return;
+            if (e.target.closest('.proc-item') || e.target.closest('.conf-item')
+                || e.target.closest('.meeting-item')) return;
+            // Procedures hidden (meetings-only) → nowhere to show a new one.
+            if (settings.hourlyShows === 'meetings') return;
             const dayKey = row.dataset.day;
             const timeKey = row.dataset.time;
             if (!dayKey || !timeKey) return;
@@ -11211,6 +11310,22 @@ document.getElementById('exportDownload').addEventListener('click', () => {
             }
             saveSettings();
             applySettings();
+        });
+    }
+
+    // Hourly-grid content: procedures / meetings / both. Takes effect now.
+    const hourlyShowsSeg = document.getElementById('hourlyShowsSeg');
+    if (hourlyShowsSeg) {
+        hourlyShowsSeg.addEventListener('click', e => {
+            const b = e.target.closest('.seg-btn');
+            if (!b) return;
+            const v = b.dataset.value;
+            if (!VALID_HOURLY_SHOWS.includes(v)) return;
+            if (settings.hourlyShows === v) return;
+            settings.hourlyShows = v;
+            saveSettings();
+            applySettings();
+            renderMain();
         });
     }
 

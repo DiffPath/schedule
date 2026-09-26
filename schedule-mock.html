@@ -540,6 +540,17 @@
                             </span>
                             <button class="toggle-switch" id="toggleWeekdays" role="switch" aria-checked="false" aria-label="Show weekdays only"></button>
                         </label>
+                        <div class="settings-row settings-row-stack" id="hourlyShowsRow">
+                            <span class="settings-row-label">
+                                <span class="settings-row-name">Hourly schedule</span>
+                                <span class="settings-row-desc">Show procedures, Outlook meetings, or both in the day and week views.</span>
+                            </span>
+                            <div class="settings-segmented" id="hourlyShowsSeg" role="radiogroup" aria-label="Hourly schedule shows">
+                                <button class="seg-btn" type="button" role="radio" data-value="both">Both</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="procedures">Procedures</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="meetings">Meetings</button>
+                            </div>
+                        </div>
                     </section>
 
                     <section class="settings-section">
@@ -577,6 +588,29 @@
                                 <button class="seg-btn" type="button" role="radio" data-value="me">Individual</button>
                             </div>
                         </div>
+                    </section>
+
+                    <!-- Outlook calendar — each pathologist's own published
+                         calendar, synced by Cloud Functions (outlook-meetings.js). -->
+                    <section class="settings-section" id="outlookSection" style="display:none;">
+                        <h3 class="settings-section-title">Outlook calendar</h3>
+                        <p class="settings-section-desc">Show your Outlook meetings on your schedule. Only you see them. Changes in Outlook show up within about 15 minutes. Only each meeting's title and time are copied; descriptions, locations, and meeting links are not.</p>
+                        <div class="ol-status" id="outlookStatus"></div>
+                        <div class="ol-connect">
+                            <input type="url" class="ol-url" id="outlookUrlInput" placeholder="https://outlook.office365.com/owa/calendar/…/calendar.ics" autocomplete="off" spellcheck="false" aria-label="Outlook calendar link">
+                            <button type="button" class="po-btn" id="outlookConnectBtn">Connect</button>
+                            <button type="button" class="po-btn po-btn-danger" id="outlookDisconnectBtn" style="display:none;">Disconnect</button>
+                        </div>
+                        <details class="ol-help">
+                            <summary>Where do I find my link?</summary>
+                            <ol>
+                                <li>Open Outlook on the web (outlook.office.com).</li>
+                                <li>Settings (gear) → Calendar → Shared calendars.</li>
+                                <li>Under <b>Publish a calendar</b>, pick your calendar and <b>Can view all details</b>, then Publish.</li>
+                                <li>Copy the <b>ICS</b> link (not HTML) and paste it above.</li>
+                            </ol>
+                            <p>Anyone with that link can read your calendar, so keep it private. To cut off access, unpublish it in Outlook.</p>
+                        </details>
                     </section>
 
                     <!-- Procedure options — each user's own list for the Add
@@ -1187,6 +1221,7 @@
     <script src="schedule.js"></script>
     <script src="recompute.js"></script>
     <script src="procedure-options.js"></script>
+    <script src="outlook-meetings.js"></script>
     <script src="undo.js"></script>
 
 </body>

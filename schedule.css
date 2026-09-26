@@ -1215,6 +1215,55 @@ main {
     box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px #1e1b4b;
 }
 
+/* ── Outlook meeting pill ── synced from the published Outlook calendar
+   (functions/). Read-only. Quiet slate styling with an MTG badge so it reads
+   as "calendar context", distinct from procedure colors and the CONF banner. */
+.meeting-item,
+.meeting-allday {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 7px 2px 6px;
+    border-radius: 4px;
+    background: #f1f5f9;
+    color: #1e293b;
+    border: 1px solid #cbd5e1;
+    border-left: 3px solid #475569;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.35;
+    cursor: default;
+    white-space: normal;
+    word-break: break-word;
+    box-sizing: border-box;
+}
+.meeting-allday {
+    width: auto;
+    margin: 4px 6px 2px;
+}
+.meeting-item .meeting-item-badge,
+.meeting-allday .meeting-item-badge {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px;
+    height: 13px;
+    border-radius: 3px;
+    background: #475569;
+    color: #fff;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+}
+.meeting-item .meeting-item-badge::before,
+.meeting-allday .meeting-item-badge::before { content: 'Mtg'; }
+.meeting-item:focus { outline: none; }
+.meeting-item:focus-visible {
+    box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px #475569;
+}
+
 /* ─────────────────── ADD PROCEDURE PANEL ─────────────────── */
 /* All rules scoped to #procModalBack so they never bleed into other modals. */
 
@@ -8007,3 +8056,31 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
     }
     .undo-toast.show { transform: none; }
 }
+
+/* ─────────────────── OUTLOOK CALENDAR (Settings) ─────────────────── */
+.ol-status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12.5px; color: var(--ink-2);
+    margin-bottom: 10px;
+}
+.ol-dot {
+    flex: 0 0 auto;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ink-4);
+}
+.ol-dot-ok { background: #2e7d4f; }
+.ol-dot-err { background: #b94e2a; }
+.ol-connect { display: flex; gap: 8px; flex-wrap: wrap; }
+.ol-url {
+    flex: 1 1 260px; min-width: 0;
+    padding: 6px 9px;
+    border: 1px solid var(--rule); border-radius: 5px;
+    background: var(--paper); color: var(--ink);
+    font: 12px var(--mono);
+}
+.ol-url:focus { outline: none; border-color: var(--accent); }
+.po-btn:disabled { opacity: 0.55; cursor: default; }
+.ol-help { margin-top: 10px; font-size: 12px; color: var(--ink-2); line-height: 1.5; }
+.ol-help summary { cursor: pointer; color: var(--accent); }
+.ol-help ol { margin: 6px 0; padding-left: 20px; }
+.ol-help p { margin: 4px 0 0; color: var(--ink-3); }

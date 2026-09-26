@@ -134,3 +134,7 @@ async function disconnectOutlookCalendar() {
     const input = document.getElementById('outlookUrlInput');
     if (input) input.addEventListener('keydown', e => { if (e.key === 'Enter') connectOutlookCalendar(); });
 })();
+
+// A restored session can finish signing in before this file has loaded, in
+// which case schedule.js skipped the outlookSignedIn() hook. Catch up.
+if (typeof loggedInPathId === 'number' && !_outlookUser) outlookSignedIn(loggedInPathId);

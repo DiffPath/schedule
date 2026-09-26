@@ -6696,7 +6696,7 @@ function renderHourGrid(date) {
         (meetingsBySlot[slotKey] || (meetingsBySlot[slotKey] = [])).push(m);
     });
     const allDayHtml = meetings.filter(m => m.allDay).map(m =>
-        `<div class="meeting-allday" title="${escapeHtml(m.title + ' — all day')}"><span class="meeting-item-badge" aria-hidden="true"></span>${escapeHtml(m.title)}</div>`
+        `<div class="meeting-allday" title="${escapeHtml(m.title + ' — all day (Outlook)')}"><span class="meeting-icon" aria-hidden="true"></span>${escapeHtml(m.title)}</div>`
     ).join('');
     const rowTitle = showProcs ? 'Double-click an empty slot to add a procedure' : '';
 
@@ -6729,12 +6729,12 @@ function renderHourGrid(date) {
                 return `<span class="proc-item ${pa.cls}"${pa.style} data-day="${dayKey}" data-key="${p.key}" tabindex="0" draggable="true" title="${escapeHtml(tooltip)}">${escapeHtml(lbl)}</span>`;
             }).join('');
             const meetingItems = (meetingsBySlot[timeKey] || []).map(m => {
-                const tooltip = `${m.title} — ${formatTime12(m.start)} – ${formatTime12(m.end)}`;
-                return `<span class="meeting-item" tabindex="0" title="${escapeHtml(tooltip)}"><span class="meeting-item-badge" aria-hidden="true"></span>${escapeHtml(formatTime12Short(m.start) + ' ' + m.title)}</span>`;
+                const tooltip = `${m.title} — ${formatTime12(m.start)} – ${formatTime12(m.end)} (Outlook)`;
+                return `<span class="meeting-item" tabindex="0" title="${escapeHtml(tooltip)}"><span class="meeting-icon" aria-hidden="true"></span>${escapeHtml(formatTime12Short(m.start) + ' ' + m.title)}</span>`;
             }).join('');
             rowsHtml += `<div class="hour-row ${cls}" data-day="${dayKey}" data-time="${timeKey}" title="${rowTitle}">
               <div class="hour-label">${label}</div>
-              <div class="hour-slot">${confItems}${meetingItems}${items}</div>
+              <div class="hour-slot">${confItems}${items}${meetingItems}</div>
             </div>`;
         }
     }
@@ -10418,6 +10418,7 @@ async function resetServiceDay() {
 // ────────────── DISPATCH ──────────────
 function renderMain() {
     renderPeriodLabel();
+    syncHourlyShowsControls();
     if (view === 'day') renderDay();
     else if (view === 'week') renderWeek();
     else if (view === 'month') renderMonth();
@@ -10443,6 +10444,34 @@ function renderAll() {
         try { renderPtoAllotmentSettings(); } catch (_) { /* ignore */ }
     }
 }
+
+// ────────────── HOURLY GRID CONTENT ──────────────
+// Procedures / Outlook meetings / both. One setting, three surfaces: the
+// desktop and mobile toolbar selects, and Settings → Hourly schedule.
+function setHourlyShows(v) {
+    if (!VALID_HOURLY_SHOWS.includes(v) || settings.hourlyShows === v) return;
+    settings.hourlyShows = v;
+    saveSettings();
+    applySettings();
+    renderMain();
+}
+
+// Toolbar controls show only for pathologists (the only accounts with
+// meetings) and only in the views that have the hourly grid.
+function syncHourlyShowsControls() {
+    const show = typeof loggedInPathId === 'number' && (view === 'week' || view === 'day');
+    ['hourlySelect', 'mobileHourlySelect'].forEach(id => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        sel.value = settings.hourlyShows;
+        sel.parentElement.style.display = show ? '' : 'none';
+    });
+}
+
+['hourlySelect', 'mobileHourlySelect'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (sel) sel.addEventListener('change', e => setHourlyShows(e.target.value));
+});
 
 // ────────────── NAV EVENTS ──────────────
 document.getElementById('viewTabs').addEventListener('click', e => {
@@ -11318,14 +11347,7 @@ document.getElementById('exportDownload').addEventListener('click', () => {
     if (hourlyShowsSeg) {
         hourlyShowsSeg.addEventListener('click', e => {
             const b = e.target.closest('.seg-btn');
-            if (!b) return;
-            const v = b.dataset.value;
-            if (!VALID_HOURLY_SHOWS.includes(v)) return;
-            if (settings.hourlyShows === v) return;
-            settings.hourlyShows = v;
-            saveSettings();
-            applySettings();
-            renderMain();
+            if (b) setHourlyShows(b.dataset.value);
         });
     }
 

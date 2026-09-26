@@ -2433,8 +2433,9 @@ function markChangesPageSeen() {
 // One list for everything wrong with the schedule:
 //   callpto — someone is on call while on PTO
 //   hard    — a coverage rule is not met (a required service is unstaffed)
-//   soft    — a rotation rule is broken: Bigs the day before PTO, Bigs the
-//             day before Breast Bx/WFH, or the same service two days running
+//   soft    — a rotation rule is broken: Bigs the day before PTO, or Bigs
+//             the day before Breast Bx/WFH. (The same service two days
+//             running is never a conflict.)
 //
 // Note on severity: violationsFor() calls Bigs-before-PTO/WFH "Rule 2/3" and
 // applyHardRules treats them as constraints while it permutes the day, but
@@ -2611,14 +2612,10 @@ function conflictsForDate(date) {
         // app uses, so those are the rows we keep.
         (softRuleViolationsForDay(date) || []).forEach(m => add('soft', 'Soft rule', m));
 
-        // violationsFor() checks the SAME two conditions as Rules 2 and 3 —
-        // it's the optimizer's phrasing of them, left behind when the swap
-        // pass couldn't resolve the day. Listing those again would duplicate
-        // the soft rows above under a second key, so only Rule 4 (repeated
-        // service), which has no soft-checker equivalent, is carried over.
-        (violationsForDay(date) || [])
-            .filter(m => /Rule 4:/.test(m))
-            .forEach(m => add('soft', 'Soft rule', m));
+        // violationsFor()'s Rules 2 and 3 duplicate the soft rows above, and
+        // its Rule 4 (same service two days running) is not a conflict at
+        // all — repeating a service is a normal way to absorb a change — so
+        // nothing from it is listed.
     }
 
     return out;

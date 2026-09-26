@@ -364,11 +364,42 @@
         get currentUser() { return currentUser; },
     };
 
+    // ── functions ───────────────────────────────────────────────────────
+    // Stand-ins for the Outlook callables (functions/index.js): connecting
+    // any .ics link writes a few demo meetings for the signed-in pathologist.
+    var functionsApi = {
+        httpsCallable: function (name) {
+            return function (payload) {
+                var m = /^p(\d+)@/.exec((currentUser && currentUser.email) || '');
+                if (!m) return Promise.reject(new Error('[mock] Only pathologist accounts can connect a calendar.'));
+                var id = m[1];
+                var now = Date.now();
+                if (name === 'connectOutlookCalendar') {
+                    if (!/^https:\/\/.+\.ics$/i.test(String(payload && payload.url || '').trim())) {
+                        return Promise.reject(new Error('[mock] Use the ICS link from Outlook.'));
+                    }
+                    var day = new Date(); var d = day.getFullYear() + '-' + String(day.getMonth() + 1).padStart(2, '0') + '-' + String(day.getDate()).padStart(2, '0');
+                    var meetings = {}; meetings[d] = [{ title: 'Demo meeting (mock)', start: '10:00', end: '10:30' }];
+                    makeRef('scheduler/outlookFeeds/' + id).set({ enc: 'mock', connectedAt: now, lastRun: now, lastChange: now, count: 1 });
+                    makeRef('scheduler/outlookMeetings/' + id).set(meetings);
+                    return Promise.resolve({ data: { count: 1 } });
+                }
+                if (name === 'disconnectOutlookCalendar') {
+                    makeRef('scheduler/outlookFeeds/' + id).remove();
+                    makeRef('scheduler/outlookMeetings/' + id).remove();
+                    return Promise.resolve({ data: { ok: true } });
+                }
+                return Promise.reject(new Error('[mock] Unknown function ' + name));
+            };
+        },
+    };
+
     // ── firebase global ─────────────────────────────────────────────────
     window.firebase = {
         initializeApp: function () { return {}; },
         database: function () { return dbApi; },
         auth: function () { return authApi; },
+        functions: function () { return functionsApi; },
         analytics: function () { return { logEvent: function () { } }; },
         apps: [{}],
         SDK_VERSION: 'mock-1.0.0',
@@ -482,6 +513,33 @@
                     m[isoLocal(d)] = { '4': 'ft:CAP Inspection' };
                     return m;
                 })(),
+                // Dr. Moravek's (id 1) Outlook meetings as the sync function
+                // writes them: today and the next workday, one all-day, one
+                // after the grid (pins to the last slot), and a Breast TB
+                // that matches his logged Breast conference (hidden as a
+                // duplicate).
+                outlookFeeds: {
+                    '1': { enc: 'mock', connectedAt: today.getTime(), lastRun: today.getTime(), count: 6 },
+                },
+                conferenceLog: (function () {
+                    var m = {};
+                    m.seedconf1 = { date: isoLocal(nextWorkday(today, 1)), type: 'breast', time: '07:30', pathologistId: 1, createdAt: today.getTime() };
+                    return m;
+                })(),
+                outlookMeetings: { '1': (function () {
+                    var m = {};
+                    m[isoLocal(today)] = [
+                        { title: 'Neuro Tumor Board', start: '07:30', end: '08:30' },
+                        { title: 'Weekly Pathology Grossing Meeting', start: '09:00', end: '09:30' },
+                        { title: 'Lab Path Discussion (late)', start: '17:15', end: '17:45' },
+                    ];
+                    m[isoLocal(nextWorkday(today, 1))] = [
+                        { title: 'CAP Inspection Prep', allDay: true },
+                        { title: 'West Region Breast TB', start: '07:00', end: '08:00' },
+                        { title: 'Digital Pathology Workgroup', start: '09:30', end: '10:00' },
+                    ];
+                    return m;
+                })() },
             },
         };
     }

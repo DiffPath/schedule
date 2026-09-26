@@ -1,0 +1,686 @@
+[
+ {
+  "round": 1,
+  "id": "e1s0",
+  "spec": {
+   "id": "e1s0",
+   "seed": 51000,
+   "kind": "pto1",
+   "bg": false
+  },
+  "kind": "pto1",
+  "desc": "Moravek takes PTO Wed Oct 7",
+  "done": true,
+  "sawAlgo": false,
+  "note": "Moravek put on Huntley so that they were not on bigs before PTO obviously. Mujeeb on bigs 10/6 because it had the fewest number of changes to the schedule. Mujeeb then on WFH as soon as Moravek comes back so that they were not punished for Moravek going on PTO one day. Moravek slightly punished from a WFH perspective.",
+  "plan": {
+   "2026-10-05": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-06": {
+    "1": "huntley",
+    "2": "bigs",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-07": {
+    "2": "huntley",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-08": {
+    "1": "cyto",
+    "2": "wfh",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-09": {
+    "1": "bigs",
+    "2": "cyto",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-12": {
+    "1": "huntley",
+    "2": "bigs",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-13": {
+    "1": "wfh",
+    "2": "huntley",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-14": {
+    "1": "cyto",
+    "2": "wfh",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-15": {
+    "1": "bigs",
+    "2": "cyto",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-16": {
+    "1": "huntley",
+    "2": "bigs",
+    "3": "wfh",
+    "4": "cyto"
+   }
+  }
+ },
+ {
+  "round": 1,
+  "id": "e1s1",
+  "spec": {
+   "id": "e1s1",
+   "seed": 58919,
+   "kind": "ptoFriMon",
+   "bg": true
+  },
+  "kind": "ptoFriMon",
+  "desc": "Raouf takes PTO Fri Oct 23 – Mon Oct 26",
+  "done": true,
+  "sawAlgo": false,
+  "note": "Again, don't punish Raouf for Rehman going on PTO. ",
+  "plan": {
+   "2026-10-19": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-20": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-21": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-22": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-23": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-26": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-27": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-28": {
+    "2": "huntley",
+    "4": "cytobigs"
+   },
+   "2026-10-29": {
+    "1": "bigs",
+    "2": "cyto",
+    "4": "huntley"
+   },
+   "2026-10-30": {
+    "1": "huntley",
+    "2": "bigs",
+    "3": "cyto",
+    "4": "wfh"
+   }
+  }
+ },
+ {
+  "round": 1,
+  "id": "e1s2",
+  "spec": {
+   "id": "e1s2",
+   "seed": 66838,
+   "kind": "ptoThuFri",
+   "bg": true
+  },
+  "kind": "ptoThuFri",
+  "desc": "Raouf takes PTO Thu Oct 22 – Fri Oct 23",
+  "done": true,
+  "sawAlgo": false,
+  "note": "",
+  "plan": {
+   "2026-10-19": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-20": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-21": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-22": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-23": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-26": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-27": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-28": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-29": {
+    "1": "huntley",
+    "2": "bigs",
+    "3": "cyto"
+   },
+   "2026-10-30": {
+    "1": "wfh",
+    "2": "huntley",
+    "3": "bigs",
+    "4": "cyto"
+   }
+  }
+ },
+ {
+  "round": 1,
+  "id": "e1s3",
+  "spec": {
+   "id": "e1s3",
+   "seed": 74757,
+   "kind": "lockWfh",
+   "bg": false
+  },
+  "kind": "lockWfh",
+  "desc": "Moravek requests Breast Bx / WFH on Thu Oct 15 (was McHenry Cyto / Gross)",
+  "done": true,
+  "sawAlgo": false,
+  "note": "Notice how Moravek is punished a bit by having an extra bigs day, two pathologists have the exact same schedule, and the other pathologist is rewarded by having a quicker WFH day.",
+  "plan": {
+   "2026-10-12": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-13": {
+    "1": "bigs",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "huntley"
+   },
+   "2026-10-14": {
+    "1": "huntley",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "wfh"
+   },
+   "2026-10-15": {
+    "1": "wfh",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "cyto"
+   },
+   "2026-10-16": {
+    "1": "cyto",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "bigs"
+   },
+   "2026-10-19": {
+    "1": "bigs",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "huntley"
+   },
+   "2026-10-20": {
+    "1": "huntley",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "wfh"
+   },
+   "2026-10-21": {
+    "1": "wfh",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "cyto"
+   },
+   "2026-10-22": {
+    "1": "cyto",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "bigs"
+   },
+   "2026-10-23": {
+    "1": "bigs",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "huntley"
+   }
+  }
+ },
+ {
+  "round": 1,
+  "id": "e1s4",
+  "spec": {
+   "id": "e1s4",
+   "seed": 82676,
+   "kind": "ptoWeek",
+   "bg": true
+  },
+  "kind": "ptoWeek",
+  "desc": "Moravek takes PTO Mon Oct 19 – Fri Oct 23",
+  "done": true,
+  "sawAlgo": false,
+  "note": "You had punished Rehman for no reason and put Rehman off the normal cycle for no reason. Clearly mine is the better option and it should be abundantly clear why.",
+  "plan": {
+   "2026-10-12": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-13": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-14": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-15": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-16": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-19": {
+    "1": "huntley",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-20": {
+    "1": "cyto",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-21": {
+    "1": "bigs",
+    "3": "huntley",
+    "4": "cyto"
+   },
+   "2026-10-22": {
+    "1": "huntley",
+    "2": "cyto",
+    "3": "wfh",
+    "4": "bigs"
+   },
+   "2026-10-23": {
+    "1": "wfh",
+    "2": "bigs",
+    "3": "cyto",
+    "4": "huntley"
+   }
+  }
+ },
+ {
+  "round": 1,
+  "id": "e1s5",
+  "spec": {
+   "id": "e1s5",
+   "seed": 90595,
+   "kind": "ptoTwo",
+   "bg": true
+  },
+  "kind": "ptoTwo",
+  "desc": "Moravek PTO Mon Oct 12 – Thu Oct 15, and Mujeeb PTO Tue Oct 13 – Fri Oct 16",
+  "done": true,
+  "sawAlgo": false,
+  "note": "No PTO was added to the schedule so nothing needed to change.",
+  "plan": {
+   "2026-10-05": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-06": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-07": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-08": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-09": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-12": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "cyto"
+   },
+   "2026-10-13": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-14": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "huntley"
+   },
+   "2026-10-15": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "wfh"
+   },
+   "2026-10-16": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "cyto"
+   }
+  }
+ },
+ {
+  "round": 1,
+  "id": "e1s6",
+  "spec": {
+   "id": "e1s6",
+   "seed": 98514,
+   "kind": "lockHuntley",
+   "bg": false
+  },
+  "kind": "lockHuntley",
+  "desc": "Raouf requests Huntley on Wed Oct 21 (was Breast Bx / WFH)",
+  "done": true,
+  "sawAlgo": false,
+  "note": "Similar to a previous scenario this one. Double the bigs service is ideal to accommodate a request when need be.",
+  "plan": {
+   "2026-10-19": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "bigs"
+   },
+   "2026-10-20": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "huntley",
+    "4": "bigs"
+   },
+   "2026-10-21": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "wfh",
+    "4": "huntley"
+   },
+   "2026-10-22": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "cyto",
+    "4": "wfh"
+   },
+   "2026-10-23": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "bigs",
+    "4": "cyto"
+   },
+   "2026-10-26": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "huntley",
+    "4": "bigs"
+   },
+   "2026-10-27": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "wfh",
+    "4": "huntley"
+   },
+   "2026-10-28": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "cyto",
+    "4": "wfh"
+   },
+   "2026-10-29": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "bigs",
+    "4": "cyto"
+   },
+   "2026-10-30": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "huntley",
+    "4": "bigs"
+   }
+  }
+ },
+ {
+  "round": 1,
+  "id": "e1s7",
+  "spec": {
+   "id": "e1s7",
+   "seed": 106433,
+   "kind": "ptoFri",
+   "bg": true
+  },
+  "kind": "ptoFri",
+  "desc": "Moravek takes PTO Friday Fri Nov 13",
+  "done": true,
+  "sawAlgo": false,
+  "note": "Nothing changed on the schedule. Must be a bug.",
+  "plan": {
+   "2026-11-09": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "cyto",
+    "4": "wfh"
+   },
+   "2026-11-10": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "bigs",
+    "4": "cyto"
+   },
+   "2026-11-11": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "huntley",
+    "4": "bigs"
+   },
+   "2026-11-12": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "wfh",
+    "4": "huntley"
+   },
+   "2026-11-13": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "cyto",
+    "4": "wfh"
+   },
+   "2026-11-16": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "bigs",
+    "4": "cyto"
+   },
+   "2026-11-17": {
+    "1": "wfh",
+    "2": "cyto",
+    "3": "huntley",
+    "4": "bigs"
+   },
+   "2026-11-18": {
+    "1": "cyto",
+    "2": "bigs",
+    "3": "wfh",
+    "4": "huntley"
+   },
+   "2026-11-19": {
+    "1": "bigs",
+    "2": "huntley",
+    "3": "cyto",
+    "4": "wfh"
+   },
+   "2026-11-20": {
+    "1": "huntley",
+    "2": "wfh",
+    "3": "bigs",
+    "4": "cyto"
+   }
+  }
+ },
+ {
+  "round": 1,
+  "id": "e1s8",
+  "spec": {
+   "id": "e1s8",
+   "seed": 114352,
+   "kind": "ptoRemove",
+   "bg": true
+  },
+  "kind": "ptoRemove",
+  "desc": "Moravek cancels PTO Mon Nov 9 – Wed Nov 11 (now working those days)",
+  "done": false,
+  "sawAlgo": false,
+  "note": "",
+  "plan": {
+   "2026-11-02": {
+    "1": "wfh",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "cyto"
+   },
+   "2026-11-03": {
+    "1": "cyto",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "bigs"
+   },
+   "2026-11-04": {
+    "1": "bigs",
+    "3": "cyto",
+    "4": "huntley"
+   },
+   "2026-11-05": {
+    "1": "huntley",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "wfh"
+   },
+   "2026-11-06": {
+    "1": "wfh",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "cyto"
+   },
+   "2026-11-09": {
+    "1": "cyto",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "bigs"
+   },
+   "2026-11-10": {
+    "1": "bigs",
+    "2": "wfh",
+    "3": "cyto",
+    "4": "huntley"
+   },
+   "2026-11-11": {
+    "1": "huntley",
+    "2": "cyto",
+    "3": "bigs",
+    "4": "wfh"
+   },
+   "2026-11-12": {
+    "1": "wfh",
+    "2": "bigs",
+    "3": "huntley",
+    "4": "cyto"
+   },
+   "2026-11-13": {
+    "1": "cyto",
+    "2": "huntley",
+    "3": "wfh",
+    "4": "bigs"
+   }
+  }
+ }
+]

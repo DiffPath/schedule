@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule Preference Trainer</title>
+<style>
+:root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1f2328; --muted: #6a6f76; --line: #dcdad4;
+    --accent: #2563b0; --pin: #d4a017; --diff: #111;
+    --cyto: #c2410c; --bigs: #155e75; --huntley: #65a30d; --wfh: #7e22ce;
+    --pto: #b9b6ae; --fri: #fbf3dc; --change: #fde7e7;
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #16181b; --panel: #1f2226; --ink: #e8e6e1; --muted: #9aa0a6; --line: #34383e;
+        --accent: #6ea8ff; --diff: #fff; --pto: #55585e; --fri: #2b2819; --change: #3a2224;
+    }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 20px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; }
+.prog { color: var(--muted); }
+.bar { flex: 1; min-width: 120px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); }
+button, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+main { max-width: 1500px; margin: 0 auto; padding: 16px 20px 60px; }
+.change { font-size: 18px; font-weight: 600; margin: 4px 0 2px; }
+.sub { color: var(--muted); margin-bottom: 12px; }
+.strip { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
+.strip h2 { font-size: 14px; margin: 0 0 6px; display: flex; gap: 12px; align-items: baseline; }
+.strip h2 .note { font-weight: 400; color: var(--muted); font-size: 12px; }
+.scroll { overflow-x: auto; }
+table { border-collapse: separate; border-spacing: 2px; }
+th { font-size: 10px; font-weight: 500; color: var(--muted); text-align: center; padding: 0 1px; white-space: nowrap; }
+th.fri { background: var(--fri); border-radius: 3px; }
+th.chg { color: #c0392b; font-weight: 700; }
+td.name { font-size: 12px; padding-right: 8px; white-space: nowrap; font-weight: 600; }
+td.gap, th.gap { width: 8px; padding: 0; }
+td.c { width: 34px; min-width: 34px; height: 24px; text-align: center; font-size: 10px; font-weight: 700; color: #fff; border-radius: 4px; position: relative; letter-spacing: .02em; }
+td.c.cyto { background: var(--cyto); } td.c.bigs { background: var(--bigs); }
+td.c.huntley { background: var(--huntley); } td.c.wfh { background: var(--wfh); }
+td.c.cytobigs { background: linear-gradient(135deg, var(--cyto) 50%, var(--bigs) 50%); }
+td.c.pto { background: repeating-linear-gradient(45deg, var(--pto) 0 4px, transparent 4px 8px); color: var(--muted); }
+td.c.off, td.c.none { background: transparent; color: var(--muted); }
+td.c.fricol { box-shadow: inset 0 -3px 0 var(--pin); }
+td.c.d { outline: 3px solid var(--diff); outline-offset: -1px; }
+td.c.pin::after { content: "★"; position: absolute; top: -7px; right: -4px; color: var(--pin); font-size: 12px; text-shadow: 0 0 2px #000; }
+td.c.back::after { content: "↩"; position: absolute; top: -7px; right: -4px; color: var(--pin); font-size: 11px; }
+.dim td.c:not(.d) { opacity: .45; }
+.tally { margin-top: 8px; font-size: 12px; border-collapse: collapse; }
+.tally th, .tally td { padding: 2px 8px; text-align: right; border-bottom: 1px solid var(--line); font-size: 12px; }
+.tally th:first-child, .tally td:first-child { text-align: left; }
+.tally td.hi { font-weight: 700; }
+.row2 { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.answer { position: sticky; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); padding: 10px 20px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.answer button.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
+.answer textarea { flex: 1; min-width: 240px; max-width: 520px; height: 36px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px; resize: vertical; }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); align-items: center; }
+.legend span.k { display: inline-block; width: 26px; height: 16px; border-radius: 3px; vertical-align: middle; margin-right: 4px; color: #fff; font-size: 9px; text-align: center; line-height: 16px; font-weight: 700; }
+.toggle { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+.intro { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 18px; margin-bottom: 14px; }
+.intro p { margin: 4px 0; }
+kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 11px; }
+.done { color: var(--huntley); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+    <h1>Schedule Preference Trainer</h1>
+    <select id="round"></select>
+    <span class="prog" id="prog"></span>
+    <div class="bar"><div id="barFill"></div></div>
+    <div class="toggle">Outline cells that differ from:
+        <select id="diffMode"><option value="before">Before</option><option value="other">the other option</option></select>
+    </div>
+    <label class="toggle"><input type="checkbox" id="dim"> Fade unchanged</label>
+    <button id="jump">Next unanswered</button>
+    <button id="export">Export answers</button>
+</header>
+<main>
+    <div class="intro" id="intro">
+        <p><b>How this works.</b> Each question takes one change (PTO, a request, a cancellation) and shows two ways the schedule could absorb it. Pick the one <b>you</b> would rather publish, the way you'd judge it if you were doing it by hand. Consider fairness, how much of the normal rotation gets disturbed, and anything else you care about.</p>
+        <p>"About the same" is a real answer. Use it when you genuinely don't care. The optional note ("why") helps a lot, especially if something bothers you that isn't a rule yet.</p>
+        <p>Keys: <kbd>1</kbd> A much better · <kbd>2</kbd> A slightly · <kbd>3</kbd> same · <kbd>4</kbd> B slightly · <kbd>5</kbd> B much better · <kbd>←</kbd>/<kbd>→</kbd> navigate. Answers save in this browser automatically. When you're done, click <b>Export answers</b> and put the file in <code>tools/tuning/</code>.</p>
+        <div class="legend">
+            <span><span class="k" style="background:var(--cyto)">CYT</span>McH Cyto/Gross</span>
+            <span><span class="k" style="background:var(--bigs)">BIG</span>McH Bigs</span>
+            <span><span class="k" style="background:linear-gradient(135deg,var(--cyto) 50%,var(--bigs) 50%)">CGB</span>Cyto/Gross/Bigs</span>
+            <span><span class="k" style="background:var(--huntley)">HUN</span>Huntley</span>
+            <span><span class="k" style="background:var(--wfh)">WFH</span>Breast Bx/WFH</span>
+            <span><span class="k" style="background:repeating-linear-gradient(45deg,var(--pto) 0 4px,transparent 4px 8px);color:var(--muted)">PTO</span>PTO</span>
+            <span>★ requested/locked</span><span>↩ PTO cancelled</span>
+            <span><span class="k" style="background:var(--fri);box-shadow:inset 0 -3px 0 var(--pin)"></span>Friday (breast conf.)</span>
+            <span>red date = day of the change</span>
+        </div>
+    </div>
+    <div id="q"></div>
+</main>
+<div class="answer">
+    <button id="prev">← Prev</button>
+    <button data-v="2">A much better</button>
+    <button data-v="1">A slightly</button>
+    <button data-v="0">About the same</button>
+    <button data-v="-1">B slightly</button>
+    <button data-v="-2">B much better</button>
+    <textarea id="note" placeholder="Why? (optional, e.g. 'B moves too many people', 'A gives Rehman 3 WFH in 2 weeks')"></textarea>
+    <button id="next">Next →</button>
+</div>
+<script src="scenarios-r1.js"></script>
+<script src="scenarios-r2.js"></script>
+<script src="scenarios-r3.js"></script>
+<script>
+const ABBR = { cyto: 'CYT', bigs: 'BIG', huntley: 'HUN', wfh: 'WFH', cytobigs: 'CGB', pto: 'PTO', off: '', off_site: 'OFF' };
+const SVC_CLASS = s => (s && ABBR[s] !== undefined) ? s : (s ? 'off' : 'none');
+const rounds = Object.keys(window.SCENARIOS || {}).map(Number).sort((a, b) => a - b);
+const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+let round = store.get('tune.round', rounds[rounds.length - 1]);
+if (!rounds.includes(round)) round = rounds[rounds.length - 1];
+let answers = store.get('tune.answers', {});   // qid → { v, note }
+let idx = 0;
+const el = id => document.getElementById(id);
+
+const roundSel = el('round');
+rounds.forEach(r => { const o = document.createElement('option'); o.value = r; o.textContent = 'Round ' + r; roundSel.appendChild(o); });
+roundSel.value = round;
+roundSel.onchange = () => { round = +roundSel.value; store.set('tune.round', round); idx = firstUnanswered(); render(); };
+el('diffMode').value = store.get('tune.diffMode', 'before');
+el('diffMode').onchange = () => { store.set('tune.diffMode', el('diffMode').value); render(); };
+el('dim').checked = store.get('tune.dim', false);
+el('dim').onchange = () => { store.set('tune.dim', el('dim').checked); render(); };
+
+const qs = () => (window.SCENARIOS && window.SCENARIOS[round]) || [];
+function firstUnanswered() { const i = qs().findIndex(q => !answers[q.qid] || answers[q.qid].v === undefined); return i < 0 ? 0 : i; }
+idx = store.get('tune.idx.' + round, firstUnanswered());
+
+function fmtDay(k) {
+    const d = new Date(k + 'T00:00:00');
+    return { dow: 'SMTWTFS'[d.getDay()], md: (d.getMonth() + 1) + '/' + d.getDate() };
+}
+
+function gridHtml(q, grid, other, title, note) {
+    const mode = el('diffMode').value;
+    const cmp = other === null ? null : (mode === 'before' ? q.before : other);
+    let h = '<div class="strip' + (el('dim').checked && cmp ? ' dim' : '') + '"><h2>' + title + (note ? '<span class="note">' + note + '</span>' : '') + '</h2><div class="scroll"><table><tr><th></th>';
+    q.days.forEach((k, i) => {
+        if (q.mondayAfterBreak[i]) h += '<th class="gap"></th>';
+        const f = fmtDay(k);
+        h += '<th class="' + (q.fridays[i] ? 'fri ' : '') + (k === q.from ? 'chg' : '') + '">' + f.dow + '<br>' + f.md + '</th>';
+    });
+    h += '</tr>';
+    q.people.forEach((p, pi) => {
+        h += '<tr><td class="name">' + p.name.split(' ').pop() + '</td>';
+        q.days.forEach((k, i) => {
+            if (q.mondayAfterBreak[i]) h += '<td class="gap"></td>';
+            const s = grid[i][pi];
+            const cls = ['c', SVC_CLASS(s)];
+            if (q.fridays[i] && (s === 'bigs' || s === 'cytobigs')) cls.push('fricol');
+            if (cmp && cmp[i][pi] !== s && s !== 'pto') cls.push('d');
+            const m = q.marks[k] && q.marks[k][p.id];
+            if (m === 'pin' && other !== null) cls.push('pin');
+            if (m === 'back' && other !== null) cls.push('back');
+            h += '<td class="' + cls.join(' ') + '">' + (ABBR[s] !== undefined ? ABBR[s] : (s ? 'OFF' : '')) + '</td>';
+        });
+        h += '</tr>';
+    });
+    return h + '</table></div></div>';
+}
+
+function tally(q, grid, otherGrid) {
+    const rows = q.people.map((p, pi) => {
+        const t = { cyto: 0, bigs: 0, huntley: 0, wfh: 0, fri: 0, chg: 0 };
+        grid.forEach((col, i) => {
+            const s = col[pi];
+            if (s === 'cytobigs') { t.cyto++; t.bigs++; }
+            else if (t[s] !== undefined) t[s]++;
+            if (q.fridays[i] && (s === 'bigs' || s === 'cytobigs')) t.fri++;
+            const b = q.before[i][pi];
+            if (b && s && b !== s && ABBR[b] && b !== 'pto' && s !== 'pto') t.chg++;
+        });
+        return t;
+    });
+    const orows = q.people.map((p, pi) => {
+        const t = { wfh: 0, huntley: 0 };
+        otherGrid.forEach(col => { const s = col[pi]; if (t[s] !== undefined) t[s]++; });
+        return t;
+    });
+    let h = '<table class="tally"><tr><th>Shown weeks</th><th>CYT</th><th>BIG</th><th>HUN</th><th>WFH</th><th>Fri BIG</th><th>changed vs before</th></tr>';
+    q.people.forEach((p, pi) => {
+        const t = rows[pi];
+        h += '<tr><td>' + p.name.split(' ').pop() + '</td><td>' + t.cyto + '</td><td>' + t.bigs + '</td><td' + (t.huntley !== orows[pi].huntley ? ' class="hi"' : '') + '>' + t.huntley + '</td><td' + (t.wfh !== orows[pi].wfh ? ' class="hi"' : '') + '>' + t.wfh + '</td><td>' + t.fri + '</td><td>' + t.chg + '</td></tr>';
+    });
+    return h + '</table>';
+}
+
+function render() {
+    const list = qs();
+    const n = list.length;
+    const done = list.filter(q => answers[q.qid] && answers[q.qid].v !== undefined).length;
+    el('prog').innerHTML = n ? ('Question ' + (idx + 1) + ' of ' + n + ' · ' + (done === n ? '<span class="done">all answered ✓</span>' : done + ' answered')) : 'No scenarios loaded';
+    el('barFill').style.width = (n ? 100 * done / n : 0) + '%';
+    store.set('tune.idx.' + round, idx);
+    if (!n) { el('q').innerHTML = ''; return; }
+    const q = list[idx];
+    const a = answers[q.qid] || {};
+    const beyond = x => x.beyond ? x.beyond + ' more changed slot' + (x.beyond === 1 ? '' : 's') + ' after the shown weeks' : 'no changes after the shown weeks';
+    el('q').innerHTML =
+        '<div class="change">' + q.desc + '</div>' +
+        '<div class="sub">Shown: a week before the change through about 6 weeks after it. Bold tally numbers differ between A and B.</div>' +
+        gridHtml(q, q.before, null, 'Before the change', 'what was published before this change') +
+        gridHtml(q, q.A.grid, q.B.grid, 'Option A', beyond(q.A)) +
+        '<div class="strip" style="margin-top:-8px">' + tally(q, q.A.grid, q.B.grid) + '</div>' +
+        gridHtml(q, q.B.grid, q.A.grid, 'Option B', beyond(q.B)) +
+        '<div class="strip" style="margin-top:-8px">' + tally(q, q.B.grid, q.A.grid) + '</div>';
+    document.querySelectorAll('.answer button[data-v]').forEach(b => b.classList.toggle('sel', a.v !== undefined && +b.dataset.v === a.v));
+    el('note').value = a.note || '';
+}
+
+function answer(v) {
+    const q = qs()[idx];
+    answers[q.qid] = { v: v, note: el('note').value.trim(), t: Date.now() };
+    store.set('tune.answers', answers);
+    if (idx < qs().length - 1) idx++;
+    render();
+    window.scrollTo(0, document.getElementById('q').offsetTop - 70);
+}
+document.querySelectorAll('.answer button[data-v]').forEach(b => b.onclick = () => answer(+b.dataset.v));
+el('note').oninput = () => {
+    const q = qs()[idx];
+    answers[q.qid] = Object.assign(answers[q.qid] || {}, { note: el('note').value });
+    store.set('tune.answers', answers);
+};
+el('prev').onclick = () => { if (idx > 0) { idx--; render(); } };
+el('next').onclick = () => { if (idx < qs().length - 1) { idx++; render(); } };
+el('jump').onclick = () => { idx = firstUnanswered(); render(); };
+document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    const map = { '1': 2, '2': 1, '3': 0, '4': -1, '5': -2 };
+    if (map[e.key] !== undefined) { answer(map[e.key]); e.preventDefault(); }
+    else if (e.key === 'ArrowLeft') el('prev').click();
+    else if (e.key === 'ArrowRight') el('next').click();
+});
+el('export').onclick = () => {
+    const out = [];
+    rounds.forEach(r => (window.SCENARIOS[r] || []).forEach(q => {
+        const a = answers[q.qid];
+        if (!a || a.v === undefined) return;
+        out.push({ round: r, qid: q.qid, sit: q.sit, kind: q.kind, desc: q.desc, v: a.v, note: a.note || '',
+            sanity: q.sanity, A: { labels: q.A.labels, f: q.A.f }, B: { labels: q.B.labels, f: q.B.f } });
+    }));
+    const blob = new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'answers.json';
+    link.click();
+};
+render();
+</script>
+</body>
+</html>

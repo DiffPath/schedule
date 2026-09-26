@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule Editor Trainer</title>
+<style>
+:root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1f2328; --muted: #6a6f76; --line: #dcdad4;
+    --accent: #2563b0; --pin: #d4a017; --bad: #c0392b; --ok: #3f7d12;
+    --cyto: #c2410c; --bigs: #155e75; --huntley: #65a30d; --wfh: #7e22ce;
+    --pto: #b9b6ae; --fri: #fbf3dc; --sel: #111;
+}
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #16181b; --panel: #1f2226; --ink: #e8e6e1; --muted: #9aa0a6; --line: #34383e;
+        --accent: #6ea8ff; --pto: #55585e; --fri: #2b2819; --sel: #fff; --ok: #7cc242; --bad: #ff6b5b;
+    }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 20px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+header h1 { font-size: 16px; margin: 0; }
+.prog { color: var(--muted); }
+.bar { flex: 1; min-width: 100px; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > div { height: 100%; background: var(--accent); }
+button, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+main { max-width: 1400px; margin: 0 auto; padding: 16px 20px 40px; }
+.change { font-size: 19px; font-weight: 600; margin: 4px 0 2px; }
+.sub { color: var(--muted); margin-bottom: 12px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.panel h2 { font-size: 14px; margin: 0 0 8px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.panel h2 .note { font-weight: 400; color: var(--muted); font-size: 12px; }
+.scroll { overflow-x: auto; }
+table.g { border-collapse: separate; border-spacing: 3px; }
+table.g th { font-size: 11px; font-weight: 500; color: var(--muted); text-align: center; padding: 0 1px; white-space: nowrap; }
+table.g th.fri { background: var(--fri); border-radius: 3px; }
+table.g th.chg { color: var(--bad); font-weight: 700; }
+table.g th.win { color: var(--ink); }
+td.name { font-size: 13px; padding-right: 10px; white-space: nowrap; font-weight: 600; }
+td.gap, th.gap { width: 10px; padding: 0; }
+td.c { width: 48px; min-width: 48px; height: 34px; text-align: center; font-size: 12px; font-weight: 700; color: #fff; border-radius: 5px; position: relative; letter-spacing: .02em; user-select: none; }
+td.c.cyto { background: var(--cyto); } td.c.bigs { background: var(--bigs); }
+td.c.huntley { background: var(--huntley); } td.c.wfh { background: var(--wfh); }
+td.c.cytobigs { background: linear-gradient(135deg, var(--cyto) 50%, var(--bigs) 50%); }
+td.c.pto { background: repeating-linear-gradient(45deg, var(--pto) 0 4px, transparent 4px 8px); color: var(--muted); }
+td.c.off, td.c.none { background: transparent; color: var(--muted); }
+td.c.ro { opacity: .5; }
+td.c.ign { opacity: .22; }
+td.c.ed { cursor: pointer; }
+td.c.ed:hover { filter: brightness(1.15); }
+td.c.sel { outline: 3px solid var(--sel); outline-offset: 1px; }
+td.c.chgd { box-shadow: inset 0 0 0 2px rgba(255,255,255,.85); }
+td.c.fricol { border-bottom: 4px solid var(--pin); }
+td.c .tm { position: absolute; left: 2px; bottom: 0; font-size: 8px; font-weight: 600; opacity: .8; }
+td.c.pin::after { content: "★"; position: absolute; top: -8px; right: -4px; color: var(--pin); font-size: 13px; text-shadow: 0 0 2px #000; }
+td.c.back::after { content: "↩"; position: absolute; top: -8px; right: -4px; color: var(--pin); font-size: 12px; }
+td.c .warn { position: absolute; top: -7px; left: -4px; background: var(--bad); color: #fff; border-radius: 8px; font-size: 9px; padding: 0 4px; line-height: 14px; }
+td.v { text-align: center; font-size: 12px; font-weight: 700; height: 18px; }
+td.v.ok { color: var(--ok); } td.v.bad { color: var(--bad); }
+.small { font-size: 12px; color: var(--muted); }
+.tally { border-collapse: collapse; font-size: 12px; }
+.tally th, .tally td { padding: 2px 9px; text-align: right; border-bottom: 1px solid var(--line); }
+.tally th { color: var(--muted); font-weight: 500; }
+.tally th:first-child, .tally td:first-child { text-align: left; }
+.tally td.hi { color: var(--bad); font-weight: 700; }
+.tally td.sep, .tally th.sep { border-left: 1px solid var(--line); }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+.row > .panel { flex: 1; min-width: 320px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+textarea { width: 100%; min-height: 54px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px; resize: vertical; }
+.legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); align-items: center; }
+.legend span.k { display: inline-block; width: 28px; height: 16px; border-radius: 3px; vertical-align: middle; margin-right: 4px; color: #fff; font-size: 9px; text-align: center; line-height: 16px; font-weight: 700; }
+kbd { border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; font-size: 11px; }
+.status { font-weight: 600; }
+.status.ok { color: var(--ok); } .status.bad { color: var(--bad); }
+details summary { cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+    <h1>Schedule Editor Trainer</h1>
+    <select id="round"></select>
+    <button id="prev">←</button>
+    <select id="pick"></select>
+    <button id="next">→</button>
+    <span class="prog" id="prog"></span>
+    <div class="bar"><div id="barFill"></div></div>
+    <label class="small"><input type="checkbox" id="showTm"> show normal rotation in corners</label>
+    <button id="export">Export</button>
+</header>
+<main>
+    <details class="panel" id="help" open>
+        <summary><b>How this works</b></summary>
+        <p>Each scenario is one change: PTO, a request, or a cancellation. The <b>two bright weeks</b> are yours to edit. Make them exactly what you would publish. Faded days before the window are fixed history. Faded days <b>after</b> it are only a preview of the old schedule and are ignored. Your version is assumed to keep stepping through the rotation from your last day.</p>
+        <p><b>Edit:</b> click a cell, then click another cell in the same day to <b>swap</b> them. Or select a cell and press <kbd>C</kbd> Cyto/Gross, <kbd>B</kbd> Bigs, <kbd>H</kbd> Huntley, <kbd>W</kbd> WFH, <kbd>G</kbd> Cyto/Gross/Bigs (one person covering McHenry). <kbd>←↑→↓</kbd> move the selection and <kbd>Esc</kbd> deselects. PTO and ★ requested cells are locked.</p>
+        <p>The editor starts from <span id="startWhat">what the app shows right after the change, before any recompute</span>. Days that break coverage get a red ✗. A red <b>!</b> flags Bigs the day before PTO or WFH. When the two weeks look right, add a note if anything was a judgment call, then click <b>Done → next</b>. You can open the algorithm's own version afterwards to compare. Please avoid copying it: build your own version first.</p>
+        <div class="legend">
+            <span><span class="k" style="background:var(--cyto)">CYT</span>McH Cyto/Gross</span>
+            <span><span class="k" style="background:var(--bigs)">BIG</span>McH Bigs</span>
+            <span><span class="k" style="background:linear-gradient(135deg,var(--cyto) 50%,var(--bigs) 50%)">CGB</span>Cyto/Gross/Bigs</span>
+            <span><span class="k" style="background:var(--huntley)">HUN</span>Huntley</span>
+            <span><span class="k" style="background:var(--wfh)">WFH</span>Breast Bx/WFH</span>
+            <span><span class="k" style="background:repeating-linear-gradient(45deg,var(--pto) 0 4px,transparent 4px 8px);color:var(--muted)">PTO</span>PTO</span>
+            <span>★ requested/locked · ↩ PTO cancelled · yellow underline = Friday Bigs (breast conf.) · red date = the change · white inner border = you changed it</span>
+        </div>
+    </details>
+    <div id="q"></div>
+</main>
+<script src="edit-r1.js"></script>
+<script src="edit-r2.js"></script>
+<script src="edit-r3.js"></script>
+<script>
+const ABBR = { cyto: 'CYT', bigs: 'BIG', huntley: 'HUN', wfh: 'WFH', cytobigs: 'CGB', pto: 'PTO', off: '', off_site: 'OFF' };
+const TM = { cyto: 'C', bigs: 'B', huntley: 'H', wfh: 'W' };
+const KEY = { c: 'cyto', b: 'bigs', h: 'huntley', w: 'wfh', g: 'cytobigs' };
+const SVC = s => (s && ABBR[s] !== undefined) ? s : (s ? 'off' : 'none');
+const isBigs = s => s === 'bigs' || s === 'cytobigs';
+const isSvc = s => ['cyto', 'bigs', 'huntley', 'wfh', 'cytobigs'].includes(s);
+const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+const el = id => document.getElementById(id);
+const rounds = Object.keys(window.EDIT_SCENARIOS || {}).map(Number).sort((a, b) => a - b);
+let round = store.get('ed.round', rounds[rounds.length - 1]);
+if (!rounds.includes(round)) round = rounds[rounds.length - 1];
+let work = store.get('ed.work', {});   // id → { grid (window cols), note, done, sawAlgo }
+let idx = 0, sel = null, showAlgo = false;
+
+const qs = () => (window.EDIT_SCENARIOS && window.EDIT_SCENARIOS[round]) || [];
+const firstTodo = () => { const i = qs().findIndex(q => !(work[q.id] && work[q.id].done)); return i < 0 ? 0 : i; };
+idx = store.get('ed.idx.' + round, firstTodo());
+if (idx >= qs().length) idx = 0;
+
+rounds.forEach(r => { const o = document.createElement('option'); o.value = r; o.textContent = 'Round ' + r; el('round').appendChild(o); });
+el('round').value = round;
+el('round').onchange = () => { round = +el('round').value; store.set('ed.round', round); idx = firstTodo(); sel = null; render(); };
+el('showTm').checked = store.get('ed.showTm', false);
+el('showTm').onchange = () => { store.set('ed.showTm', el('showTm').checked); render(); };
+if (store.get('ed.helpClosed', false)) el('help').open = false;
+el('help').ontoggle = () => store.set('ed.helpClosed', !el('help').open);
+
+function W(q) {
+    if (!work[q.id]) work[q.id] = { grid: q.start.slice(q.nCtx, q.nCtx + q.nWin).map(c => c.slice()), note: '', done: false };
+    return work[q.id];
+}
+function save() { store.set('ed.work', work); }
+
+// Full column list for the current plan: context + editable + after.
+function cols(q) {
+    const g = W(q).grid;
+    return q.start.map((c, i) => (i >= q.nCtx && i < q.nCtx + q.nWin) ? g[i - q.nCtx] : c);
+}
+function locked(q, i, pi) {
+    if (i < q.nCtx || i >= q.nCtx + q.nWin) return true;
+    const s = q.start[i][pi];
+    if (!isSvc(s)) return true;
+    const m = q.marks[q.days[i]] && q.marks[q.days[i]][q.people[pi].id];
+    return m === 'pin';
+}
+function valid(q, i) {
+    const allowed = q.allowed[q.days[i]];
+    if (!allowed) return true;
+    const col = cols(q)[i];
+    const sig = allowed.length ? allowed[0].split(',').map(x => x.split(':')[0]) : [];
+    const s = sig.map(pid => pid + ':' + col[q.people.findIndex(p => String(p.id) === pid)]).join(',');
+    return allowed.includes(s);
+}
+function warnings(q, all, i, pi) {
+    const s = all[i][pi], n = all[i + 1];
+    if (!n || !isSvc(s)) return '';
+    const t = n[pi];
+    if (isBigs(s) && t === 'pto') return 'Bigs before PTO';
+    if (isBigs(s) && t === 'wfh') return 'Bigs before WFH';
+    return '';
+}
+function fmtDay(k) { const d = new Date(k + 'T00:00:00'); return { dow: 'SMTWTFS'[d.getDay()], md: (d.getMonth() + 1) + '/' + d.getDate() }; }
+
+function gridTable(q, all, opts) {
+    let h = '<div class="scroll"><table class="g"><tr><th></th>';
+    q.days.forEach((k, i) => {
+        if (q.breakBefore[i]) h += '<th class="gap"></th>';
+        const f = fmtDay(k), inWin = i >= q.nCtx && i < q.nCtx + q.nWin;
+        h += '<th class="' + [q.fridays[i] ? 'fri' : '', k === q.from ? 'chg' : '', inWin ? 'win' : ''].join(' ') + '">' + f.dow + '<br>' + f.md + '</th>';
+    });
+    h += '</tr>';
+    q.people.forEach((p, pi) => {
+        h += '<tr><td class="name">' + p.name.split(' ').pop() + '</td>';
+        q.days.forEach((k, i) => {
+            if (q.breakBefore[i]) h += '<td class="gap"></td>';
+            const s = all[i][pi];
+            const inWin = i >= q.nCtx && i < q.nCtx + q.nWin;
+            const cls = ['c', SVC(s)];
+            if (!inWin) cls.push(i >= q.nCtx + q.nWin && opts.edit ? 'ign' : 'ro');
+            if (opts.edit && inWin && !locked(q, i, pi)) cls.push('ed');
+            if (opts.edit && sel && sel[0] === i && sel[1] === pi) cls.push('sel');
+            if (opts.edit && inWin && s !== q.start[i][pi]) cls.push('chgd');
+            if (q.fridays[i] && isBigs(s)) cls.push('fricol');
+            const m = q.marks[k] && q.marks[k][p.id];
+            if (m === 'pin' && opts.marks) cls.push('pin');
+            if (m === 'back' && opts.marks) cls.push('back');
+            let inner = ABBR[s] !== undefined ? ABBR[s] : (s ? 'OFF' : '');
+            if (el('showTm').checked && q.default[i][pi] && isSvc(s)) inner += '<span class="tm">' + TM[q.default[i][pi]] + '</span>';
+            const w = opts.edit && inWin ? warnings(q, all, i, pi) : '';
+            if (w) inner += '<span class="warn" title="' + w + '">!</span>';
+            h += '<td class="' + cls.join(' ') + '" data-i="' + i + '" data-p="' + pi + '">' + inner + '</td>';
+        });
+        h += '</tr>';
+    });
+    if (opts.edit) {
+        h += '<tr><td></td>';
+        q.days.forEach((k, i) => {
+            if (q.breakBefore[i]) h += '<td class="gap"></td>';
+            const inWin = i >= q.nCtx && i < q.nCtx + q.nWin;
+            if (!inWin) { h += '<td></td>'; return; }
+            const ok = valid(q, i);
+            h += '<td class="v ' + (ok ? 'ok' : 'bad') + '" title="' + (ok ? 'valid day' : 'needs someone at McHenry (Cyto/Gross + Bigs when 3+ are working) and at Huntley') + '">' + (ok ? '✓' : '✗') + '</td>';
+        });
+        h += '</tr>';
+    }
+    return h + '</table></div>';
+}
+
+function tallies(q, all) {
+    const win = all.slice(q.nCtx, q.nCtx + q.nWin);
+    const def = q.default.slice(q.nCtx, q.nCtx + q.nWin);
+    let h = '<table class="tally"><tr><th></th><th>CYT</th><th>BIG</th><th>HUN</th><th>WFH</th><th>Fri BIG</th>'
+        + '<th class="sep" title="WFH / Huntley the normal rotation gives on the days this person works in the window">normal WFH / HUN</th>'
+        + '<th class="sep" title="Last 20 workdays before the window">prev 4 wks WFH / HUN / Fri BIG / PTO</th></tr>';
+    q.people.forEach((p, pi) => {
+        const t = { cyto: 0, bigs: 0, huntley: 0, wfh: 0, fri: 0, nw: 0, nh: 0 };
+        win.forEach((col, j) => {
+            const s = col[pi];
+            if (s === 'cytobigs') { t.cyto++; t.bigs++; } else if (t[s] !== undefined) t[s]++;
+            if (q.fridays[q.nCtx + j] && isBigs(s)) t.fri++;
+            if (isSvc(s)) { if (def[j][pi] === 'wfh') t.nw++; if (def[j][pi] === 'huntley') t.nh++; }
+        });
+        const hs = q.hist[p.id] || {};
+        h += '<tr><td>' + p.name.split(' ').pop() + '</td><td>' + t.cyto + '</td><td>' + t.bigs + '</td>'
+            + '<td' + (t.huntley !== t.nh ? ' class="hi"' : '') + '>' + t.huntley + '</td>'
+            + '<td' + (t.wfh !== t.nw ? ' class="hi"' : '') + '>' + t.wfh + '</td><td>' + t.fri + '</td>'
+            + '<td class="sep">' + t.nw + ' / ' + t.nh + '</td>'
+            + '<td class="sep">' + hs.wfh + ' / ' + hs.huntley + ' / ' + hs.friBigs + ' / ' + hs.pto + '</td></tr>';
+    });
+    return h + '</table><div class="small" style="margin-top:4px">Red = WFH/HUN count differs from what the normal rotation gives that person on the days they work.</div>';
+}
+
+function render() {
+    const list = qs();
+    if (list[idx]) el('startWhat').textContent = list[idx].prefilled
+        ? "the tuned algorithm's suggestion (weights fitted to your earlier answers)"
+        : 'what the app shows right after the change, before any recompute';
+    const pick = el('pick');
+    pick.innerHTML = list.map((q, i) => '<option value="' + i + '">' + (i + 1) + '. ' + ((work[q.id] && work[q.id].done) ? '✓ ' : '') + q.kind + '</option>').join('');
+    pick.value = idx;
+    const done = list.filter(q => work[q.id] && work[q.id].done).length;
+    el('prog').textContent = list.length ? (done + ' of ' + list.length + ' done') : 'No scenarios loaded';
+    el('barFill').style.width = (list.length ? 100 * done / list.length : 0) + '%';
+    store.set('ed.idx.' + round, idx);
+    if (!list.length) { el('q').innerHTML = ''; return; }
+    const q = list[idx], w = W(q), all = cols(q);
+    const allValid = q.days.every((k, i) => i < q.nCtx || i >= q.nCtx + q.nWin || valid(q, i));
+    const algoDiff = q.algo.reduce((n, c, i) => n + c.filter((s, pi) => s !== all[i][pi]).length, 0);
+    el('q').innerHTML =
+        '<div class="change">' + (idx + 1) + '. ' + q.desc + '</div>' +
+        '<div class="sub">' + (w.done ? '<span class="status ok">Done ✓</span> (you can still edit it)'
+            : q.prefilled ? 'Pre-filled with the tuned algorithm\'s suggestion. Fix whatever you\'d change; if it\'s already right, just click Done.'
+            : 'Build the two bright weeks the way you would publish them.') + '</div>' +
+        '<div class="panel"><h2>Before the change<span class="note">what was published before this change</span></h2>' + gridTable(q, q.before, {}) + '</div>' +
+        '<div class="panel"><h2>Your schedule<span class="note">' + (allValid ? '<span class="status ok">all days valid</span>' : '<span class="status bad">some days break coverage (✗)</span>') + '</span></h2>' +
+            gridTable(q, all, { edit: true, marks: true }) +
+            '<div class="actions" style="margin-top:8px"><button id="reset">Reset to start</button>' +
+            '<button id="toggleAlgo">' + (showAlgo ? 'Hide' : 'Compare with') + (q.prefilled ? ' the old algorithm\'s version' : ' the algorithm\'s version') + '</button>' +
+            '<span class="small">' + (showAlgo ? 'It differs from yours in ' + algoDiff + ' cell' + (algoDiff === 1 ? '' : 's') + '.' : '') + '</span></div></div>' +
+        (showAlgo ? '<div class="panel"><h2>' + (q.prefilled ? 'Old algorithm\'s version' : 'Algorithm\'s version') + '<span class="note">current live weights, same two weeks</span></h2>' + gridTable(q, q.algo, { marks: true }) + '</div>' : '') +
+        '<div class="row"><div class="panel"><h2>Counts in the two weeks</h2>' + tallies(q, all) + '</div>' +
+        '<div class="panel"><h2>Notes<span class="note">optional: what drove your choices, anything that isn\'t a rule yet</span></h2>' +
+            '<textarea id="note" placeholder="e.g. Kept Raouf\'s WFH Friday because Mujeeb is the one on PTO">' + (w.note || '').replace(/</g, '&lt;') + '</textarea>' +
+            '<div class="actions" style="margin-top:8px"><button class="primary" id="done"' + (allValid ? '' : ' disabled title="Fix the ✗ days first"') + '>Done → next</button>' +
+            (allValid ? '' : '<span class="small">Fix the ✗ days first.</span>') + '</div></div></div>';
+
+    document.querySelectorAll('td.c.ed').forEach(td => td.onclick = () => clickCell(+td.dataset.i, +td.dataset.p));
+    el('reset').onclick = () => { delete work[q.id]; sel = null; save(); render(); };
+    el('toggleAlgo').onclick = () => { showAlgo = !showAlgo; if (showAlgo) { w.sawAlgo = true; save(); } render(); };
+    el('note').oninput = () => { w.note = el('note').value; save(); };
+    el('done').onclick = () => {
+        w.done = true; w.note = el('note').value; save();
+        sel = null; showAlgo = false;
+        const nxt = qs().findIndex((x, i) => i > idx && !(work[x.id] && work[x.id].done));
+        idx = nxt >= 0 ? nxt : Math.min(idx + 1, qs().length - 1);
+        render(); window.scrollTo(0, 0);
+    };
+}
+
+function setCell(q, i, pi, s) { W(q).grid[i - q.nCtx][pi] = s; save(); }
+function clickCell(i, pi) {
+    const q = qs()[idx];
+    if (sel && sel[0] === i && sel[1] !== pi && !locked(q, i, sel[1])) {
+        const all = cols(q), a = all[i][sel[1]], b = all[i][pi];
+        setCell(q, i, sel[1], b); setCell(q, i, pi, a);
+        sel = null;
+    } else if (sel && sel[0] === i && sel[1] === pi) sel = null;
+    else sel = [i, pi];
+    render();
+}
+
+document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+    const q = qs()[idx];
+    if (!q) return;
+    const k = e.key.toLowerCase();
+    if (sel && KEY[k] && !locked(q, sel[0], sel[1])) { setCell(q, sel[0], sel[1], KEY[k]); render(); e.preventDefault(); return; }
+    if (k === 'escape') { sel = null; render(); return; }
+    const mv = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, -1], arrowdown: [0, 1] }[k];
+    if (mv && sel) {
+        let [i, p] = sel;
+        for (let step = 0; step < 20; step++) {
+            i += mv[0]; p += mv[1];
+            if (i < q.nCtx || i >= q.nCtx + q.nWin || p < 0 || p >= q.people.length) break;
+            if (!locked(q, i, p)) { sel = [i, p]; break; }
+        }
+        render(); e.preventDefault();
+    }
+});
+el('pick').onchange = () => { idx = +el('pick').value; sel = null; showAlgo = false; render(); };
+el('prev').onclick = () => { if (idx > 0) { idx--; sel = null; showAlgo = false; render(); } };
+el('next').onclick = () => { if (idx < qs().length - 1) { idx++; sel = null; showAlgo = false; render(); } };
+el('export').onclick = () => {
+    const out = [];
+    rounds.forEach(r => (window.EDIT_SCENARIOS[r] || []).forEach(q => {
+        const w = work[q.id];
+        if (!w) return;
+        const plan = {};
+        q.days.forEach((k, i) => {
+            if (i < q.nCtx || i >= q.nCtx + q.nWin) return;
+            const m = {};
+            q.people.forEach((p, pi) => { const s = w.grid[i - q.nCtx][pi]; if (isSvc(s)) m[p.id] = s; });
+            plan[k] = m;
+        });
+        out.push({ round: r, id: q.id, spec: q.spec, kind: q.kind, desc: q.desc, done: !!w.done, sawAlgo: !!w.sawAlgo, note: w.note || '', plan });
+    }));
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' }));
+    link.download = 'edits.json';
+    link.click();
+};
+render();
+</script>
+</body>
+</html>

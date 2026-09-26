@@ -1,0 +1,7 @@
+# Regenerable intermediates (edit.js ingest / search.js / fit.js outputs)
+pairs-edit*.json
+*-matrix.json
+best-weights.json
+combo-weights.json
+grid-weights.json
+fitted-auto.json

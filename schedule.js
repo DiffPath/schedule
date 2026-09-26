@@ -10447,7 +10447,8 @@ function renderAll() {
 
 // ────────────── HOURLY GRID CONTENT ──────────────
 // Procedures / Outlook meetings / both. One setting, three surfaces: the
-// desktop and mobile toolbar selects, and Settings → Hourly schedule.
+// desktop toolbar (tabs or select), the mobile select, and Settings →
+// Hourly schedule.
 function setHourlyShows(v) {
     if (!VALID_HOURLY_SHOWS.includes(v) || settings.hourlyShows === v) return;
     settings.hourlyShows = v;
@@ -10460,18 +10461,68 @@ function setHourlyShows(v) {
 // meetings) and only in the views that have the hourly grid.
 function syncHourlyShowsControls() {
     const show = typeof loggedInPathId === 'number' && (view === 'week' || view === 'day');
+    document.querySelectorAll('#hourlyTabs .path-tab').forEach(b => {
+        const on = b.dataset.show === settings.hourlyShows;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
     ['hourlySelect', 'mobileHourlySelect'].forEach(id => {
         const sel = document.getElementById(id);
-        if (!sel) return;
-        sel.value = settings.hourlyShows;
-        sel.parentElement.style.display = show ? '' : 'none';
+        if (sel) sel.value = settings.hourlyShows;
     });
+    const mob = document.getElementById('mobileHourlySelectWrap');
+    if (mob) mob.style.display = show ? '' : 'none';
+    fitHourlyControl(show);
 }
 
+// The toolbar's period label is absolutely centered, so the left group only
+// has the space up to it. Try the roomiest desktop form first — tabs with
+// full labels, then short labels, then the compact select — and keep the
+// first that clears the date; if none does, hide it (Settings still has it).
+// Measured rather than media-queried: the sidebar can collapse and gross
+// room's Natalie PTO button shares this group.
+const HOURLY_FITS = ['full', 'short', 'select'];
+function fitHourlyControl(show) {
+    const tabs = document.getElementById('hourlyTabs');
+    const selWrap = document.getElementById('hourlySelectWrap');
+    const left = document.querySelector('.toolbar-left');
+    const center = document.querySelector('.toolbar-center');
+    if (!tabs || !selWrap || !left || !center) return;
+    if (show === undefined) {
+        show = typeof loggedInPathId === 'number' && (view === 'week' || view === 'day');
+    }
+    const apply = fit => {
+        tabs.style.display = (fit === 'full' || fit === 'short') ? '' : 'none';
+        tabs.classList.toggle('short', fit === 'short');
+        selWrap.style.display = fit === 'select' ? '' : 'none';
+    };
+    // Phones hide .toolbar-left entirely (the mobile select takes over).
+    if (!show || left.offsetParent === null) { apply('none'); return; }
+    const GAP = 12;
+    for (const fit of HOURLY_FITS) {
+        apply(fit);
+        if (left.getBoundingClientRect().right + GAP <= center.getBoundingClientRect().left) return;
+    }
+    apply('none');
+}
+
+document.getElementById('hourlyTabs').addEventListener('click', e => {
+    const btn = e.target.closest('.path-tab');
+    if (btn) setHourlyShows(btn.dataset.show);
+});
 ['hourlySelect', 'mobileHourlySelect'].forEach(id => {
     const sel = document.getElementById(id);
     if (sel) sel.addEventListener('change', e => setHourlyShows(e.target.value));
 });
+// Refit when the toolbar changes width (window resize, sidebar collapse) or
+// the period label changes length (e.g. week ↔ day).
+if (typeof ResizeObserver === 'function') {
+    const ro = new ResizeObserver(() => fitHourlyControl());
+    ['scheduleToolbar', 'currentPeriod'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) ro.observe(el);
+    });
+}
 
 // ────────────── NAV EVENTS ──────────────
 document.getElementById('viewTabs').addEventListener('click', e => {

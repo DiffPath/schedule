@@ -183,7 +183,13 @@
                         <button class="path-tab active" data-filter="all"><span class="tab-full">Group</span><span class="tab-short">Group</span></button>
                         <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;"><span class="tab-full">Individual</span><span class="tab-short">Individual</span></button>
                     </div>
-                    <!-- Hourly grid content (pathologists, Day/Week only); mirrors Settings → Hourly schedule. -->
+                    <!-- Hourly grid content (pathologists, Day/Week only), mirroring Settings → Hourly schedule.
+                         fitHourlyControl() picks tabs (full or short labels) or the compact select, whichever fits beside the centered date. -->
+                    <div class="path-tabs hourly-tabs" id="hourlyTabs" role="radiogroup" aria-label="Hourly schedule shows" style="display:none;">
+                        <button class="path-tab" type="button" role="radio" data-show="both">Both</button>
+                        <button class="path-tab" type="button" role="radio" data-show="procedures"><span class="ht-full">Procedures</span><span class="ht-short">Proc</span></button>
+                        <button class="path-tab" type="button" role="radio" data-show="meetings"><span class="ht-full">Meetings</span><span class="ht-short">Mtg</span></button>
+                    </div>
                     <div class="mobile-select-wrap" id="hourlySelectWrap" style="display:none;" title="Hourly schedule: procedures, Outlook meetings, or both">
                         <select id="hourlySelect" class="mobile-toolbar-select" aria-label="Hourly schedule shows">
                             <option value="both">Both</option>

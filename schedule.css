@@ -8103,9 +8103,9 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
     #mobileHourlySelectWrap::after { right: 6px; }
 }
 
-/* Narrow desktop: no room beside the centered date for the hourly select
-   (Settings → Hourly schedule still has it). !important beats the inline
-   display that syncHourlyShowsControls() sets. */
-@media (min-width: 801px) and (max-width: 1090px) {
-    #hourlySelectWrap { display: none !important; }
-}
+/* Toolbar hourly tabs: full labels, or short ones when space is tight
+   (fitHourlyControl() toggles .short). */
+.hourly-tabs .ht-short { display: none; }
+.hourly-tabs.short .ht-full { display: none; }
+.hourly-tabs.short .ht-short { display: inline; }
+.hourly-tabs.short .path-tab { padding-left: 11px; padding-right: 11px; }

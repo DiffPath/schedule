@@ -125,6 +125,14 @@
                 <!-- Admin-only: opens the manual-recompute modal (from today
                      with a horizon, or from a custom start date). Visibility
                      toggled in renderSidebar(); clicks proxy #recomputeBtn. -->
+                <button class="nav-item" id="sidebarUndoBtn" style="display:none;" title="Recent changes — undo">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5.5 5.5H10a3.5 3.5 0 0 1 0 7H6"/>
+                        <polyline points="7.5,3 5,5.5 7.5,8"/>
+                    </svg>
+                    <span>Recent changes</span>
+                    <span class="nav-undo-count" id="sidebarUndoCount"></span>
+                </button>
                 <button class="nav-item" id="sidebarRecomputeBtn" style="display:none;" title="Recompute the future service schedule">
                     <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1"/>
@@ -572,6 +580,18 @@
                         </div>
                     </section>
 
+                    <!-- Procedure options — each user's own list for the Add
+                         procedure panel (procedure-options.js). -->
+                    <section class="settings-section" id="procOptionsSection" style="display:none;">
+                        <h3 class="settings-section-title">Procedure options</h3>
+                        <p class="settings-section-desc">Your own list for the Add procedure panel. Rename, recolor, reorder, add suboptions, hide options you don't use, or add new ones. Only you see these changes. Your colors also apply to the procedure pills you see on the schedule. Changes save automatically.</p>
+                        <div class="po-list" id="procOptList"></div>
+                        <div class="po-actions">
+                            <button type="button" class="po-btn" id="procOptAdd">+ Add option</button>
+                            <button type="button" class="po-btn po-btn-danger" id="procOptReset">Restore defaults</button>
+                        </div>
+                    </section>
+
                     <!-- PTO allotments — admin only. Hidden for non-admins
                          via JS in renderPtoAllotmentSettings(). -->
                     <section class="settings-section" id="ptoAllotmentSection" style="display:none;">
@@ -674,6 +694,7 @@
     <!-- Day detail modal -->
     <div class="modal-back" id="dayModalBack">
         <div class="modal">
+            <button id="dayClose" class="modal-close-x" aria-label="Close" title="Close">&times;</button>
             <h3 id="dayModalTitle">Day</h3>
             <div class="sub" id="dayModalSub">—</div>
 
@@ -688,8 +709,61 @@
                 <button id="dayRestoreConflict" style="display:none;">Put conflict back on the list</button>
             </div>
 
-            <div class="modal-actions">
-                <button id="dayClose">Close</button>
+            <!-- Bottom bar. The .day-edit-only controls show for admins on
+                 workdays, when the rows above are the service editor. -->
+            <div class="modal-actions day-modal-actions">
+                <button id="dayEditReset" class="danger day-edit-only">Reset day to default</button>
+                <span class="day-edit-spacer"></span>
+                <label class="rc-horizon day-edit-only" id="dayEditHorizonWrap">Horizon
+                    <select id="dayEditHorizon">
+                        <option value="30">30 days</option>
+                        <option value="90">90 days</option>
+                        <option value="180" selected>180 days</option>
+                        <option value="365">365 days</option>
+                    </select>
+                </label>
+                <button id="dayEditSave" class="day-edit-only">Save</button>
+                <button id="dayEditSaveRecompute" class="day-edit-only">Save &amp; recompute</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Call week modal (admin; year view → Call mode). -->
+    <div class="modal-back" id="callModalBack">
+        <div class="modal">
+            <button id="callClose" class="modal-close-x" aria-label="Close" title="Close">&times;</button>
+            <h3 id="callModalTitle">Call week</h3>
+            <div class="sub" id="callModalSub">—</div>
+
+            <div class="call-days" id="callDays"></div>
+
+            <div class="call-section">
+                <label for="callWeekPath">On call this week</label>
+                <div class="call-row">
+                    <select id="callWeekPath"></select>
+                    <button id="callWeekSave">Save</button>
+                </div>
+            </div>
+
+            <div class="call-section">
+                <label for="callDayPath" id="callDayLabel">Just this day</label>
+                <div class="call-row">
+                    <select id="callDayPath"></select>
+                    <button id="callDaySave">Save</button>
+                </div>
+            </div>
+
+            <div class="call-section">
+                <label for="callSwapWith">Swap this week with</label>
+                <div class="call-row">
+                    <select id="callSwapWith"></select>
+                    <button id="callSwap">Swap</button>
+                </div>
+                <div class="call-hint">You can also drag one call week onto another in the year view to swap them.</div>
+            </div>
+
+            <div class="modal-actions call-modal-actions">
+                <button id="callReset" class="danger">Reset week to default</button>
             </div>
         </div>
     </div>
@@ -1112,6 +1186,8 @@
 
     <script src="schedule.js"></script>
     <script src="recompute.js"></script>
+    <script src="procedure-options.js"></script>
+    <script src="undo.js"></script>
 
 </body>
 </html>

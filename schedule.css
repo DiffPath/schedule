@@ -2897,6 +2897,125 @@ main {
     color: var(--ink);
 }
 
+/* ── Day modal as the service editor (admin, workdays) ──
+   Each row keeps the pathologist's color (dot + tint); the select is plain
+   white. */
+#dayModalBack .modal { max-width: 620px; position: relative; }
+#dayModalBack .modal h3 { padding-right: 40px; }
+
+/* Close: a small × square in the top-right corner, styled like the
+   Reset day button. */
+.modal .modal-close-x {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 1;
+    border-radius: 5px;
+    border: 1px solid rgba(185, 78, 42, 0.3);
+    background: var(--bg);
+    color: #b94e2a;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.modal .modal-close-x:hover {
+    background: rgba(185, 78, 42, 0.06);
+    border-color: #b94e2a;
+}
+
+.day-edit-row {
+    flex-wrap: wrap;
+    row-gap: 6px;
+}
+.day-edit-row .dname {
+    flex: 1 1 150px;
+    min-width: 0;
+}
+.day-edit-row .dtag {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 500;
+    color: var(--ink-3);
+    margin-left: 4px;
+}
+/* Outranks `.modal select` (width:100%). */
+.modal .day-edit-row .day-edit-sel {
+    flex: 0 1 230px;
+    width: auto;
+    min-width: 160px;
+    padding: 6px 8px;
+    font-size: 12.5px;
+    border-radius: 5px;
+    border: 1px solid var(--rule);
+    background: #fff;
+    color: var(--ink);
+    cursor: pointer;
+}
+.day-edit-row.changed {
+    box-shadow: 0 0 0 2px var(--accent);
+}
+.day-edit-row.changed .dname::after {
+    content: 'edited';
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-left: 6px;
+}
+.modal .day-edit-row .svc-ft-input {
+    flex-basis: 100%;
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    font-family: var(--sans);
+    font-size: 13px;
+    background: var(--bg);
+    color: var(--ink);
+}
+/* Bottom bar: Reset · Horizon · Save · Save & recompute · Close, all in the
+   same plain style as the action buttons above it. */
+.day-modal-actions {
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+}
+.day-modal-actions .day-edit-spacer { flex: 1; }
+.modal .day-modal-actions .rc-horizon select { width: auto; }
+.day-modal-actions button,
+.day-modal-actions button:not(.danger):hover {
+    padding: 8px 12px;
+    font-size: 11.5px;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    color: var(--ink-2);
+}
+.day-modal-actions button:not(.danger):hover {
+    background: var(--paper);
+    border-color: var(--ink-3);
+    color: var(--ink);
+}
+.day-edit-row .dname .doc-pill { margin-left: 6px; vertical-align: 1px; }
+@media (max-width: 480px) {
+    .modal .day-edit-row .day-edit-sel { flex: 1 1 100%; }
+    /* Bottom bar: Reset + Horizon on one line; Save, Save & recompute and
+       Close share the next. */
+    .day-modal-actions { gap: 6px; }
+    .day-modal-actions #dayEditReset { order: 0; flex: 1 1 auto; }
+    .day-modal-actions .rc-horizon { order: 1; }
+    .day-modal-actions .day-edit-spacer { order: 2; flex: 0 0 100%; height: 0; }
+    .day-modal-actions button:not(#dayEditReset) { order: 3; flex: 1 1 0; min-width: 0; padding: 8px 4px; }
+}
+
 /* ── Per-pathologist quick-action panel (admin day-detail click) ── */
 .day-detail-row.admin-clickable {
     cursor: pointer;
@@ -3713,14 +3832,18 @@ main {
         font-size: 19px;
     }
 
+    /* Day-modal action buttons: one row, sharing the width. */
     .day-detail-actions {
-        flex-direction: column;
-        gap: 6px;
+        flex-wrap: nowrap;
+        gap: 4px;
     }
 
     .day-detail-actions button {
-        flex: 1 1 100%;
+        flex: 1 1 0;
         min-width: 0;
+        padding: 7px 4px;
+        font-size: 10.5px;
+        line-height: 1.25;
     }
 
     .modal-actions {
@@ -7517,4 +7640,370 @@ table.tracking-summary tbody td.t-sum-empty {
     .conflicts-page-title { font-size: 28px; }
     /* Modal footers get crowded on a phone — let the horizon wrap. */
     .rc-horizon { margin-right: 0; }
+}
+
+/* ── Year view, Call mode (admin): drag a call week onto another to swap ── */
+.year-month .mini-grid .md.call-draggable { cursor: grab; }
+.year-month .mini-grid .md.call-draggable:active { cursor: grabbing; }
+.year-month .mini-grid .md.call-drag-src .md-square { opacity: 0.35; }
+.year-month .mini-grid .md.call-drop-target {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* ── Call week modal ── */
+#callModalBack .modal { position: relative; max-width: 520px; }
+#callModalBack .modal h3 { padding-right: 40px; }
+.call-days {
+    display: flex;
+    gap: 4px;
+    margin: 12px 0 4px;
+}
+.call-days .call-day {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 2px;
+    border-radius: 6px;
+    border: 1px solid var(--rule-soft);
+    background: color-mix(in srgb, var(--c) 12%, var(--paper));
+    cursor: pointer;
+    font-family: var(--sans);
+}
+.call-days .call-day:hover { border-color: var(--ink-3); }
+.call-days .call-day.is-clicked { box-shadow: 0 0 0 2px var(--accent); }
+.call-days .call-day.is-override { border-style: dashed; border-color: var(--c); }
+.call-day .call-day-dow {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+.call-day .call-day-num { font-size: 13px; color: var(--ink); }
+.call-day .call-day-who {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--c);
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+.call-section { margin-top: 14px; }
+.call-section > label { margin-top: 0; }
+.call-row { display: flex; gap: 8px; align-items: center; }
+.modal .call-row select { flex: 1; min-width: 0; width: auto; }
+.call-row button {
+    flex-shrink: 0;
+    padding: 8px 14px;
+    border-radius: 5px;
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--rule);
+    background: var(--bg);
+    color: var(--ink-2);
+}
+.call-row button:hover:not(:disabled) { background: var(--paper); border-color: var(--ink-3); color: var(--ink); }
+.call-row button:disabled, .call-modal-actions button:disabled { opacity: 0.5; cursor: default; }
+.call-hint { margin-top: 6px; font-size: 11.5px; color: var(--ink-3); }
+.call-modal-actions { justify-content: flex-start; }
+@media (max-width: 480px) {
+    .call-days { gap: 2px; }
+    .call-days .call-day { padding: 5px 0; }
+}
+
+/* ── Custom procedure colors (Settings → Procedure options) ──
+   Same treatment as the built-in categories, driven by --pc. */
+.proc-item.proc-cat-custom { background: var(--pc); }
+.proc-item.proc-cat-custom:hover { background: color-mix(in srgb, var(--pc) 75%, black); transform: translateY(-0.5px); }
+.proc-type-btn.proc-cat-custom::before { background: transparent; border-color: var(--pc); border-width: 2px; }
+.proc-type-btn.proc-cat-custom {
+    background: color-mix(in srgb, var(--pc) 8%, transparent);
+    border-color: color-mix(in srgb, var(--pc) 30%, transparent);
+    color: color-mix(in srgb, var(--pc) 55%, black);
+}
+.proc-type-btn.proc-cat-custom:not(.selected):hover {
+    background: color-mix(in srgb, var(--pc) 15%, transparent);
+    border-color: var(--pc);
+}
+.proc-type-btn.selected.proc-cat-custom {
+    background: color-mix(in srgb, var(--pc) 22%, transparent);
+    border-color: var(--pc);
+    color: color-mix(in srgb, var(--pc) 55%, black);
+    font-weight: 600;
+}
+.proc-type-btn.selected.proc-cat-custom:hover { background: color-mix(in srgb, var(--pc) 28%, transparent); border-color: var(--pc); }
+.proc-type-btn.selected.proc-cat-custom::before,
+.proc-freetext-wrap.active.proc-cat-custom::before {
+    background-color: var(--pc); border-color: var(--pc); border-width: 2px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6l3 3 5-5' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 10px; background-position: center; background-repeat: no-repeat;
+}
+.proc-freetext-wrap.active.proc-cat-custom { background: color-mix(in srgb, var(--pc) 22%, transparent); border-color: var(--pc); }
+
+/* ── Settings → Procedure options editor ── */
+.po-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.po-item {
+    border: 1px solid var(--rule-soft);
+    border-radius: 8px;
+    background: var(--paper);
+}
+.po-item.is-hidden .po-row:not(.po-sub) .po-name,
+.po-item.is-hidden .po-row:not(.po-sub) .po-prev { opacity: 0.45; }
+.po-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 8px;
+    flex-wrap: wrap;
+}
+.po-move { display: flex; flex-direction: column; gap: 1px; }
+.po-move button {
+    width: 20px; height: 14px; padding: 0;
+    font-size: 10px; line-height: 1;
+    border: 1px solid var(--rule); border-radius: 3px;
+    background: var(--bg); color: var(--ink-2); cursor: pointer;
+}
+.po-move button:disabled { opacity: 0.3; cursor: default; }
+.po-color {
+    width: 28px; height: 28px; padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--rule); border-radius: 6px;
+    background: var(--bg); cursor: pointer; flex-shrink: 0;
+}
+.po-color:hover { border-color: var(--ink-3); }
+.po-sw {
+    display: inline-block; width: 16px; height: 16px; border-radius: 4px;
+    flex-shrink: 0;
+}
+.po-sw-loc { background: linear-gradient(135deg, var(--proc-hh) 50%, var(--proc-mh) 50%); }
+.po-name {
+    flex: 1 1 160px; min-width: 120px;
+    padding: 6px 9px;
+    border: 1px solid var(--rule); border-radius: 5px;
+    font: inherit; font-size: 13px;
+    background: var(--bg); color: var(--ink);
+}
+.po-name:focus { outline: 1px solid var(--ink-2); border-color: var(--ink-2); }
+/* Fixed preview column so the name fields line up. */
+.po-prev { flex: 0 0 200px; min-width: 0; display: flex; }
+.po-prev .proc-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.po-prev .proc-item { cursor: default; }
+.po-prev .proc-item:hover { transform: none; }
+.po-subs-toggle, .po-icon, .po-btn, .po-add-sub {
+    padding: 5px 9px;
+    border: 1px solid var(--rule); border-radius: 5px;
+    background: var(--bg); color: var(--ink-2);
+    font-size: 11.5px; cursor: pointer; white-space: nowrap;
+}
+.po-subs-toggle:hover, .po-icon:hover, .po-btn:hover, .po-add-sub:hover { border-color: var(--ink-3); color: var(--ink); }
+.po-subs-toggle.open { background: var(--paper); border-color: var(--ink-3); }
+.po-del, .po-btn-danger { color: #b94e2a; border-color: rgba(185, 78, 42, 0.3); }
+.po-del { width: 28px; padding: 5px 0; font-size: 15px; line-height: 1; }
+.po-subs {
+    border-top: 1px solid var(--rule-soft);
+    padding: 4px 8px 8px 36px;
+    display: flex; flex-direction: column; gap: 2px;
+}
+.po-sub { padding: 4px 0; }
+.po-add-sub { align-self: flex-start; margin-top: 4px; }
+.po-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.po-color-pop {
+    position: fixed; z-index: 100000;
+    background: var(--paper);
+    border: 1px solid var(--rule); border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(24, 23, 26, 0.18);
+    padding: 6px; min-width: 230px;
+    display: flex; flex-direction: column; gap: 2px;
+}
+.po-pop-opt {
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 8px; border: 0; border-radius: 5px;
+    background: transparent; color: var(--ink);
+    font: inherit; font-size: 12.5px; text-align: left; cursor: pointer;
+}
+.po-pop-opt:hover { background: var(--bg); }
+.po-pop-opt.is-current { background: var(--accent-soft); font-weight: 600; }
+.po-pop-custom input[type="color"] {
+    width: 18px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer;
+}
+/* Phones: two lines per row —
+     option:    arrows · color · name · subs   /   preview · Hide · ×
+     suboption: arrows · color · name · ×      /   preview            */
+@media (max-width: 600px) {
+    .po-row {
+        display: grid;
+        grid-template-columns: 22px 28px minmax(0, 1fr) auto auto;
+        grid-template-areas: "mv co nm sb sb" ". . pv hd dl";
+        column-gap: 8px;
+        row-gap: 6px;
+        align-items: center;
+    }
+    .po-row.po-sub {
+        grid-template-columns: 22px 28px minmax(0, 1fr) auto;
+        grid-template-areas: "mv co nm dl" ". . pv .";
+    }
+    .po-row .po-move { grid-area: mv; }
+    .po-row .po-color { grid-area: co; }
+    .po-row .po-name { grid-area: nm; min-width: 0; width: 100%; }
+    .po-row .po-subs-toggle { grid-area: sb; justify-self: end; }
+    .po-row .po-prev { grid-area: pv; flex: none; }
+    .po-row [data-act="hide"] { grid-area: hd; }
+    .po-row .po-del { grid-area: dl; }
+    .po-subs { padding-left: 12px; }
+}
+
+/* ── Undo: Outlook-style popup + Recent changes (undo.js) ── */
+.undo-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    z-index: 99990;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    max-width: min(520px, calc(100vw - 48px));
+    padding: 10px 10px 10px 14px;
+    border-radius: 8px;
+    background: rgba(24, 26, 30, 0.95);
+    color: #fff;
+    font-size: 13px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    opacity: 0;
+    transform: translate(-50%, 16px);
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.undo-toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+.undo-toast-icon {
+    flex-shrink: 0;
+    width: 20px; height: 20px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 50%;
+    background: #3f9a5c;
+    font-size: 11px; font-weight: 700;
+}
+.undo-toast-icon.is-undo { background: #5b6b7d; font-size: 13px; }
+.undo-toast-text { flex: 1; min-width: 0; line-height: 1.35; }
+.undo-toast-undo {
+    flex-shrink: 0;
+    padding: 5px 12px;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    background: transparent;
+    color: #9cc9ff;
+    font: inherit; font-size: 12px; font-weight: 600;
+    cursor: pointer;
+}
+.undo-toast-undo:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.6); }
+.undo-toast-x {
+    flex-shrink: 0;
+    width: 26px; height: 26px;
+    padding: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 5px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: transparent;
+    color: #fff;
+    font-size: 16px; line-height: 1;
+    cursor: pointer;
+}
+.undo-toast-x:hover { background: rgba(255, 255, 255, 0.1); }
+
+/* Sidebar "Recent changes" item: count of changes that can be undone. */
+.nav-undo-count {
+    margin-left: auto;
+    min-width: 18px; height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px; font-weight: 700; line-height: 18px; text-align: center;
+}
+/* (legacy floating button — no longer created) */
+.undo-history-btn {
+    position: fixed;
+    left: 24px;
+    bottom: 24px;
+    z-index: 99989;
+    width: 40px; height: 40px;
+    display: none;
+    align-items: center; justify-content: center;
+    border-radius: 50%;
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    color: var(--ink-2);
+    font-size: 19px;
+    box-shadow: 0 4px 14px rgba(24, 23, 26, 0.14);
+    cursor: pointer;
+}
+.undo-history-btn.show { display: inline-flex; }
+.undo-history-btn:hover { color: var(--ink); border-color: var(--ink-3); }
+.undo-history-count {
+    position: absolute;
+    top: -4px; right: -4px;
+    min-width: 17px; height: 17px;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 10px; font-weight: 700; line-height: 17px; text-align: center;
+}
+.undo-panel {
+    position: fixed;
+    left: 24px;
+    bottom: 24px;
+    z-index: 99991;
+    width: 360px;
+    max-height: 60vh;
+    display: none;
+    flex-direction: column;
+    border-radius: 10px;
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    box-shadow: 0 16px 40px rgba(24, 23, 26, 0.2);
+    overflow: hidden;
+}
+.undo-panel.open { display: flex; }
+.undo-panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 12px 10px 14px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+.undo-panel-title {
+    font-family: var(--mono);
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-3);
+}
+.undo-panel .undo-toast-x { color: #b94e2a; border-color: rgba(185, 78, 42, 0.3); background: var(--bg); }
+.undo-panel .undo-toast-x:hover { background: rgba(185, 78, 42, 0.06); border-color: #b94e2a; }
+.undo-panel-list { overflow-y: auto; }
+.undo-panel-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px 9px 14px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+.undo-panel-row.is-undone { opacity: 0.55; }
+.undo-panel-text { flex: 1; min-width: 0; }
+.undo-panel-label { font-size: 12.5px; color: var(--ink); line-height: 1.35; }
+.undo-panel-meta { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+.undo-panel .undo-toast-undo { color: var(--accent); border-color: var(--rule); background: var(--bg); }
+.undo-panel .undo-toast-undo:hover { border-color: var(--ink-3); background: var(--paper); }
+.undo-panel-empty { padding: 16px 14px; font-size: 12.5px; color: var(--ink-3); }
+.undo-panel-foot { padding: 8px 14px 10px; font-size: 11px; color: var(--ink-3); }
+/* Test page only: sit above the Mock mode banner. */
+body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
+
+.undo-panel.as-sheet { left: 12px; right: 12px; bottom: 12px; width: auto; }
+@media (max-width: 600px) {
+    .undo-toast {
+        left: 12px; right: 12px; bottom: 12px; max-width: none;
+        transform: translateY(16px);
+    }
+    .undo-toast.show { transform: none; }
 }

@@ -256,8 +256,9 @@ let currentPathFilter = 'all';
 const HOURS_START = 7;   // 7 AM
 const HOURS_END = 16;  // last hour shown (so last slot is HOURS_END:30 = 4:30 PM)
 
-// Procedure types for the "Add procedure" modal; pills render as
-// "<location> - <name>".
+// Built-in procedure types for the "Add procedure" modal; pills render as
+// "<location> - <name>". This is only the default list — each user can
+// customize theirs in Settings → Procedure options (procedure-options.js).
 const PROCEDURE_TYPES = [
     'EUS',
     'EBUS',
@@ -279,7 +280,7 @@ const PROCEDURE_TYPES = [
 // variant string is stored verbatim as procedureName (inherits the base colour).
 const PROCEDURE_VARIANTS = {
     'EUS': ['EUS/ERCP'],
-    'EBUS': ['EBUS/ION'],
+    'EBUS': ['EBUS/ION', 'EBUS/ION in OR 10'],
     'IR Thyroid bx': ['IR Thyroid bx x2', 'IR Thyroid bx x3'],
     'IR Thyroid w/ Afirma': ['IR Thyroid w/ Afirma x2', 'IR Thyroid w/ Afirma x3'],
     'Lumpectomy': ['Excisional bx'],
@@ -502,6 +503,11 @@ function applySettings() {
     // Render the admin-only email notification settings (same self-hiding).
     if (typeof renderEmailSettings === 'function') {
         try { renderEmailSettings(); } catch (_) { /* ignore */ }
+    }
+
+    // Per-user procedure options editor (procedure-options.js).
+    if (typeof renderProcOptionsSettings === 'function') {
+        try { renderProcOptionsSettings(); } catch (_) { /* ignore */ }
     }
 }
 
@@ -1004,8 +1010,20 @@ function getCallCycleEnd(cycleStart) {
     }
 }
 
-// Counts how many call blocks have passed since the anchor to assign the right doctor
+// Counts how many call blocks have passed since the anchor to assign the right doctor.
+// Walks day by day from the anchor, so results are memoized: a block's
+// index depends only on its date (the anchor and holidays never change).
+const _callCycleIndexCache = new Map();
 function callCycleIndex(cycleStart) {
+    const key = cycleStart.getTime();
+    let v = _callCycleIndexCache.get(key);
+    if (v === undefined) {
+        v = _callCycleIndexUncached(cycleStart);
+        _callCycleIndexCache.set(key, v);
+    }
+    return v;
+}
+function _callCycleIndexUncached(cycleStart) {
     let current = new Date(CALL_ANCHOR);
     let idx = 0;
     let target = cycleStart.getTime();
@@ -1741,6 +1759,8 @@ auth.onAuthStateChanged(user => {
         // Start the data listeners now that reads are permitted. When data
         // arrives, checkReady() handles filter defaults + render.
         startDataListeners();
+        // This user's own procedure options (procedure-options.js).
+        if (typeof procOptionsSignedIn === 'function') procOptionsSignedIn(id);
         // After re-login without reload, cached-warm listeners may not re-fire —
         // refresh filter + view directly.
         if (pathologistsReady && vacationsReady) {
@@ -1756,6 +1776,7 @@ auth.onAuthStateChanged(user => {
         // Signed out (or never signed in).
         loggedInPathId = null;
         stopDataListeners();
+        if (typeof procOptionsSignedOut === 'function') procOptionsSignedOut();
         hideLoading();
         if (typeof showLoginOverlay === 'function') showLoginOverlay();
     }
@@ -4220,6 +4241,8 @@ function _chgAffectsUser(c, pid) {
     // Direct affected-user marker covers PTO, oncall_set, single-target
     // service_set/service_reset from request flow, and conferences.
     if (c.forPathId === pid) return true;
+    // A call-week swap involves two pathologists.
+    if (c.type === 'oncall_swap' && c.otherPathId === pid) return true;
 
     // Bulk service edit: assignments is { pathId: serviceId }, cleared is
     // an array of pathIds.
@@ -4281,6 +4304,16 @@ function _chgDescribeForUser(c, pid) {
     if (c.kind === 'oncall') {
         if (c.type === 'oncall_set' && c.forPathId === pid) {
             return { summary: `You were placed on call for ${when}${sourceTail}.`, details: '' };
+        }
+        if (c.type === 'oncall_swap' && (c.forPathId === pid || c.otherPathId === pid)) {
+            const mine = c.forPathId === pid;
+            const gave = mine ? c.date : c.otherDate;
+            const got = mine ? c.otherDate : c.date;
+            const other = _chgShortName(mine ? c.otherPathId : c.forPathId);
+            return {
+                summary: `Your call week of ${_chgFmtCallWeek(gave)} was swapped with ${other} — you're now on call ${_chgFmtCallWeek(got)}${sourceTail}.`,
+                details: '',
+            };
         }
         // oncall_clear doesn't carry the old assignee, so we can't personalize
         // it; fall through to the team summary.
@@ -6642,11 +6675,12 @@ function renderHourGrid(date) {
                 // ("8:15 HH - CT Kidney bx").
                 const baseLbl = procLabel(p);
                 const lbl = `${formatTime12Short(p.time)} ${baseLbl}`;
-                const cat = getProcedureCategory(p.location, p.procedureName);
+                // Colors follow the viewer's own procedure options (Settings).
+                const pa = procStyleAttrs(procStyle(p.location, p.procedureName));
                 // Hover tooltip: procedure label + time range. Each procedure
                 // is 30 min by default (durationMin can override).
                 const tooltip = `${baseLbl} — ${formatTimeRange(p.time, p.durationMin)}`;
-                return `<span class="proc-item proc-cat-${cat}" data-day="${dayKey}" data-key="${p.key}" tabindex="0" draggable="true" title="${escapeHtml(tooltip)}">${escapeHtml(lbl)}</span>`;
+                return `<span class="proc-item ${pa.cls}"${pa.style} data-day="${dayKey}" data-key="${p.key}" tabindex="0" draggable="true" title="${escapeHtml(tooltip)}">${escapeHtml(lbl)}</span>`;
             }).join('');
             rowsHtml += `<div class="hour-row ${cls}" data-day="${dayKey}" data-time="${timeKey}" title="Double-click an empty slot to add a procedure">
               <div class="hour-label">${label}</div>
@@ -7074,28 +7108,29 @@ function openProcedureModal(dayKey, timeKey, editingKey) {
         r.checked = !!(existing && r.value === existing.location);
     });
 
-    // Build the procedure-type button grid fresh each open (cheap, and
-    // keeps the markup in sync if PROCEDURE_TYPES ever changes at runtime)
+    // Build the procedure-type button grid fresh each open from this user's
+    // procedure options (Settings → Procedure options; defaults otherwise).
     const grid = document.getElementById('procTypeGrid');
-    grid.innerHTML = PROCEDURE_TYPES.map(name => {
-        // Derive the fixed category (no location needed for EUS/EBUS/surgical)
-        const cat = getProcedureCategory(null, name);
-        const variants = PROCEDURE_VARIANTS[name];
+    const procOpts = visibleProcOptions();
+    grid.innerHTML = procOpts.map(opt => {
+        const name = opt.name;
+        const pa = procStyleAttrs(procStyle(null, name));
+        const variants = opt.subs.map(s => s.name);
 
         // Plain (non-expandable) button — unchanged behaviour.
-        if (!variants || !variants.length) {
-            return `<button type="button" class="proc-type-btn proc-cat-${cat}" data-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`;
+        if (!variants.length) {
+            return `<button type="button" class="proc-type-btn ${pa.cls}"${pa.style} data-name="${escapeHtml(name)}">${escapeHtml(name)}</button>`;
         }
 
         // Expandable parent: label selects the base; chevron toggles sub-options
         // (shared grid cell spanning both columns).
         const subBtns = variants.map(v => {
-            const vcat = getProcedureCategory(null, v);
-            return `<button type="button" class="proc-type-btn proc-type-subbtn proc-cat-${vcat}" data-name="${escapeHtml(v)}">${escapeHtml(v)}</button>`;
+            const va = procStyleAttrs(procStyle(null, v));
+            return `<button type="button" class="proc-type-btn proc-type-subbtn ${va.cls}"${va.style} data-name="${escapeHtml(v)}">${escapeHtml(v)}</button>`;
         }).join('');
 
-        return `<div class="proc-type-expandable" data-parent="${escapeHtml(name)}">` +
-            `<button type="button" class="proc-type-btn proc-type-parent proc-cat-${cat}" data-name="${escapeHtml(name)}" aria-expanded="false">` +
+        return `<div class="proc-type-expandable" data-parent="${escapeHtml(name)}" data-variants="${escapeHtml(JSON.stringify(variants))}">` +
+            `<button type="button" class="proc-type-btn proc-type-parent ${pa.cls}"${pa.style} data-name="${escapeHtml(name)}" aria-expanded="false">` +
             `<span class="proc-type-parent-label">${escapeHtml(name)}</span>` +
             `<span class="proc-type-caret" role="button" tabindex="0" aria-label="Show options for ${escapeHtml(name)}">` +
             `<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,6 8,10 12,6"/></svg>` +
@@ -7112,11 +7147,9 @@ function openProcedureModal(dayKey, timeKey, editingKey) {
     // when editing an existing procedure.
     if (existing && existing.procedureName) {
         const existingName = existing.procedureName;
-        const isPreset = PROCEDURE_TYPES.includes(existingName);
+        const isPreset = procOpts.some(o => o.name === existingName);
         // Find the parent whose variant list contains this name (if any).
-        const parentOfVariant = Object.keys(PROCEDURE_VARIANTS).find(
-            p => PROCEDURE_VARIANTS[p].includes(existingName)
-        );
+        const parentOfVariant = procOpts.find(o => o.subs.some(s => s.name === existingName));
         if (isPreset || parentOfVariant) {
             const presetBtn = document.querySelector(
                 '#procTypeGrid .proc-type-btn[data-name="' + CSS.escape(existingName) + '"]'
@@ -7184,21 +7217,16 @@ function updateModalProcColors() {
     // Update preset buttons: fixed categories (EUS/EBUS/surgical) don't change,
     // but location-dependent ones update when a location is chosen.
     document.querySelectorAll('#procTypeGrid .proc-type-btn').forEach(btn => {
-        const name = btn.dataset.name;
-        const cat = getProcedureCategory(loc, name);
-        // Replace any existing proc-cat-* class
-        btn.className = btn.className.replace(/\bproc-cat-\S+/g, '').trim();
-        btn.classList.add('proc-cat-' + cat);
+        applyProcStyle(btn, procStyle(loc, btn.dataset.name));
     });
 
     // Update the free-text wrap colour to preview what the pill will be
     const wrap = document.getElementById('procFreetextWrap');
     if (wrap && wrap.classList.contains('active') && freeName) {
-        const cat = getProcedureCategory(loc, freeName);
-        wrap.className = wrap.className.replace(/\bproc-cat-\S+/g, '').trim();
-        wrap.classList.add('proc-cat-' + cat);
+        applyProcStyle(wrap, procStyle(loc, freeName));
     } else if (wrap) {
         wrap.className = wrap.className.replace(/\bproc-cat-\S+/g, '').trim();
+        wrap.style.removeProperty('--pc');
     }
 }
 
@@ -7339,7 +7367,8 @@ function syncProcParentLabels() {
         const label = exp.querySelector('.proc-type-parent-label');
         if (!parentBtn || !label) return;
 
-        const variants = PROCEDURE_VARIANTS[base] || [];
+        let variants = [];
+        try { variants = JSON.parse(exp.dataset.variants || '[]'); } catch (_) { }
         const variantSelected = variants.includes(selectedName);
         const baseSelected = selectedName === base;
 
@@ -7662,6 +7691,9 @@ function renderYear() {
         ${keyHtml}
       </div>`;
 
+    // Admin in Call mode: click opens the call-week modal, drag swaps weeks.
+    const callEdit = yearMode === 'call' && isAdmin() && !isLakeForest();
+
     // Render 12 months starting from September (month index 8)
     for (let i = 0; i < 12; i++) {
         const m = (8 + i) % 12;                      // Sep=8…Dec=11, Jan=0…Aug=7
@@ -7679,6 +7711,19 @@ function renderYear() {
 
             const content = inMonth ? cellContent(date) : null;
             const classes = ['md'];
+            // Call mode (admin): every day knows its call week, for the call
+            // modal and drag-to-swap; a week's colored days are draggable.
+            let callAttrs = '';
+            if (callEdit && inMonth && !isBeforeEarliest(date)) {
+                const cs = getCallCycleStart(date);
+                const past = _callWeekIsPast(cs);
+                callAttrs = ` data-cs="${fmt(cs)}"`;
+                if (past) classes.push('call-past');
+                else if (content) {
+                    callAttrs += ' draggable="true"';
+                    classes.push('call-draggable');
+                }
+            }
             if (!inMonth) classes.push('outside');
             if (td) classes.push('today');
             const holiday = inMonth ? getFederalHoliday(date) : null;
@@ -7689,14 +7734,15 @@ function renderYear() {
                 if (content.count) classes.push('count');
             }
 
+            const dragTip = callEdit && content && classes.includes('call-draggable') ? ' · drag onto another week to swap' : '';
             const titleAttr = (content || holiday)
-                ? ` title="${holiday ? holiday + (content ? ' · ' : '') : ''}${content ? content.title : ''}"`
+                ? ` title="${holiday ? holiday + (content ? ' · ' : '') : ''}${content ? content.title : ''}${dragTip}"`
                 : '';
             const squareStyle = content ? ` style="background:${content.background}"` : '';
             const labelHtml = content ? `<span class="md-label">${content.label}</span>` : '';
             const inner = `<span class="md-num">${date.getDate()}</span><span class="md-square"${squareStyle}>${labelHtml}</span>`;
 
-            cells += `<div class="${classes.join(' ')}" data-date="${fmt(date)}"${titleAttr}>${inner}</div>`;
+            cells += `<div class="${classes.join(' ')}" data-date="${fmt(date)}"${callAttrs}${titleAttr}>${inner}</div>`;
         }
 
         html += `<div class="year-month">
@@ -7725,8 +7771,64 @@ function renderYear() {
             const ds = el.dataset.date;
             if (!ds) return;
             if (isLakeForest()) { openLfRequestModal(parseDate(ds)); return; }
+            if (callEdit) { openCallModal(parseDate(ds)); return; }
             openDayDetail(parseDate(ds));
         });
+    });
+
+    if (callEdit) _wireCallDrag(main);
+}
+
+// Drag one call week onto another (year view, Call mode) to swap them. The
+// whole week lights up while dragging, and so does the week under the
+// pointer. (HTML5 drag-and-drop — mouse only; on touch screens the call
+// modal's Swap does the same.)
+function _wireCallDrag(main) {
+    // #main survives re-renders (only its contents are replaced), so wire it
+    // once — a second set of listeners would swap twice per drop.
+    if (main._callDragWired) return;
+    main._callDragWired = true;
+    let srcCs = null;
+    const mark = (cls, cs) => {
+        main.querySelectorAll('.md.' + cls).forEach(el => el.classList.remove(cls));
+        if (cs) main.querySelectorAll(`.md[data-cs="${cs}"]`).forEach(el => el.classList.add(cls));
+    };
+    const target = e => {
+        const el = e.target.closest && e.target.closest('.md[data-cs]');
+        if (!el || el.classList.contains('call-past')) return null;
+        return el.dataset.cs;
+    };
+    main.addEventListener('dragstart', e => {
+        const el = e.target.closest && e.target.closest('.md.call-draggable');
+        if (!el) return;
+        srcCs = el.dataset.cs;
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', srcCs); } catch (_) {}
+        mark('call-drag-src', srcCs);
+    });
+    main.addEventListener('dragover', e => {
+        if (!srcCs) return;
+        const cs = target(e);
+        if (!cs || cs === srcCs) { mark('call-drop-target', null); return; }
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        mark('call-drop-target', cs);
+    });
+    main.addEventListener('drop', async e => {
+        if (!srcCs) return;
+        const cs = target(e);
+        const from = srcCs;
+        srcCs = null;
+        mark('call-drag-src', null);
+        mark('call-drop-target', null);
+        if (!cs || cs === from) return;
+        e.preventDefault();
+        await swapCallWeeks(parseDate(from), parseDate(cs));
+    });
+    main.addEventListener('dragend', () => {
+        srcCs = null;
+        mark('call-drag-src', null);
+        mark('call-drop-target', null);
     });
 }
 
@@ -7785,7 +7887,17 @@ function openDayDetail(date) {
         </div>`;
     }
 
-    rows.innerHTML = lfRowHtml + pathologists.map(p => {
+    // Admin on a workday: the rows ARE the service editor (change and lock
+    // several pathologists at once, then Save / Save & recompute).
+    const editMode = admin && !isWk && !holiday;
+    if (editMode) {
+        activeSvcDayKey = fmt(date);
+        activeSvcDate = date;
+        _svcRootId = 'dayDetailRows';
+        renderFreetextDatalist();
+        rows.innerHTML = lfRowHtml + _dayEditRowsHtml(date, dayAssign);
+        rows.querySelectorAll('select[data-pid]').forEach(sel => { _svcRowSyncLock(sel); _dayEditPaintRow(sel); });
+    } else rows.innerHTML = lfRowHtml + pathologists.map(p => {
         const a = dayAssign[p.id];
         if (a.type === 'blank') return ''; // pre-cutoff date — no row
         const ocPill = a.onCall ? `<span class="doc-pill">On Call</span>` : '';
@@ -7834,6 +7946,14 @@ function openDayDetail(date) {
 
     if (admin) attachPathRowHandlers(date);
 
+    // The bottom bar only holds the editor's controls (Close is the × up top).
+    const editBar = document.querySelector('#dayModalBack .day-modal-actions');
+    if (editBar) editBar.style.display = editMode ? '' : 'none';
+    document.querySelectorAll('#dayModalBack .day-edit-only').forEach(el => {
+        el.style.display = editMode ? '' : 'none';
+    });
+    if (editMode) _showRecomputeControls('dayEditHorizon', 'dayEditSaveRecompute', true);
+
     // Hide "change service rotation" button on weekends and federal holidays
     const svcBtn = document.getElementById('dayChangeService');
     if (svcBtn) svcBtn.style.display = (isWk || holiday) ? 'none' : '';
@@ -7854,7 +7974,7 @@ function openDayDetail(date) {
         if (canRequest) ocBtn.textContent = admin ? "Change who's on call" : "Request on-call change";
     }
     if (svcBtn && !(isWk || holiday)) {
-        if (!canRequest) {
+        if (!canRequest || editMode) {
             svcBtn.style.display = 'none';
         } else {
             svcBtn.style.display = '';
@@ -7885,6 +8005,85 @@ function openDayDetail(date) {
     document.getElementById('dayModalBack').classList.add('open');
 }
 
+// ── Day modal as the service editor (admin, workdays) ─────────────────
+// One color-coded row per pathologist with the same controls as the
+// Override services modal — service select, Lock, custom-service text — so
+// several pathologists can be changed and locked in one save. The rows use
+// the modal's data-* hooks, so saveServiceFromModal / resetServiceDay work
+// on them unchanged. PTO rows stay clickable for the edit/remove-PTO panel.
+function _dayEditRowsHtml(date, dayAssign) {
+    const dayKey = fmt(date);
+    const allOptions = [...SERVICES, COMBO_SVC, ...OFF_SERVICES];
+    return pathologists.map(p => {
+        const a = dayAssign[p.id];
+        if (!a || a.type === 'blank') return '';
+        const currentId = (a.type === 'service' || a.type === 'off_site') && a.service ? a.service.id : '';
+        const currentIsFt = isFreetextServiceId(currentId);
+        const lockId = getServiceLock(dayKey, p.id);
+        const isPto = a.type === 'pto';
+        const opts = allOptions.map(sv =>
+            `<option value="${sv.id}" ${!currentIsFt && sv.id === currentId ? 'selected' : ''}>${sv.name}</option>`
+        ).join('');
+        const noneOpt = `<option value="" ${currentId === '' ? 'selected' : ''}>${isPto ? '— PTO —' : '— No service —'}</option>`;
+        const customOpt = `<option value="__ft__" ${currentIsFt ? 'selected' : ''}>Custom service…</option>`;
+        const cbg = pathBgColor(p.color);
+        const cls = ['day-detail-row', 'day-edit-row'];
+        if (isPto) cls.push('pto-row', 'admin-clickable');
+        if (a.type === 'off') cls.push('off-row');
+        if (isLockActiveForRender(dayKey, p.id, a)) cls.push('locked');
+        const ptoAttrs = isPto ? ` data-pid="${p.id}" data-atype="pto" title="Click the row to edit or remove this PTO"` : '';
+        const ocPill = a.onCall ? `<span class="doc-pill">On Call</span>` : '';
+        const tag = isPto ? ' <span class="dtag">PTO · edit</span>'
+            : a.type === 'off_site' ? ' <span class="dtag">Off site</span>' : '';
+        return `<div class="${cls.join(' ')}"${ptoAttrs} style="--c:${p.color}${cbg ? `; --c-bg:${cbg}` : ''}">
+          <div class="ddot"></div>
+          <div class="dname">${p.name}${tag}${ocPill ? ' ' + ocPill : ''}</div>
+          <select class="day-edit-sel" data-pid="${p.id}" data-initial="${escapeHtml(currentId)}" aria-label="Service for ${escapeHtml(p.name)}">${noneOpt}${opts}${customOpt}</select>
+          <label class="svc-lock-toggle" title="Lock this assignment in place — recompute won't move it. Custom &amp; off-site services are always locked.">
+            <input type="checkbox" class="svc-lock-cb" data-lock-pid="${p.id}" data-initial-lock="${lockId ? '1' : '0'}" ${lockId ? 'checked' : ''} />
+            <span>Lock</span>
+          </label>
+          <input type="text" class="svc-ft-input" data-ft-pid="${p.id}"
+                 list="ftServiceNames" maxlength="40" autocomplete="off" spellcheck="false"
+                 placeholder="Type the service, e.g. CAP Inspection"
+                 style="display:${currentIsFt ? '' : 'none'};"
+                 value="${currentIsFt ? escapeHtml(a.service.name) : ''}" />
+        </div>`;
+    }).join('');
+}
+
+// Is the select showing something other than what the day had at open?
+function _dayEditSelChanged(sel) {
+    const init = sel.dataset.initial || '';
+    return sel.value !== init && !(sel.value === '__ft__' && isFreetextServiceId(init));
+}
+
+// Color a day-editor row by its selected service; flag it once changed.
+function _dayEditPaintRow(sel) {
+    const row = sel.closest('.day-edit-row');
+    if (!row) return;
+    const v = sel.value;
+    const svc = v === '__ft__' ? { cssVar: '--svc-freetext' } : (v ? SERVICE_BY_ID[v] : null);
+    row.style.setProperty('--sc', svc ? `var(${svc.cssVar})` : 'transparent');
+    row.classList.toggle('has-svc', !!svc);
+    row.classList.toggle('changed', _dayEditSelChanged(sel));
+}
+
+// Unsaved edits in the day editor?
+function _dayEditDirty() {
+    const rows = document.getElementById('dayDetailRows');
+    if (!rows || _svcRootId !== 'dayDetailRows') return false;
+    for (const sel of rows.querySelectorAll('select[data-pid]')) {
+        if (_dayEditSelChanged(sel)) return true;
+        const cb = rows.querySelector(`.svc-lock-cb[data-lock-pid="${sel.dataset.pid}"]`);
+        if (cb && !cb.disabled && cb.checked !== (cb.dataset.initialLock === '1')) return true;
+    }
+    return false;
+}
+function _dayEditOkToLeave() {
+    return !_dayEditDirty() || confirm('Discard your unsaved service changes for this day?');
+}
+
 // ────────────── PATH QUICK-ACTION PANEL ──────────────
 function attachPathRowHandlers(date) {
     const rows = document.getElementById('dayDetailRows');
@@ -7898,8 +8097,10 @@ function attachPathRowHandlers(date) {
 
     rows.querySelectorAll('.admin-clickable').forEach(row => {
         row.addEventListener('click', e => {
-            // Don't trigger when clicking inside an already-open panel
+            // Don't trigger when clicking inside an already-open panel, or on
+            // the inline service editor's own controls.
             if (e.target.closest('.path-quick-panel')) return;
+            if (e.target.closest('select, input, label')) return;
 
             const isSameRow = row === openRow;
             closePanel();
@@ -8360,17 +8561,20 @@ function attachPathRowHandlers(date) {
 }
 
 document.getElementById('dayClose').addEventListener('click', () => {
+    if (!_dayEditOkToLeave()) return;
     document.getElementById('dayModalBack').classList.remove('open');
 });
 document.getElementById('dayModalBack').addEventListener('click', e => {
-    if (e.target.id === 'dayModalBack') e.target.classList.remove('open');
+    if (e.target.id === 'dayModalBack' && _dayEditOkToLeave()) e.target.classList.remove('open');
 });
 
 document.getElementById('dayAddPto').addEventListener('click', () => {
+    if (!_dayEditOkToLeave()) return;
     document.getElementById('dayModalBack').classList.remove('open');
     openPtoModal(activeDayDate);
 });
 document.getElementById('dayChangeOnCall').addEventListener('click', () => {
+    if (!_dayEditOkToLeave()) return;
     document.getElementById('dayModalBack').classList.remove('open');
     openOnCallModal(activeDayDate);
 });
@@ -8379,14 +8583,21 @@ document.getElementById('dayChangeService').addEventListener('click', () => {
     openServiceModal(activeDayDate);
 });
 document.getElementById('dayAddLfSendout').addEventListener('click', () => {
+    if (!_dayEditOkToLeave()) return;
     document.getElementById('dayModalBack').classList.remove('open');
     openLfModal(activeDayDate);
 });
+document.getElementById('dayEditSave').addEventListener('click', () =>
+    saveServiceFromModal(_recomputeChoiceFrom('dayEditHorizon', false)));
+document.getElementById('dayEditSaveRecompute').addEventListener('click', () =>
+    saveServiceFromModal(_recomputeChoiceFrom('dayEditHorizon', true)));
+document.getElementById('dayEditReset').addEventListener('click', () => resetServiceDay());
 const _dayRestoreConflictBtn = document.getElementById('dayRestoreConflict');
 if (_dayRestoreConflictBtn) {
     _dayRestoreConflictBtn.addEventListener('click', async () => {
         const key = _dayRestoreConflictBtn.dataset.key;
         if (!key) return;
+        if (!_dayEditOkToLeave()) return;
         document.getElementById('dayModalBack').classList.remove('open');
         await unacceptConflict(key);
     });
@@ -8756,6 +8967,244 @@ document.getElementById('ocReset').addEventListener('click', async () => {
     }, _chgSummaryOnCallClear(activeOcDayKey, scope)));
 
     document.getElementById('ocModalBack').classList.remove('open');
+});
+
+// ────────────── CALL WEEK MODAL (admin, year view → Call) ──────────────
+// Everything about one call week in one place: who's on call each day,
+// who holds the week, a single-day override for the clicked date, swapping
+// the week with another pathologist's week, and reset. Year-view Call mode
+// also lets the admin drag one week onto another to swap them.
+let activeCallDate = null;
+let activeCallStart = null;
+
+// The week's own assignee (week override or default rotation), ignoring
+// any single-day overrides inside it.
+function _callWeekHolder(cs) { return onCallIdForCycle(cs); }
+
+// Whole week in the past → locked (don't rewrite history).
+function _callWeekIsPast(cs) {
+    return getCallCycleEnd(cs).getTime() < today.getTime();
+}
+
+function _callFmtWeek(cs) {
+    return _chgFmtRange(cs, getCallCycleEnd(cs));
+}
+
+function openCallModal(date) {
+    const cs = getCallCycleStart(date);
+    const ce = getCallCycleEnd(cs);
+    activeCallDate = date;
+    activeCallStart = cs;
+    const holder = _callWeekHolder(cs);
+    const past = _callWeekIsPast(cs);
+
+    document.getElementById('callModalTitle').textContent = 'Call week · ' + _callFmtWeek(cs);
+    const hol = getFederalHoliday(date);
+    document.getElementById('callModalSub').textContent =
+        `${DOW[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}`
+        + (hol ? `  •  ⭐ ${hol}` : '')
+        + (past ? '  •  This week is in the past — view only.' : '');
+
+    // One chip per day of the week, colored by who's on call that day.
+    const days = [];
+    for (let d = new Date(cs); d.getTime() <= ce.getTime(); d = addDays(d, 1)) days.push(new Date(d));
+    document.getElementById('callDays').innerHTML = days.map(d => {
+        const pid = onCallIdForDay(d);
+        const p = pathologists.find(x => x.id === pid);
+        const dayOv = onCallDayOverrides[fmt(d)] !== undefined;
+        const cls = ['call-day'];
+        if (sameDay(d, date)) cls.push('is-clicked');
+        if (dayOv) cls.push('is-override');
+        return `<button type="button" class="${cls.join(' ')}" data-date="${fmt(d)}" style="--c:${p ? p.color : 'var(--rule)'}"
+                    title="${p ? escapeHtml(p.name) : 'Nobody'} on call${dayOv ? ' (single-day change)' : ''}">
+                  <span class="call-day-dow">${DOW[d.getDay()]}</span>
+                  <span class="call-day-num">${d.getDate()}</span>
+                  <span class="call-day-who">${p ? escapeHtml(p.initials) : '—'}</span>
+                </button>`;
+    }).join('');
+
+    const opts = sel => pathologists.map(p =>
+        `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+    document.getElementById('callWeekPath').innerHTML = opts(holder);
+
+    const dk = fmt(date);
+    const dayOv = onCallDayOverrides[dk];
+    const holderName = _shortPathName(holder);
+    document.getElementById('callDayLabel').textContent =
+        `Just ${DOW[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}`;
+    document.getElementById('callDayPath').innerHTML =
+        `<option value="" ${dayOv === undefined ? 'selected' : ''}>Same as the week (${escapeHtml(holderName)})</option>`
+        + pathologists.map(p =>
+            `<option value="${p.id}" ${dayOv !== undefined && p.id === dayOv ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+
+    // Swap candidates: every week from the current one to a year out
+    // (skipping past weeks and this one), labeled with who holds it.
+    const swapSel = document.getElementById('callSwapWith');
+    const opts2 = [];
+    let w = getCallCycleStart(today);
+    let firstDifferent = null;
+    for (let i = 0; i < 60; i++) {
+        if (fmt(w) !== fmt(cs)) {
+            const h = _callWeekHolder(w);
+            const same = h === holder;
+            if (!same && !firstDifferent && w.getTime() > cs.getTime()) firstDifferent = fmt(w);
+            opts2.push(`<option value="${fmt(w)}" ${same ? 'disabled' : ''}>${_callFmtWeek(w)} · ${escapeHtml(_shortPathName(h))}${same ? ' (same person)' : ''}</option>`);
+        }
+        w = addDays(getCallCycleEnd(w), 1);
+    }
+    swapSel.innerHTML = opts2.join('');
+    if (firstDifferent) swapSel.value = firstDifferent;
+
+    ['callWeekPath', 'callWeekSave', 'callDayPath', 'callDaySave', 'callSwapWith', 'callSwap', 'callReset']
+        .forEach(id => { document.getElementById(id).disabled = past; });
+
+    document.getElementById('callModalBack').classList.add('open');
+}
+
+function _closeCallModal() {
+    document.getElementById('callModalBack').classList.remove('open');
+}
+
+// Swap the week-level call assignments of two call weeks. Single-day
+// overrides inside either week stay on their days. Returns true if swapped.
+async function swapCallWeeks(aStart, bStart) {
+    aStart = getCallCycleStart(aStart);
+    bStart = getCallCycleStart(bStart);
+    if (fmt(aStart) === fmt(bStart)) return false;
+    if (_callWeekIsPast(aStart) || _callWeekIsPast(bStart)) {
+        showToast('Past call weeks can\'t be swapped.', { type: 'error' });
+        return false;
+    }
+    const pa = _callWeekHolder(aStart), pb = _callWeekHolder(bStart);
+    if (pa === pb) {
+        showToast(`Both weeks are already ${_shortPathName(pa)}'s — nothing to swap.`);
+        return false;
+    }
+    const aEnd = getCallCycleEnd(aStart), bEnd = getCallCycleEnd(bStart);
+    if (!confirmOnCallDuringPto(pb, aStart, aEnd, 'Swap')) return false;
+    if (!confirmOnCallDuringPto(pa, bStart, bEnd, 'Swap')) return false;
+
+    const dayOvIn = (s, e) => {
+        for (let d = new Date(s); d.getTime() <= e.getTime(); d = addDays(d, 1)) {
+            if (onCallDayOverrides[fmt(d)] !== undefined) return true;
+        }
+        return false;
+    };
+    if (dayOvIn(aStart, aEnd) || dayOvIn(bStart, bEnd)) {
+        if (!confirm('One of these weeks has a single-day call change. Swapping moves the weeks but leaves those single days as they are. Continue?')) return false;
+    }
+
+    // Store an override only where the new holder differs from the default
+    // rotation, so the data stays clean.
+    const writes = {};
+    const put = (start, pid) => {
+        writes['scheduler/onCallOverrides/' + fmt(start)] = defaultOnCallId(start) === pid ? null : pid;
+    };
+    put(aStart, pb);
+    put(bStart, pa);
+
+    // Show the swap right away: apply it locally and redraw the calendar
+    // before the database round trip. The listener's full refresh (and the
+    // conflict scan behind the nav dot) follows once the write lands.
+    for (const path in writes) {
+        const k = path.split('/').pop();
+        if (writes[path] === null) delete onCallOverrides[k];
+        else onCallOverrides[k] = writes[path];
+    }
+    clearDayCache();
+    renderMain();
+    // Let the browser paint the swap before the write and everything it
+    // sets off (listeners, conflict scan, change log).
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));
+    await db.ref().update(writes);
+
+    const na = _shortPathName(pa), nb = _shortPathName(pb);
+    logChange({
+        kind: 'oncall',
+        type: 'oncall_swap',
+        forPathId: pa,
+        otherPathId: pb,
+        date: fmt(aStart),
+        otherDate: fmt(bStart),
+        scope: 'week',
+        summary: `Call weeks swapped — ${na} ↔ ${nb}`,
+        details: `${_callFmtWeek(aStart)}: ${na} → ${nb}  ·  ${_callFmtWeek(bStart)}: ${nb} → ${na}`,
+    });
+    showToast(`Swapped: ${nb} now has ${_callFmtWeek(aStart)}, ${na} has ${_callFmtWeek(bStart)}.`);
+    return true;
+}
+
+document.getElementById('callClose').addEventListener('click', _closeCallModal);
+document.getElementById('callModalBack').addEventListener('click', e => {
+    if (e.target.id === 'callModalBack') _closeCallModal();
+});
+// Day chips jump the "Just this day" control to that day.
+document.getElementById('callDays').addEventListener('click', e => {
+    const b = e.target.closest('.call-day');
+    if (b) openCallModal(parseDate(b.dataset.date));
+});
+
+document.getElementById('callWeekSave').addEventListener('click', async () => {
+    const cs = activeCallStart;
+    const pid = parseInt(document.getElementById('callWeekPath').value, 10);
+    const hadDayOv = (() => {
+        for (let d = new Date(cs); d.getTime() <= getCallCycleEnd(cs).getTime(); d = addDays(d, 1)) {
+            if (onCallDayOverrides[fmt(d)] !== undefined) return true;
+        }
+        return false;
+    })();
+    if (pid === _callWeekHolder(cs) && !hadDayOv) { _closeCallModal(); return; }
+    if (!confirmOnCallDuringPto(pid, cs, getCallCycleEnd(cs), 'Assign the call')) return;
+    // Same as "Change who's on call" → Full week: set the week, clear any
+    // single-day overrides inside it so they can't shadow it.
+    const writes = { ['scheduler/onCallOverrides/' + fmt(cs)]: defaultOnCallId(cs) === pid ? null : pid };
+    for (let d = new Date(cs); d.getTime() <= getCallCycleEnd(cs).getTime(); d = addDays(d, 1)) {
+        if (onCallDayOverrides[fmt(d)] !== undefined) writes['scheduler/onCallDayOverrides/' + fmt(d)] = null;
+    }
+    await db.ref().update(writes);
+    logChange(Object.assign({
+        kind: 'oncall', type: 'oncall_set', forPathId: pid, date: fmt(cs), scope: 'week',
+    }, _chgSummaryOnCallSet(pid, fmt(cs), 'week')));
+    _closeCallModal();
+    showToast(`${_shortPathName(pid)} is on call ${_callFmtWeek(cs)}.`);
+});
+
+document.getElementById('callDaySave').addEventListener('click', async () => {
+    const dk = fmt(activeCallDate);
+    const v = document.getElementById('callDayPath').value;
+    if (v === '') {
+        if (onCallDayOverrides[dk] === undefined) { _closeCallModal(); return; }
+        await db.ref('scheduler/onCallDayOverrides/' + dk).remove();
+        logChange(Object.assign({ kind: 'oncall', type: 'oncall_clear', date: dk, scope: 'day' },
+            _chgSummaryOnCallClear(dk, 'day')));
+    } else {
+        const pid = parseInt(v, 10);
+        if (!confirmOnCallDuringPto(pid, activeCallDate, activeCallDate, 'Assign the call')) return;
+        await db.ref('scheduler/onCallDayOverrides/' + dk).set(pid);
+        logChange(Object.assign({ kind: 'oncall', type: 'oncall_set', forPathId: pid, date: dk, scope: 'day' },
+            _chgSummaryOnCallSet(pid, dk, 'day')));
+    }
+    _closeCallModal();
+    showToast('Call updated for ' + _chgFmtDate(dk) + '.');
+});
+
+document.getElementById('callSwap').addEventListener('click', async () => {
+    const other = document.getElementById('callSwapWith').value;
+    if (!other) return;
+    if (await swapCallWeeks(activeCallStart, parseDate(other))) _closeCallModal();
+});
+
+document.getElementById('callReset').addEventListener('click', async () => {
+    const cs = activeCallStart;
+    const writes = { ['scheduler/onCallOverrides/' + fmt(cs)]: null };
+    for (let d = new Date(cs); d.getTime() <= getCallCycleEnd(cs).getTime(); d = addDays(d, 1)) {
+        writes['scheduler/onCallDayOverrides/' + fmt(d)] = null;
+    }
+    await db.ref().update(writes);
+    logChange(Object.assign({ kind: 'oncall', type: 'oncall_clear', date: fmt(cs), scope: 'week' },
+        _chgSummaryOnCallClear(fmt(cs), 'week')));
+    _closeCallModal();
+    showToast('Call week reset to the default rotation.');
 });
 
 // ────────────── LAKE FOREST SENDOUT MODAL ──────────────
@@ -9468,6 +9917,7 @@ function openServiceModal(date) {
     if (getFederalHoliday(date)) return;  // no service rotation on federal holidays
     activeSvcDayKey = fmt(date);
     activeSvcDate = date;
+    _svcRootId = 'svcAssignments';
 
     const admin = isAdmin();
     document.querySelector('#svcModalBack .modal h3').textContent =
@@ -9550,12 +10000,19 @@ function openServiceModal(date) {
     document.getElementById('svcModalBack').classList.add('open');
 }
 
-// ── Service-modal row behavior (delegated, wired once) ── non-standard
-// picks force + disable the Lock checkbox; the manual choice is remembered
-// for standard services.
+// Which container holds the editable service rows the save/reset code
+// reads: the Override services modal (#svcAssignments) or, for admins on a
+// workday, the day modal itself (#dayDetailRows).
+let _svcRootId = 'svcAssignments';
+function _svcRoot() { return document.getElementById(_svcRootId); }
+
+// ── Service-row behavior (delegated, wired once per container) ──
+// non-standard picks force + disable the Lock checkbox; the manual choice
+// is remembered for standard services.
 function _svcRowSyncLock(sel) {
     const pid = sel.dataset.pid;
-    const cb = document.querySelector(`#svcAssignments .svc-lock-cb[data-lock-pid="${pid}"]`);
+    const root = sel.closest('#svcAssignments, #dayDetailRows') || _svcRoot();
+    const cb = root.querySelector(`.svc-lock-cb[data-lock-pid="${pid}"]`);
     if (!cb) return;
     const v = sel.value;
     const forced = v === '__ft__' || (v && isNonStandardServiceId(v));
@@ -9575,18 +10032,21 @@ function _svcRowSyncLock(sel) {
 }
 
 (function wireSvcAssignmentRows() {
-    const container = document.getElementById('svcAssignments');
-    if (!container) return;
-    container.addEventListener('change', e => {
-        const sel = e.target.closest('select[data-pid]');
-        if (!sel) return;
-        const pid = sel.dataset.pid;
-        const ftInput = container.querySelector(`.svc-ft-input[data-ft-pid="${pid}"]`);
-        if (ftInput) {
-            ftInput.style.display = sel.value === '__ft__' ? '' : 'none';
-            if (sel.value === '__ft__') setTimeout(() => ftInput.focus(), 0);
-        }
-        _svcRowSyncLock(sel);
+    ['svcAssignments', 'dayDetailRows'].forEach(id => {
+        const container = document.getElementById(id);
+        if (!container) return;
+        container.addEventListener('change', e => {
+            const sel = e.target.closest('select[data-pid]');
+            if (!sel) return;
+            const pid = sel.dataset.pid;
+            const ftInput = container.querySelector(`.svc-ft-input[data-ft-pid="${pid}"]`);
+            if (ftInput) {
+                ftInput.style.display = sel.value === '__ft__' ? '' : 'none';
+                if (sel.value === '__ft__') setTimeout(() => ftInput.focus(), 0);
+            }
+            _svcRowSyncLock(sel);
+            _dayEditPaintRow(sel);
+        });
     });
 })();
 
@@ -9607,7 +10067,8 @@ if (_svcSaveRcBtn) {
 // choice: null → ask afterwards; { recompute } → the admin already answered
 // by choosing Save or Save & recompute.
 async function saveServiceFromModal(choice) {
-    const selects = document.querySelectorAll('#svcAssignments select[data-pid]');
+    const root = _svcRoot();
+    const selects = root.querySelectorAll('select[data-pid]');
     const scope = 'day';
 
     if (isAdmin()) {
@@ -9620,7 +10081,7 @@ async function saveServiceFromModal(choice) {
             const initialSid = s.dataset.initial || '';
             let sid;
             if (s.value === '__ft__') {
-                const ftInput = document.querySelector(`#svcAssignments .svc-ft-input[data-ft-pid="${pid}"]`);
+                const ftInput = root.querySelector(`.svc-ft-input[data-ft-pid="${pid}"]`);
                 sid = makeFreetextServiceId(ftInput ? ftInput.value : '');
                 if (!sid) {
                     showToast(`Type a name for ${_chgShortName(parseInt(pid, 10))}'s custom service first.`, { type: 'error' });
@@ -9630,7 +10091,7 @@ async function saveServiceFromModal(choice) {
             } else {
                 sid = s.value || '';
             }
-            const cb = document.querySelector(`#svcAssignments .svc-lock-cb[data-lock-pid="${pid}"]`);
+            const cb = root.querySelector(`.svc-lock-cb[data-lock-pid="${pid}"]`);
             const initialLock = cb ? cb.dataset.initialLock === '1' : false;
             // Non-standard services are ALWAYS locked when set; standard
             // ones follow the checkbox. Clearing a slot never keeps a lock.
@@ -9650,7 +10111,7 @@ async function saveServiceFromModal(choice) {
 
         const touched = rows.filter(r => r.sidChanged || r.lockChanged);
         if (touched.length === 0) {
-            document.getElementById('svcModalBack').classList.remove('open');
+            _closeServiceEditors();
             return;
         }
 
@@ -9766,7 +10227,7 @@ async function saveServiceFromModal(choice) {
             }, _chgSummaryServiceBulk(activeSvcDayKey, scope, lines)));
         }
 
-        document.getElementById('svcModalBack').classList.remove('open');
+        _closeServiceEditors();
 
         if (recomputeFromDate) {
             setPendingRecomputeChoice(choice);
@@ -9781,7 +10242,7 @@ async function saveServiceFromModal(choice) {
         }
     } else {
         // Non-admin: there's only one select (their own).  Submit a request.
-        const ownSelect = document.querySelector(`#svcAssignments select[data-pid="${loggedInPathId}"]`);
+        const ownSelect = root.querySelector(`select[data-pid="${loggedInPathId}"]`);
         if (!ownSelect) {
             alert('Could not find your service slot.');
             return;
@@ -9795,7 +10256,13 @@ async function saveServiceFromModal(choice) {
         if (ok) document.getElementById('svcModalBack').classList.remove('open');
     }
 }
-document.getElementById('svcReset').addEventListener('click', async () => {
+function _closeServiceEditors() {
+    document.getElementById('svcModalBack').classList.remove('open');
+    document.getElementById('dayModalBack').classList.remove('open');
+}
+
+document.getElementById('svcReset').addEventListener('click', () => resetServiceDay());
+async function resetServiceDay() {
     const scope = 'day';
     let recomputeFromDate = null;
     const recomputePins = {};
@@ -9838,7 +10305,7 @@ document.getElementById('svcReset').addEventListener('click', async () => {
         scope: scope,
     }, _chgSummaryServiceReset(activeSvcDayKey, scope)));
 
-    document.getElementById('svcModalBack').classList.remove('open');
+    _closeServiceEditors();
 
     if (recomputeFromDate) {
         await maybeOfferRecompute(recomputePins, {
@@ -9847,7 +10314,7 @@ document.getElementById('svcReset').addEventListener('click', async () => {
             message: 'Service overrides cleared. Recompute the future schedule for everyone using the rotation rules?',
         });
     }
-});
+}
 
 // ────────────── DISPATCH ──────────────
 function renderMain() {
@@ -10916,6 +11383,9 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         app.classList.remove('sidebar-open');
         unlockBodyScrollForSidebar();
     }
+
+    // Other files (undo.js) close the drawer before showing their own panels.
+    window.closeMobileSidebar = closeMobileSidebar;
 
     if (asideToggleBtn) {
         asideToggleBtn.addEventListener('click', e => {

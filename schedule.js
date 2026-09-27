@@ -359,6 +359,20 @@ function isPathologistAccount(pathId) {
     return !!pathologists.find(p => p.id === id);
 }
 
+// The Requests page is for the accounts that file or decide requests:
+// pathologists (the admin included) and Lake Forest. Kathleen, the gross
+// room and histology never see it.
+function canSeeRequestsPage() {
+    return loggedInPathId !== null && !isGrossRoom() && !isManager() && !isHistology();
+}
+
+// PTO is for pathologists only: the admin (a pathologist) manages it, the
+// others request it. Kathleen, the gross room, histology and Lake Forest get
+// no PTO controls at all — every PTO opener checks this.
+function canUsePto() {
+    return isPathologistAccount();
+}
+
 // Who may file a PTO / on-call / service request: pathologists only. Their
 // own schedule is the thing being changed, and only they carry PTO
 // allotments and call blocks. Everyone else views the schedule; they don't
@@ -455,6 +469,8 @@ function applySettings() {
     // Sync segmented controls in the settings drawer to reflect saved defaults
     const dpSeg = document.getElementById('defaultPageSeg');
     if (dpSeg) {
+        const reqOpt = dpSeg.querySelector('.seg-btn[data-value="requests"]');
+        if (reqOpt) reqOpt.style.display = canSeeRequestsPage() || loggedInPathId === null ? '' : 'none';
         dpSeg.querySelectorAll('.seg-btn').forEach(b => {
             const isActive = b.dataset.value === settings.defaultPage;
             b.classList.toggle('active', isActive);
@@ -1698,7 +1714,7 @@ async function attemptLogin() {
             errEl.textContent = 'Incorrect password.';
             pwInput.select();
         } else if (code === 'auth/user-not-found') {
-            errEl.textContent = 'No account on file for this user. Contact admin.';
+            errEl.textContent = 'No account on file for this user. Contact the director.';
         } else if (code === 'auth/too-many-requests') {
             errEl.textContent = 'Too many attempts. Please wait a moment and try again.';
         } else {
@@ -1950,7 +1966,7 @@ regListener('scheduler/requests', snap => {
             && r.targetId === loggedInPathId
         );
         if (newForMe.length > 0) {
-            showToast('The admin has requested your sendout dates — see Requests.');
+            showToast('The director has requested your sendout dates — see Requests.');
         }
     }
     _seenRequestKeys = new Set(Object.keys(next));
@@ -2169,12 +2185,12 @@ async function submitRequest(type, payload, note, opts) {
             requesterId: loggedInPathId,
             targetId: (opts && opts.targetId) || null,
             type: type,
-            status: 'pending',
+            status: (opts && opts.status) || 'pending',
             createdAt: Date.now(),
             payload: payload || {},
             note: (note || '').trim() || null,
         });
-        showToast((opts && opts.toast) || 'Request submitted — admin will review.');
+        showToast((opts && opts.toast) || 'Request submitted — the director will review.');
         return true;
     } catch (err) {
         console.error('submitRequest error:', err);
@@ -2218,6 +2234,16 @@ function updateRequestsBadge() {
     // Hide entirely if not signed in OR if gross room / manager / histology
     // (who cannot manage requests or PTO). Lake Forest CAN file sendout
     // requests, so it falls through to the requester path below.
+    const reqNav = document.querySelector('.nav-item[data-page="requests"]');
+    if (reqNav) reqNav.style.display = canSeeRequestsPage() ? '' : 'none';
+    if (!canSeeRequestsPage()) {
+        const appEl = document.getElementById('app');
+        if (appEl && appEl.getAttribute('data-page') === 'requests'
+            && loggedInPathId !== null && typeof window.__setPage === 'function') {
+            window.__setPage('schedule');
+        }
+    }
+
     if (loggedInPathId === null || isGrossRoom() || isManager() || isHistology()) {
         if (btn) btn.style.display = 'none';
         if (menuBtn) menuBtn.classList.remove('has-alert');
@@ -2317,6 +2343,15 @@ function updateNavRequestsIndicator() {
 
     const admin = isAdmin();
 
+    // A colleague's call-trade ask, or offers waiting for me to pick one,
+    // need action — red, like a new ask.
+    const tradeNeedsMe = Object.values(requests || {}).some(r =>
+        r && (callTradeNeedsMe(r) || callTradeNeedsMyChoice(r)));
+    if (tradeNeedsMe) {
+        _setNavDot(dot, 'tone-new', true);
+        return;
+    }
+
     if (admin) {
         // Admins: red dot while an unseen request is waiting, amber once
         // the queue has been viewed but requests are still pending.
@@ -2345,7 +2380,7 @@ function updateNavRequestsIndicator() {
         r => r.status === 'approved' && (r.decisionAt || 0) > ackTs
             && r.decisionBy !== loggedInPathId
     );
-    const hasPending = mine.some(r => r.status === 'pending');
+    const hasPending = mine.some(r => isOpenRequest(r));
     const hasUnseenNew = getUnseenIncomingRequests().length > 0;
 
     // A new ask aimed at this user outranks everything — it needs action.
@@ -2993,9 +3028,10 @@ function describeRequest(req) {
     switch (req.type) {
         case 'pto_add': {
             const range = _reqDateRange(req.payload.start, req.payload.end);
+            const trade = req.payload.callTrade ? ' ' + escapeHtml(callTradeSentence(req)) : '';
             return {
                 title: `${who} → Add PTO`,
-                body: `Requesting PTO for <strong>${range}</strong>.`,
+                body: `Requesting PTO for <strong>${range}</strong>.${trade}`,
             };
         }
         case 'pto_remove': {
@@ -3018,6 +3054,15 @@ function describeRequest(req) {
             return {
                 title: `${who} → On-call change`,
                 body: `Requesting <strong>${newP}</strong> take call (${scopeLabel}) on <strong>${dateLabel}</strong>.`,
+            };
+        }
+        case 'oncall_swap': {
+            const a = parseDate(req.payload.aStart), b = parseDate(req.payload.bStart);
+            const na = _pathName(req.payload.aHolder).replace(/^Dr\. /, '');
+            const nb = _pathName(req.payload.bHolder).replace(/^Dr\. /, '');
+            return {
+                title: `${who} → Call week trade`,
+                body: `Trade call weeks: <strong>${_callFmtWeek(a)}</strong> (${na}) ↔ <strong>${_callFmtWeek(b)}</strong> (${nb}).`,
             };
         }
         case 'service_change': {
@@ -3203,7 +3248,7 @@ function renderFreetextDatalist() {
 // choice: null → ask with the recompute dialog afterwards; { recompute,
 // horizonDays } → the admin already answered by which button they pressed.
 async function approveRequest(reqKey, choice) {
-    if (!isAdmin()) { showToast('Only the admin can approve.', { type: 'error' }); return; }
+    if (!isAdmin()) { showToast('Only the director can approve.', { type: 'error' }); return; }
     const req = requests[reqKey];
     if (!req || req.status !== 'pending') return;
 
@@ -3215,7 +3260,16 @@ async function approveRequest(reqKey, choice) {
 
     // On-call / PTO pre-checks — bail before anything is written, so
     // cancelling leaves the request pending and the schedule untouched.
-    if (req.type === 'pto_add') {
+    if (req.type === 'pto_add' && _callTrade(req) && _callTrade(req).chosen) {
+        // PTO + call trade: both weeks must still be held as agreed.
+        const t = _callTrade(req);
+        const a = getCallCycleStart(parseDate(t.week)), b = getCallCycleStart(parseDate(t.chosen.week));
+        if (_callWeekHolder(a) !== req.requesterId || _callWeekHolder(b) !== Number(t.chosen.pid)
+            || _callWeekIsPast(b)) {
+            showToast('The call schedule changed since this trade was agreed — deny it and ask for a new request.', { type: 'error' });
+            return;
+        }
+    } else if (req.type === 'pto_add') {
         if (!confirmPtoDuringOnCall(
             req.requesterId, parseDate(req.payload.start), parseDate(req.payload.end),
             'Approve the PTO')) return;
@@ -3225,6 +3279,20 @@ async function approveRequest(reqKey, choice) {
         const ocTo = req.payload.scope === 'week' ? getCallCycleEnd(getCallCycleStart(ocDate)) : ocDate;
         if (!confirmOnCallDuringPto(
             req.payload.newPathId, ocFrom, ocTo, 'Approve the change')) return;
+    } else if (req.type === 'oncall_swap') {
+        const a = getCallCycleStart(parseDate(req.payload.aStart));
+        const b = getCallCycleStart(parseDate(req.payload.bStart));
+        if (_callWeekIsPast(a) || _callWeekIsPast(b)) {
+            showToast('One of these call weeks is already past — deny the request instead.', { type: 'error' });
+            return;
+        }
+        const pa = _callWeekHolder(a), pb = _callWeekHolder(b);
+        if (pa === pb) {
+            showToast(`Both weeks are now ${_shortPathName(pa)}'s — nothing to trade.`, { type: 'error' });
+            return;
+        }
+        if (!confirmOnCallDuringPto(pb, a, getCallCycleEnd(a), 'Approve the trade')) return;
+        if (!confirmOnCallDuringPto(pa, b, getCallCycleEnd(b), 'Approve the trade')) return;
     }
 
     try {
@@ -3238,6 +3306,12 @@ async function approveRequest(reqKey, choice) {
             // Strip stale regular overrides so the new PTO takes effect.
             await clearConflictingServiceOverridesForPto(
                 req.requesterId, req.payload.start, req.payload.end);
+            // …and the call trade that frees the requester's call week.
+            if (_callTrade(req) && _callTrade(req).chosen) {
+                const t = _callTrade(req);
+                await db.ref().update(_callSwapWrites(
+                    getCallCycleStart(parseDate(t.week)), getCallCycleStart(parseDate(t.chosen.week))).writes);
+            }
             rcFromDate = parseDate(req.payload.start);
             rcDayBeforeFix = true;
             rcMessage = 'PTO request approved. Recompute the future schedule for everyone using the rotation rules?';
@@ -3260,6 +3334,10 @@ async function approveRequest(reqKey, choice) {
                 await db.ref('scheduler/onCallDayOverrides/' + dKey).set(req.payload.newPathId);
             }
             // On-call changes don't affect service rotation — no recompute offer.
+        } else if (req.type === 'oncall_swap') {
+            const a = getCallCycleStart(parseDate(req.payload.aStart));
+            const b = getCallCycleStart(parseDate(req.payload.bStart));
+            await db.ref().update(_callSwapWrites(a, b).writes);
         } else if (req.type === 'service_change') {
             const dKey = req.payload.date;
             const pid = req.requesterId;
@@ -3345,6 +3423,11 @@ async function approveRequest(reqKey, choice) {
         // distinguishes request approvals from direct admin edits.
         try {
             const reqPid = req.requesterId;
+            if (req.type === 'pto_add' && _callTrade(req) && _callTrade(req).chosen) {
+                const t = _callTrade(req);
+                _logCallSwap(parseDate(t.week), parseDate(t.chosen.week), reqPid, Number(t.chosen.pid),
+                    { source: 'request_approved', requestKey: reqKey });
+            }
             if (req.type === 'pto_add') {
                 logChange(Object.assign({
                     kind: 'pto', type: 'pto_add',
@@ -3369,6 +3452,11 @@ async function approveRequest(reqKey, choice) {
                 }, _chgSummaryOnCallSet(
                     req.payload.newPathId, req.payload.date, req.payload.scope
                 )));
+            } else if (req.type === 'oncall_swap') {
+                // Holders after the swap: a now has bHolder, b has aHolder.
+                _logCallSwap(parseDate(req.payload.aStart), parseDate(req.payload.bStart),
+                    req.payload.aHolder, req.payload.bHolder,
+                    { source: 'request_approved', requestKey: reqKey });
             } else if (req.type === 'service_change') {
                 const scope = req.payload.scope || 'day';
                 if (req.payload.serviceId) {
@@ -3483,7 +3571,7 @@ function _reasonSubFor(req) {
 }
 
 async function denyRequest(reqKey) {
-    if (!isAdmin()) { showToast('Only the admin can deny.', { type: 'error' }); return; }
+    if (!isAdmin()) { showToast('Only the director can deny.', { type: 'error' }); return; }
     const reason = await askReason({
         title: 'Deny request',
         sub: _reasonSubFor(requests[reqKey]),
@@ -3508,7 +3596,7 @@ async function denyRequest(reqKey) {
 // Admin can revoke a previously-approved request, reversing the applied change
 // and re-alerting the requester (status flips back to 'denied').
 async function revokeApproval(reqKey) {
-    if (!isAdmin()) { showToast('Only the admin can revoke approvals.', { type: 'error' }); return; }
+    if (!isAdmin()) { showToast('Only the director can revoke approvals.', { type: 'error' }); return; }
     const req = requests[reqKey];
     if (!req || req.status !== 'approved') return;
 
@@ -3539,6 +3627,14 @@ async function revokeApproval(reqKey) {
                 rcDayBeforeFix = false;
                 rcMessage     = 'Approval revoked and PTO removed. Recompute the future schedule?';
                 await db.ref('scheduler/vacations/' + vac.key).remove();
+                // Undo the call trade that came with it.
+                if (_callTrade(req) && _callTrade(req).chosen) {
+                    const t = _callTrade(req);
+                    await db.ref().update(_callSwapWrites(
+                        getCallCycleStart(parseDate(t.week)), getCallCycleStart(parseDate(t.chosen.week))).writes);
+                    _logCallSwap(parseDate(t.week), parseDate(t.chosen.week), Number(t.chosen.pid), req.requesterId,
+                        { source: 'request_revoked', requestKey: reqKey });
+                }
             } else {
                 showToast('Could not find the PTO entry to remove — it may have already been deleted.', { type: 'error' });
                 return;
@@ -3556,6 +3652,12 @@ async function revokeApproval(reqKey) {
                     end:   req.payload.end,
                 });
             }
+
+        } else if (req.type === 'oncall_swap') {
+            // Swap the two weeks back.
+            const a = getCallCycleStart(parseDate(req.payload.aStart));
+            const b = getCallCycleStart(parseDate(req.payload.bStart));
+            await db.ref().update(_callSwapWrites(a, b).writes);
 
         } else if (req.type === 'oncall_change') {
             // Remove the on-call override that was written on approval.
@@ -3623,7 +3725,7 @@ async function revokeApproval(reqKey) {
             status:       'denied',
             decisionAt:   Date.now(),
             decisionBy:   loggedInPathId,
-            decisionNote: reason.trim() || 'Approval was revoked by the admin.',
+            decisionNote: reason.trim() || 'Approval was revoked by the director.',
         });
         showToast('Approval revoked — request marked as denied.');
 
@@ -3647,6 +3749,10 @@ async function revokeApproval(reqKey) {
                     forPathId: reqPid,
                     startDate: req.payload.start, endDate: req.payload.end,
                 }, _chgSummaryPtoAdd(reqPid, req.payload.start, req.payload.end)));
+            } else if (req.type === 'oncall_swap') {
+                _logCallSwap(parseDate(req.payload.aStart), parseDate(req.payload.bStart),
+                    req.payload.bHolder, req.payload.aHolder,
+                    { source: 'request_revoked', requestKey: reqKey });
             } else if (req.type === 'oncall_change') {
                 // Original approval set an on-call override; revocation cleared it
                 logChange(Object.assign({
@@ -3724,7 +3830,7 @@ async function completeLfDatesRequest(reqKey) {
             decisionAt: Date.now(),
             decisionBy: loggedInPathId,
         });
-        showToast('Marked complete — the admin can see your response.');
+        showToast('Marked complete — the director can see your response.');
     } catch (err) {
         console.error('completeLfDatesRequest error:', err);
         showToast('Failed to mark complete: ' + (err.message || err), { type: 'error' });
@@ -3763,17 +3869,20 @@ function renderRequestsList(targetEl, tabState) {
 
     // Filter: admin sees everyone's; non-admin sees their own plus any
     // requests aimed at them (admin → Lake Forest sendout-dates asks)
+    // Everyone also sees call trades that involve them as a colleague; the
+    // director doesn't see a trade until a colleague has agreed to it.
     let entries = Object.entries(requests).filter(([, r]) => !!r);
-    if (!isAdmin()) {
-        entries = entries.filter(([, r]) =>
-            r.requesterId === loggedInPathId || r.targetId === loggedInPathId);
-    }
+    const mineOrAsked = r => r.requesterId === loggedInPathId || r.targetId === loggedInPathId
+        || callTradeInvolvesMe(r);
+    entries = entries.filter(([, r]) => isAdmin()
+        ? (r.status !== 'awaiting_call' || mineOrAsked(r))
+        : mineOrAsked(r));
 
     // Tab filter
     if (tab === 'pending') {
-        entries = entries.filter(([, r]) => r.status === 'pending');
+        entries = entries.filter(([, r]) => isOpenRequest(r));
     } else {
-        entries = entries.filter(([, r]) => r.status !== 'pending');
+        entries = entries.filter(([, r]) => !isOpenRequest(r));
     }
 
     // Newest first
@@ -3812,7 +3921,7 @@ function renderRequestsList(targetEl, tabState) {
         // target completes them. Relabel while reusing the same statuses.
         const isAskType = req.type === 'lf_dates_request';
         const isTarget = req.targetId != null && req.targetId === loggedInPathId;
-        const decisionLine = (req.status !== 'pending')
+        const decisionLine = !isOpenRequest(req)
             ? `<div class="req-meta">${req.status === 'approved' ? (isAskType ? '✓ Completed' : '✓ Approved') : '✗ Denied'}${req.decisionAt ? ' · ' + new Date(req.decisionAt).toLocaleString([], {
                 month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
             }) : ''
@@ -3831,7 +3940,9 @@ function renderRequestsList(targetEl, tabState) {
             && (req.type === 'pto_add' || req.type === 'pto_remove'))
             ? `<button data-act="asklf" data-key="${key}">Request LF dates</button>`
             : '';
-        if (req.status === 'pending') {
+        if (req.status === 'awaiting_call') {
+            actions = _callTradeCardActions(key, req);
+        } else if (req.status === 'pending') {
             if (isAskType) {
                 if (isTarget) {
                     // Lake Forest responds via sendout requests, then marks done
@@ -3846,7 +3957,7 @@ function renderRequestsList(targetEl, tabState) {
                                 <button data-act="cancel" data-key="${key}">Cancel request</button>
                             </div>`;
                 }
-            } else if (isAdmin()) {
+            } else if (isAdmin() && req.requesterId !== loggedInPathId) {
                 // Only PTO and service approvals move the rotation, so only
                 // those get the recompute pair; on-call/LF approvals don't.
                 const affectsRotation = req.type === 'pto_add'
@@ -3883,9 +3994,10 @@ function renderRequestsList(targetEl, tabState) {
         }
 
         const typeShort = ({
-            'pto_add': 'PTO ADD',
+            'pto_add': _callTrade(req) ? 'PTO + CALL TRADE' : 'PTO ADD',
             'pto_remove': 'PTO REMOVE',
             'oncall_change': 'ON-CALL',
+            'oncall_swap': 'CALL TRADE',
             'service_change': 'SERVICE',
             'lf_sendout': 'LF SENDOUT',
             'lf_dates_request': 'LF DATES',
@@ -3904,7 +4016,7 @@ function renderRequestsList(targetEl, tabState) {
                                 <span class="req-who">${escapeHtml(desc.title)}</span>
                                 <span class="req-type">${typeShort}</span>
                             </div>
-                            <span class="req-status-pill ${req.status}">${isAskType && req.status === 'approved' ? 'completed' : req.status}</span>
+                            <span class="req-status-pill ${req.status}">${isAskType && req.status === 'approved' ? 'completed' : (req.status === 'awaiting_call' ? 'waiting on colleague' : (req.status === 'pending' ? 'with director' : req.status))}</span>
                         </div>
                         <div class="req-detail">${desc.body}</div>
                         ${noteLine}
@@ -3936,8 +4048,70 @@ function renderRequestsList(targetEl, tabState) {
                 openLfRequestModal(p.start ? parseDate(p.start) : today);
             }
             else if (act === 'lfdone') completeLfDatesRequest(key);
+            else if (act === 'tradeoffer') {
+                const sel = listEl.querySelector(`select[data-tradeweek="${key}"]`);
+                offerCallTrade(key, sel ? sel.value : '');
+            }
+            else if (act === 'tradedecline') declineCallTrade(key);
+            else if (act === 'tradewithdraw') withdrawCallTradeOffer(key);
+            else if (act === 'tradechoose') chooseCallTradeOffer(key, btn.dataset.pid);
+            else if (act === 'tradeskip') sendWithoutCallTrade(key);
+            else if (act === 'withdraw') _withdrawRequest(key);
         });
     });
+}
+
+// Card actions while a PTO request waits on a colleague's call trade.
+//   Requester  — see offers and pick one (asked all), or send it on without
+//                a trade / withdraw.
+//   Colleague  — take the call week (choosing which of their weeks the
+//                requester takes) or decline; withdraw an offer.
+function _callTradeCardActions(key, req) {
+    const t = _callTrade(req) || {};
+    const me = loggedInPathId;
+    const offers = Object.entries(t.offers || {});
+    const declined = Object.keys(t.declined || {}).map(Number);
+    let html = '';
+    if (req.requesterId === me) {
+        if (offers.length) {
+            html += '<div class="req-trade-offers">' + offers.map(([pid, o]) => `
+                <div class="req-trade-offer">
+                  <span><b>${escapeHtml(_shortPathName(Number(pid)))}</b> takes ${_tradeWeekLabel(t.week)}; you take ${_tradeWeekLabel(o.week)}</span>
+                  <button class="approve" data-act="tradechoose" data-key="${key}" data-pid="${pid}">Choose</button>
+                </div>`).join('') + '</div>';
+        } else {
+            const who = t.ask === 'all' ? 'No one has' : `${escapeHtml(_shortPathName(Number(t.ask)))} hasn't`;
+            const said = t.ask !== 'all' && declined.includes(Number(t.ask))
+                ? `${escapeHtml(_shortPathName(Number(t.ask)))} declined.` : `${who} answered yet.`;
+            html += `<div class="req-trade-status">${said}${declined.length && t.ask === 'all' ? ` ${declined.length} declined.` : ''}</div>`;
+        }
+        html += `<div class="req-card-actions">
+            <button data-act="tradeskip" data-key="${key}">Send to director without a trade</button>
+            <button data-act="withdraw" data-key="${key}">Withdraw request</button>
+          </div>`;
+        return html;
+    }
+    const answer = callTradeMyAnswer(req);
+    if (answer === 'offered') {
+        return `<div class="req-trade-status">You offered to take ${_tradeWeekLabel(t.week)} for your week of ${_tradeWeekLabel(t.offers[me].week)} — waiting for ${escapeHtml(_shortPathName(req.requesterId))} to choose.</div>
+          <div class="req-card-actions"><button data-act="tradewithdraw" data-key="${key}">Withdraw offer</button></div>`;
+    }
+    if (answer === 'declined') return '<div class="req-trade-status">You declined.</div>';
+    if (!callTradeAsksMe(req)) return '';
+    const weeks = callTradeReturnWeeks(req, me);
+    const select = weeks.length
+        ? `<select data-tradeweek="${key}">${weeks.map(w => `<option value="${fmt(w)}">${_callFmtWeek(w)}</option>`).join('')}</select>`
+        : '<span class="req-trade-status">You have no upcoming call week to give in return.</span>';
+    const ptoClash = _ptoDaysIn(me, getCallCycleStart(parseDate(t.week)), getCallCycleEnd(getCallCycleStart(parseDate(t.week))));
+    return `<div class="req-trade-ask">
+        <div>Take <b>${_tradeWeekLabel(t.week)}</b> for ${escapeHtml(_shortPathName(req.requesterId))}, who takes one of your weeks:</div>
+        ${ptoClash.length ? `<div class="pto-note pto-note-warn">You're on PTO ${_callPtoDayList(ptoClash)} that week.</div>` : ''}
+        <div class="req-card-actions">
+          ${select}
+          <button class="approve" data-act="tradeoffer" data-key="${key}"${weeks.length ? '' : ' disabled'}>Take the call week</button>
+          <button class="deny" data-act="tradedecline" data-key="${key}">Decline</button>
+        </div>
+      </div>`;
 }
 
 // Tiny HTML escape used in request descriptions / notes
@@ -3989,7 +4163,7 @@ function renderRequestsPage() {
         newBtn.id = 'requestsPageNewBtn';
         newBtn.type = 'button';
         newBtn.className = 'req-new-btn';
-        newBtn.innerHTML = '<span aria-hidden="true" style="margin-right:6px;font-weight:700;">+</span>New PTO Request';
+        newBtn.textContent = 'New PTO Request';
         newBtn.style.cssText = [
             'margin: 0 0 12px',
             'padding: 8px 14px',
@@ -4018,9 +4192,10 @@ function renderRequestsPage() {
             pg.appendChild(newBtn);
         }
     }
-    newBtn.style.display = admin ? 'none' : 'inline-flex';
-    newBtn.innerHTML = '<span aria-hidden="true" style="margin-right:6px;font-weight:700;">+</span>'
-        + (isLakeForest() ? 'New Sendout Request' : 'New PTO Request');
+    // Pathologists request PTO here; Lake Forest requests sendouts. Nobody
+    // else (Kathleen, gross room, histology) gets the button.
+    newBtn.style.display = (!admin && (canUsePto() || isLakeForest())) ? 'inline-flex' : 'none';
+    newBtn.textContent = isLakeForest() ? 'New Sendout Request' : 'New PTO Request';
 
     // Inject (once) an admin-only button that asks the Lake Forest account
     // for their sendout dates (files an lf_dates_request aimed at LF).
@@ -4056,13 +4231,12 @@ function renderRequestsPage() {
 
     // Compute counts visible to this user (admin = all, else own +
     // requests aimed at them)
-    let visible = Object.entries(requests || {}).filter(([, r]) => !!r);
-    if (!admin) {
-        visible = visible.filter(([, r]) =>
-            r.requesterId === loggedInPathId || r.targetId === loggedInPathId);
-    }
-    const pendingCount = visible.filter(([, r]) => r.status === 'pending').length;
-    const resolvedCount = visible.filter(([, r]) => r.status !== 'pending').length;
+    const involved = r => r.requesterId === loggedInPathId || r.targetId === loggedInPathId
+        || callTradeInvolvesMe(r);
+    let visible = Object.entries(requests || {}).filter(([, r]) => !!r)
+        .filter(([, r]) => admin ? (r.status !== 'awaiting_call' || involved(r)) : involved(r));
+    const pendingCount = visible.filter(([, r]) => isOpenRequest(r)).length;
+    const resolvedCount = visible.filter(([, r]) => !isOpenRequest(r)).length;
 
     // Summary stats (top-right of header)
     const sumPending = document.getElementById('requestsSummaryPending');
@@ -6456,7 +6630,7 @@ function flagHtml(date) {
 
     const open = all.filter(c => !c.accepted);
     if (open.length === 0) {
-        const tip = 'Accepted by the admin:\n• ' + all.map(c => c.detail).join('\n• ');
+        const tip = 'Accepted by the director:\n• ' + all.map(c => c.detail).join('\n• ');
         return `<span class="rule-flag rule-flag-accepted" title="${escapeHtml(tip)}">!</span>`;
     }
 
@@ -7891,6 +8065,10 @@ function renderYear() {
 
     // Admin in Call mode: click opens the call-week modal, drag swaps weeks.
     const callEdit = yearMode === 'call' && isAdmin() && !isLakeForest();
+    // PTO mode: admin and pathologists get the PTO day panel (no dragging);
+    // Call mode: pathologists get the call request panel.
+    const ptoEdit = yearMode === 'pto' && !isLakeForest() && (isAdmin() || isPathologistAccount());
+    const callReq = yearMode === 'call' && !isAdmin() && isPathologistAccount();
 
     // Render 12 months starting from September (month index 8)
     for (let i = 0; i < 12; i++) {
@@ -7933,6 +8111,7 @@ function renderYear() {
             }
 
             const dragTip = callEdit && content && classes.includes('call-draggable') ? ' · drag onto another week to swap' : '';
+            if ((ptoEdit || callReq) && inMonth) classes.push('pto-editable');
             const titleAttr = (content || holiday)
                 ? ` title="${holiday ? holiday + (content ? ' · ' : '') : ''}${content ? content.title : ''}${dragTip}"`
                 : '';
@@ -7970,6 +8149,8 @@ function renderYear() {
             if (!ds) return;
             if (isLakeForest()) { openLfRequestModal(parseDate(ds)); return; }
             if (callEdit) { openCallModal(parseDate(ds)); return; }
+            if (ptoEdit) { openPtoDayModal(parseDate(ds)); return; }
+            if (callReq) { openCallRequestModal(parseDate(ds)); return; }
             openDayDetail(parseDate(ds));
         });
     });
@@ -8165,7 +8346,7 @@ function openDayDetail(date) {
     const ocBtn = document.getElementById('dayChangeOnCall');
     if (ptoBtn) {
         ptoBtn.style.display = canRequest ? '' : 'none';
-        if (canRequest) ptoBtn.textContent = admin ? 'Add PTO for this day' : '+ Request PTO for this day';
+        if (canRequest) ptoBtn.textContent = admin ? 'Add PTO for this date' : 'Request PTO for this date';
     }
     if (ocBtn) {
         ocBtn.style.display = canRequest ? '' : 'none';
@@ -8638,7 +8819,7 @@ function attachPathRowHandlers(date) {
                 if (canAddPto) {
                     parts.push(`<div class="pqp-label">Actions — ${path.name}</div>
                         <div class="pqp-row">
-                            <button class="pqp-btn" id="pqpAddPto_${pid}">Add PTO for this day</button>
+                            <button class="pqp-btn" id="pqpAddPto_${pid}">Add PTO for this date</button>
                         </div>`);
                 }
 
@@ -8668,11 +8849,8 @@ function attachPathRowHandlers(date) {
                     addPtoBtn.addEventListener('click', () => {
                         closePanel();
                         document.getElementById('dayModalBack').classList.remove('open');
-                        // Open PTO modal pre-filled to this pathologist and date
-                        const sel = document.getElementById('ptoPath');
-                        openPtoModal(date);
-                        // Pre-select this pathologist after the modal opens
-                        setTimeout(() => { sel.value = pid; }, 0);
+                        // PTO panel pre-filled to this pathologist and date
+                        openPtoDayModal(date, { pathId: pid });
                     });
                 }
 
@@ -8827,6 +9005,10 @@ function _recomputeChoiceFrom(horizonId, recompute) {
 
 // ────────────── PTO MODAL ──────────────
 function openPtoModal(prefillDate) {
+    if (!canUsePto()) return;
+    // Pathologists always, and the director for a specific date, get the PTO
+    // panel; the director's Manage PTO (no date) keeps the full list below.
+    if (!isAdmin() || prefillDate) { openPtoDayModal(prefillDate || new Date(today)); return; }
     const sel = document.getElementById('ptoPath');
     const admin = isAdmin();
 
@@ -8845,8 +9027,7 @@ function openPtoModal(prefillDate) {
     }
 
     const d = prefillDate || today;
-    document.getElementById('ptoStart').value = fmt(d);
-    document.getElementById('ptoEnd').value = fmt(d);
+    setPtoRangeMode('pto', 'date', d);
 
     // Note field + button label + list label change for non-admin
     document.getElementById('ptoNoteWrap').style.display = admin ? 'none' : '';
@@ -8858,7 +9039,7 @@ function openPtoModal(prefillDate) {
     document.querySelector('#ptoModalBack .modal .sub').textContent =
         admin
             ? 'Add a new PTO range or remove an existing one.'
-            : 'Submit a PTO request — the admin will approve or deny it.';
+            : 'Submit a PTO request — the director will approve or deny it.';
     document.getElementById('ptoSave').textContent = admin ? 'Add PTO' : 'Submit Request';
     document.getElementById('ptoListLabel').textContent =
         admin ? 'Existing PTO' : 'My PTO';
@@ -8944,7 +9125,7 @@ function renderPtoList() {
                 // Find the relevant vacation for the prompt detail
                 const v = vacations.find(x => x.key === key);
                 if (!v) return;
-                if (!confirm('Submit a request to cancel this PTO? The admin will need to approve.')) return;
+                if (!confirm('Submit a request to cancel this PTO? The director will need to approve.')) return;
                 const ok = await submitRequest('pto_remove', {
                     vacationKey: key,
                     start: fmt(v.start),
@@ -8957,6 +9138,8 @@ function renderPtoList() {
 }
 
 document.getElementById('addPtoBtn').addEventListener('click', () => openPtoModal(null));
+document.querySelectorAll('input[name="ptoRange"]').forEach(r =>
+    r.addEventListener('change', () => setPtoRangeMode('pto', r.value)));
 
 // Auto-advance end date when start is moved past it
 document.getElementById('ptoStart').addEventListener('change', () => {
@@ -9034,6 +9217,892 @@ async function savePtoFromModal(choice) {
             document.getElementById('ptoModalBack').classList.remove('open');
         }
     }
+}
+
+// ────────────── PTO + CALL TRADE ──────────────
+// PTO that lands on the requester's call week can carry a call trade: a
+// colleague takes that call week and, in return, the requester takes one of
+// the colleague's upcoming weeks (the requester absorbs the cost). The
+// request lives in scheduler/requests as a pto_add whose payload has
+//   callTrade: { week, ask: 'all' | pathId, offers: { pid: { week, at } },
+//                declined: { pid: at }, chosen: { pid, week } | null }
+// and moves through
+//   awaiting_call — colleagues answer: asked one → their yes closes it;
+//                   asked all → volunteers offer, the requester picks one
+//   pending       — the director approves PTO + trade together (or denies)
+// Nothing is applied until the director approves.
+const OPEN_REQUEST_STATUSES = ['pending', 'awaiting_call'];
+function isOpenRequest(r) { return !!r && OPEN_REQUEST_STATUSES.includes(r.status); }
+function _callTrade(r) { return (r && r.payload && r.payload.callTrade) || null; }
+
+// Is this request's trade asking me (and still open)?
+function callTradeAsksMe(r) {
+    const t = _callTrade(r);
+    const me = loggedInPathId;
+    if (!t || r.status !== 'awaiting_call' || r.requesterId === me || !isPathologistAccount(me)) return false;
+    return t.ask === 'all' || Number(t.ask) === me;
+}
+function callTradeMyAnswer(r) {
+    const t = _callTrade(r);
+    if (!t) return null;
+    if (t.offers && t.offers[loggedInPathId]) return 'offered';
+    if (t.declined && t.declined[loggedInPathId]) return 'declined';
+    return null;
+}
+function callTradeNeedsMe(r) { return callTradeAsksMe(r) && !callTradeMyAnswer(r); }
+function callTradeNeedsMyChoice(r) {
+    const t = _callTrade(r);
+    return !!t && r.status === 'awaiting_call' && r.requesterId === loggedInPathId
+        && t.ask === 'all' && Object.keys(t.offers || {}).length > 0;
+}
+// Does the request involve me as a colleague (asked, answered, or chosen)?
+function callTradeInvolvesMe(r) {
+    const t = _callTrade(r);
+    if (!t || r.requesterId === loggedInPathId) return false;
+    return callTradeAsksMe(r) || !!callTradeMyAnswer(r) || (t.chosen && Number(t.chosen.pid) === loggedInPathId);
+}
+
+function _tradeWeekLabel(k) { return _callFmtWeek(getCallCycleStart(parseDate(k))); }
+
+// Plain-language line for cards: what's agreed, or who's being asked.
+function callTradeSentence(r) {
+    const t = _callTrade(r);
+    if (!t) return '';
+    const who = _shortPathName(r.requesterId);
+    if (t.chosen) {
+        return `Call trade: ${_shortPathName(Number(t.chosen.pid))} takes ${_tradeWeekLabel(t.week)}; ${who} takes ${_tradeWeekLabel(t.chosen.week)}.`;
+    }
+    const asked = t.ask === 'all' ? 'all pathologists' : _shortPathName(Number(t.ask));
+    return `Needs a call trade for ${_tradeWeekLabel(t.week)} — asked ${asked}.`;
+}
+
+// A colleague's upcoming call weeks they could give the requester in
+// return: not started, and the requester isn't on PTO then (incl. the new PTO).
+function callTradeReturnWeeks(r, pid) {
+    const reqStart = parseDate(r.payload.start), reqEnd = parseDate(r.payload.end);
+    return _upcomingCallWeeks(60)
+        .filter(w => w.getTime() > today.getTime() && _callWeekHolder(w) === pid
+            && fmt(w) !== _callTrade(r).week)
+        .filter(w => {
+            const e = getCallCycleEnd(w);
+            const overlapsNew = e.getTime() >= reqStart.getTime() && w.getTime() <= reqEnd.getTime();
+            return !overlapsNew && _ptoDaysIn(r.requesterId, w, e).length === 0;
+        });
+}
+
+async function offerCallTrade(key, week) {
+    const r = requests[key];
+    if (!callTradeAsksMe(r) || !week) return;
+    const w = parseDate(week);
+    if (_callWeekHolder(w) !== loggedInPathId || w.getTime() <= today.getTime()) {
+        showToast('Pick one of your upcoming call weeks.', { type: 'error' });
+        return;
+    }
+    const t = _callTrade(r);
+    const base = 'scheduler/requests/' + key;
+    const up = {};
+    up[base + '/payload/callTrade/offers/' + loggedInPathId] = { week, at: Date.now() };
+    up[base + '/payload/callTrade/declined/' + loggedInPathId] = null;
+    if (t.ask !== 'all') {
+        // Asked just me: my yes settles it and sends it on to the director.
+        up[base + '/payload/callTrade/chosen'] = { pid: loggedInPathId, week };
+        up[base + '/status'] = 'pending';
+    }
+    await db.ref().update(up);
+    showToast(t.ask === 'all'
+        ? `Offer sent — ${_shortPathName(r.requesterId)} will choose.`
+        : 'Trade agreed — it now goes to the director with the PTO request.');
+}
+
+async function declineCallTrade(key) {
+    const r = requests[key];
+    if (!callTradeAsksMe(r)) return;
+    const base = 'scheduler/requests/' + key + '/payload/callTrade';
+    await db.ref().update({
+        [base + '/declined/' + loggedInPathId]: Date.now(),
+        [base + '/offers/' + loggedInPathId]: null,
+    });
+    showToast('Declined.');
+}
+
+async function withdrawCallTradeOffer(key) {
+    const r = requests[key];
+    if (!r || r.status !== 'awaiting_call') return;
+    await db.ref('scheduler/requests/' + key + '/payload/callTrade/offers/' + loggedInPathId).remove();
+    showToast('Offer withdrawn.');
+}
+
+async function chooseCallTradeOffer(key, pid) {
+    const r = requests[key];
+    const t = _callTrade(r);
+    if (!t || r.requesterId !== loggedInPathId || r.status !== 'awaiting_call') return;
+    const offer = (t.offers || {})[pid];
+    if (!offer) return;
+    await db.ref('scheduler/requests/' + key).update({
+        'payload/callTrade/chosen': { pid: Number(pid), week: offer.week },
+        status: 'pending',
+    });
+    showToast(`${_shortPathName(Number(pid))} chosen — sent to the director.`);
+}
+
+// Requester gives up on the trade: the PTO goes to the director as-is.
+async function sendWithoutCallTrade(key) {
+    const r = requests[key];
+    if (!r || r.requesterId !== loggedInPathId || r.status !== 'awaiting_call') return;
+    await db.ref('scheduler/requests/' + key).update({ 'payload/callTrade': null, status: 'pending' });
+    showToast('Sent to the director without a call trade.');
+}
+
+// ────────────── PTO DATE CHOICE (shared) ──────────────
+// Both PTO forms (the PTO panel and the director's Manage PTO panel) offer:
+// This date · Today (or <day>) through Friday · Whole week (Mon–Fri) ·
+// Choose dates. The first three fill the date fields and show the range as
+// text; "Choose dates" reveals From / To for any other range.
+const PTO_RANGE_FORMS = {
+    ptoDay: { name: 'ptoDayRange', start: 'ptoDayStart', end: 'ptoDayEnd', dates: 'ptoDayDates', text: 'ptoDayRangeText' },
+    pto:    { name: 'ptoRange',    start: 'ptoStart',    end: 'ptoEnd',    dates: 'ptoDates',    text: 'ptoRangeText' },
+};
+// Extra ids per form: the "through Friday" option and its label.
+const PTO_TOFRI_IDS = { ptoDay: ['ptoDayRangeToFriOpt', 'ptoDayRangeToFriLbl'], pto: ['ptoRangeToFriOpt', 'ptoRangeToFriLbl'] };
+const _ptoRangeAnchor = {};   // form → the date the choice is relative to
+
+// The Mon–Fri of the (Sun–Sat) week containing d.
+function _ptoWeekRange(d) {
+    const ws = startOfWeek(d);
+    return { s: addDays(ws, 1), e: addDays(ws, 5) };
+}
+
+function _ptoRangeLabelDates(s, e) {
+    const one = d => `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`;
+    return sameDay(s, e) ? `${one(s)}, ${s.getFullYear()}` : `${one(s)} – ${one(e)}, ${e.getFullYear()}`;
+}
+
+function ptoRangeMode(form) {
+    const f = PTO_RANGE_FORMS[form];
+    const r = document.querySelector(`input[name="${f.name}"]:checked`);
+    return r ? r.value : 'date';
+}
+
+// Set the choice (and the dates it implies), then show/hide the fields.
+function setPtoRangeMode(form, mode, anchor) {
+    const f = PTO_RANGE_FORMS[form];
+    if (anchor) _ptoRangeAnchor[form] = anchor;
+    const d = _ptoRangeAnchor[form] || today;
+    // "Today through Friday" (or "Wed through Friday"): only Mon–Thu.
+    const fri = addDays(startOfWeek(d), 5);
+    const [optId, lblId] = PTO_TOFRI_IDS[form];
+    const toFriOk = d.getDay() >= 1 && d.getDay() <= 4;
+    document.getElementById(optId).hidden = !toFriOk;
+    document.getElementById(lblId).textContent = (sameDay(d, today) ? 'Today' : DOW[d.getDay()]) + ' through Friday';
+    if (mode === 'tofri' && !toFriOk) mode = 'date';
+    const radio = document.querySelector(`input[name="${f.name}"][value="${mode}"]`);
+    if (radio) radio.checked = true;
+    const startEl = document.getElementById(f.start), endEl = document.getElementById(f.end);
+    if (mode === 'date') { startEl.value = fmt(d); endEl.value = fmt(d); }
+    else if (mode === 'tofri') { startEl.value = fmt(d); endEl.value = fmt(fri); }
+    else if (mode === 'week') { const w = _ptoWeekRange(d); startEl.value = fmt(w.s); endEl.value = fmt(w.e); }
+    // 'custom' keeps whatever the fields hold, so it starts from the last choice.
+    document.getElementById(f.dates).hidden = mode !== 'custom';
+    const text = document.getElementById(f.text);
+    text.hidden = mode === 'custom';
+    if (mode !== 'custom' && startEl.value && endEl.value) {
+        text.textContent = _ptoRangeLabelDates(parseDate(startEl.value), parseDate(endEl.value));
+    }
+}
+
+// ────────────── PTO DAY PANEL (year view, PTO mode) ──────────────
+// The PTO counterpart of the call week panel: the clicked day's week as a
+// strip, who's on PTO that day, and a PTO form prefilled with the day, with
+// quick ranges, a live working-day / allotment count and inline heads-ups
+// (on call, others off, overlaps, holidays) instead of pop-ups.
+//   Admin        — removes (whole range or just this day) and adds directly.
+//   Pathologists — request PTO and removals of their own PTO, and see /
+//                  withdraw their pending PTO requests.
+// Clicking a day in the strip moves the panel to it.
+let activePtoDayDate = null;
+
+function _ptoRangeLabel(v) {
+    return _chgFmtRange(fmt(v.start), fmt(v.end));
+}
+
+function _ptoOnDay(date) {
+    return vacations
+        .filter(v => date.getTime() >= v.start.getTime() && date.getTime() <= v.end.getTime())
+        .sort((a, b) => a.pathologistId - b.pathologistId);
+}
+
+// Working days (weekdays that aren't federal holidays) in [s, e].
+function _workdaysIn(s, e) {
+    const out = [];
+    for (let d = new Date(s); d.getTime() <= e.getTime(); d = addDays(d, 1)) {
+        if (!isWeekend(d) && !getFederalHoliday(d)) out.push(new Date(d));
+    }
+    return out;
+}
+
+// The signed-in pathologist's open requests (with the director, or still
+// waiting on a colleague's call trade) of the given types.
+function _myPendingRequests(types) {
+    return Object.entries(requests || {})
+        .filter(([, r]) => isOpenRequest(r) && r.requesterId === loggedInPathId
+            && types.includes(r.type));
+}
+
+// Withdraw one of your own pending requests (explicit button — no pop-up).
+async function _withdrawRequest(key) {
+    const r = requests[key];
+    if (!isOpenRequest(r) || (r.requesterId !== loggedInPathId && !isAdmin())) return;
+    try {
+        await db.ref('scheduler/requests/' + key).remove();
+        showToast('Request withdrawn.');
+    } catch (err) {
+        showToast('Could not withdraw: ' + (err.message || err), { type: 'error' });
+    }
+}
+
+// "Oct 7 – 9, 2026" / "Oct 7, 2026" for a pending PTO request.
+function _reqRangeLabel(r) {
+    return r.payload && r.payload.start ? _chgFmtRange(r.payload.start, r.payload.end || r.payload.start) : '';
+}
+
+// Call-trade form state, kept across re-renders while the panel is open.
+let _ptoTradeOn = true;
+let _ptoTradeAsk = 'all';
+
+function openPtoDayModal(date, opts) {
+    if (!canUsePto()) return;
+    activePtoDayDate = date;
+    _ptoTradeOn = true;
+    _ptoTradeAsk = 'all';
+    const admin = isAdmin();
+    const me = loggedInPathId;
+    const hol = getFederalHoliday(date);
+    document.getElementById('ptoDayTitle').textContent =
+        `PTO · ${DOW[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+    const subBits = [];
+    if (hol) subBits.push(`⭐ ${hol}`);
+    if (date.getTime() < today.getTime()) subBits.push('In the past');
+    const sub = document.getElementById('ptoDaySub');
+    sub.textContent = subBits.join('  •  ');
+    sub.hidden = subBits.length === 0;
+
+    // Week strip (Sun–Sat around the date): who's off each day.
+    const ws = startOfWeek(date);
+    const days = [];
+    for (let i = 0; i < 7; i++) days.push(addDays(ws, i));
+    document.getElementById('ptoDayDays').innerHTML = days.map(d => {
+        const folks = _ptoOnDay(d).map(v => pathologists.find(p => p.id === v.pathologistId)).filter(Boolean);
+        const cls = ['call-day'];
+        if (sameDay(d, date)) cls.push('is-clicked');
+        if (!folks.length) cls.push('is-empty');
+        const who = folks.length === 0 ? '—'
+            : folks.length <= 2 ? folks.map(p => escapeHtml(p.initials)).join('/')
+            : String(folks.length);
+        const tip = folks.length ? folks.map(p => p.name).join(', ') + ' — PTO' : 'Nobody on PTO';
+        return `<button type="button" class="${cls.join(' ')}" data-date="${fmt(d)}"
+                    style="--c:${folks.length ? folks[0].color : 'var(--rule)'}" title="${escapeHtml(tip)}">
+                  <span class="call-day-dow">${DOW[d.getDay()]}</span>
+                  <span class="call-day-num">${d.getDate()}</span>
+                  <span class="call-day-who"${folks.length > 1 ? ` style="background:${gradientFor(folks.map(p => p.color))}"` : ''}>${who}</span>
+                </button>`;
+    }).join('');
+
+    // On PTO this day (director removes; a pathologist can ask to remove theirs).
+    const pendingRemoves = new Set(_myPendingRequests(['pto_remove']).map(([, r]) => r.payload.vacationKey));
+    const onDay = _ptoOnDay(date);
+    document.getElementById('ptoDayList').innerHTML = onDay.length === 0
+        ? '<div class="empty">Nobody.</div>'
+        : onDay.map(v => {
+            const p = pathologists.find(x => x.id === v.pathologistId);
+            if (!p) return '';
+            const multi = !sameDay(v.start, v.end);
+            let actions = '';
+            if (admin) {
+                actions = (multi ? `<button type="button" data-act="day" data-key="${v.key}">Remove this day</button>` : '')
+                    + `<button type="button" class="danger" data-act="all" data-key="${v.key}">${multi ? 'Remove all' : 'Remove'}</button>`;
+            } else if (v.pathologistId === me) {
+                actions = pendingRemoves.has(v.key)
+                    ? '<button type="button" disabled>Removal requested</button>'
+                    : `<button type="button" class="danger" data-act="reqremove" data-key="${v.key}">Request removal</button>`;
+            }
+            return `<div class="pto-list-item" style="--c:${p.color}">
+                <div class="pdot"></div>
+                <div class="prange">
+                  <div class="pname">${escapeHtml(p.name.replace(/^Dr\. /, ''))}${v.pathologistId === me ? ' <span class="pto-you">you</span>' : ''}</div>
+                  <div class="pdates">${_ptoRangeLabel(v)}</div>
+                </div>
+                <div class="pto-day-actions">${actions}</div>
+              </div>`;
+        }).join('');
+
+    // On call this day.
+    const ocId = onCallIdForDay(date);
+    const oc = pathologists.find(p => p.id === ocId);
+    const ocCs = getCallCycleStart(date);
+    document.getElementById('ptoDayOnCall').innerHTML = oc
+        ? `<div class="pto-list-item" style="--c:${oc.color}">
+              <div class="pdot"></div>
+              <div class="prange">
+                <div class="pname">${escapeHtml(oc.name.replace(/^Dr\. /, ''))}${ocId === me ? ' <span class="pto-you">you</span>' : ''}</div>
+                <div class="pdates">Call week ${_callFmtWeek(ocCs)}</div>
+              </div>
+            </div>`
+        : '<div class="empty">Nobody.</div>';
+
+    // A pathologist's open PTO requests that touch this week.
+    const pendWrap = document.getElementById('ptoDayPendingWrap');
+    const weEnd = addDays(ws, 6);
+    const pend = admin ? [] : _myPendingRequests(['pto_add', 'pto_remove']).filter(([, r]) => {
+        if (!r.payload || !r.payload.start) return false;
+        const s = parseDate(r.payload.start), e = parseDate(r.payload.end || r.payload.start);
+        return e.getTime() >= ws.getTime() && s.getTime() <= weEnd.getTime();
+    });
+    pendWrap.hidden = pend.length === 0;
+    document.getElementById('ptoDayPending').innerHTML = pend.map(([key, r]) => {
+        const waiting = r.status === 'awaiting_call';
+        const trade = _callTrade(r);
+        return `
+        <div class="pto-list-item pto-pending" style="--c:var(--ink-3)">
+          <div class="pdot"></div>
+          <div class="prange">
+            <div class="pname">${r.type === 'pto_add' ? 'PTO request' : 'Removal request'} <span class="pto-pending-tag">${waiting ? 'waiting on colleague' : 'with the director'}</span></div>
+            <div class="pdates">${_reqRangeLabel(r)}${trade ? ' · ' + escapeHtml(callTradeSentence(r)) : ''}</div>
+          </div>
+          <div class="pto-day-actions"><button type="button" data-act="withdraw" data-key="${key}">Withdraw</button></div>
+        </div>`;
+    }).join('');
+
+    // Add / request form.
+    const sel = document.getElementById('ptoDayPath');
+    const offIds = new Set(onDay.map(v => v.pathologistId));
+    if (admin) {
+        const avail = pathologists.filter(p => !offIds.has(p.id));
+        sel.innerHTML = (avail.length ? avail : pathologists)
+            .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+        if (opts && opts.pathId) sel.value = String(opts.pathId);
+    } else {
+        const mine = pathologists.find(p => p.id === me);
+        sel.innerHTML = mine ? `<option value="${mine.id}">${escapeHtml(mine.name)}</option>` : '';
+    }
+    document.getElementById('ptoDayPathRow').hidden = !admin;
+    document.getElementById('ptoDayAddLabel').textContent = admin ? 'Add PTO for this date' : 'Request PTO for this date';
+    document.getElementById('ptoDayNoteWrap').hidden = admin;
+    document.getElementById('ptoDayNote').value = '';
+    _showRecomputeControls('ptoDayHorizon', 'ptoDayAddRecompute', admin);
+    setPtoRangeMode('ptoDay', 'date', date);
+    _updatePtoDayForm();
+
+    document.getElementById('ptoDayModalBack').classList.add('open');
+}
+
+function _closePtoDayModal() {
+    document.getElementById('ptoDayModalBack').classList.remove('open');
+    activePtoDayDate = null;
+}
+
+// The form's dates, or null if they don't form a valid range.
+function _ptoDayFormRange() {
+    const sStr = document.getElementById('ptoDayStart').value;
+    const eStr = document.getElementById('ptoDayEnd').value;
+    if (!sStr || !eStr) return null;
+    const s = parseDate(sStr), e = parseDate(eStr);
+    if (isNaN(s) || isNaN(e) || e < s) return null;
+    return { s, e };
+}
+
+// Allotment bar: days already scheduled this fiscal year, what this
+// request adds, and what's left (or how far over).
+function _ptoBarHtml(pid, r) {
+    const work = _workdaysIn(r.s, r.e);
+    const fresh = work.filter(d => !isOnPto(pid, d));
+    const fy = getAcademicYearOfDate(r.s);
+    const fyRange = getFiscalYearRange(fy);
+    const used = ptoDaysScheduled(pid, { start: fyRange.start, end: fyRange.end });
+    const add = fresh.filter(d => d.getTime() <= fyRange.end.getTime()).length;
+    const allot = ptoAllotmentFor(pid, fy);
+    const after = used + add;
+    const scale = Math.max(allot, after, 1);
+    const pct = n => (100 * n / scale).toFixed(2) + '%';
+    const over = allot > 0 && after > allot;
+    const who = isAdmin() ? escapeHtml(_shortPathName(pid)) + ' · ' : '';
+    const right = allot > 0
+        ? (over ? `<b class="pto-bar-over">${after - allot} over</b> of ${allot}` : `<b>${allot - after}</b> of ${allot} left`)
+        : `${after} total`;
+    const already = work.length - fresh.length;
+    return `<div class="pto-bar-head"><span>${who}PTO days · FY ${fy}–${String(fy + 1).slice(2)}</span><span>${right}</span></div>
+        <div class="pto-bar-track${over ? ' is-over' : ''}" role="img" aria-label="${used} scheduled, ${add} in this request, ${allot || 'no'} allotted">
+          <span class="pto-bar-used" style="width:${pct(used)}"></span><span class="pto-bar-add" style="width:${pct(add)}"></span>
+          ${allot > 0 && after > allot ? `<span class="pto-bar-mark" style="left:${pct(allot)}"></span>` : ''}
+        </div>
+        <div class="pto-bar-legend">
+          <span><i class="pto-key pto-key-used"></i>Scheduled ${used}</span>
+          <span><i class="pto-key pto-key-add"></i>This request +${add}${already ? ` (${already} already off)` : ''}</span>
+          <span>After: <b>${after}</b></span>
+        </div>`;
+}
+
+// Call-trade section for a pathologist whose PTO lands on their call week.
+function _ptoTradeHtml(pid, r) {
+    const oc = onCallDaysInRange(pid, r.s, r.e);
+    const weeks = [...new Set(oc.map(d => fmt(getCallCycleStart(d))))];
+    if (weeks.length === 0) return '';
+    if (weeks.length > 1) {
+        return `<div class="pto-note pto-note-warn">You're on call during ${weeks.length} of your call weeks in this range (${weeks.map(_tradeWeekLabel).join(', ')}).
+            Request one week of PTO at a time to arrange a call trade for each.</div>`;
+    }
+    const cs = parseDate(weeks[0]), ce = getCallCycleEnd(cs);
+    const prev = getCallCycleStart(addDays(cs, -1)), next = addDays(ce, 1);
+    const people = pathologists.filter(p => p.id !== pid).map(p => {
+        const ctx = [];
+        if (_callWeekHolder(prev) === p.id) ctx.push(`has call the week before (${_callFmtWeek(prev)})`);
+        if (_callWeekHolder(next) === p.id) ctx.push(`has call the week after (${_callFmtWeek(next)})`);
+        const pto = _ptoDaysIn(p.id, cs, ce);
+        if (pto.length) ctx.push(`on PTO ${_callPtoDayList(pto)} that week`);
+        return { p, ctx, busy: pto.length > 0 };
+    });
+    const opt = (value, name, ctx, warn) => `
+        <label class="pto-trade-opt${warn ? ' is-warn' : ''}">
+          <input type="radio" name="ptoTradeAsk" value="${value}"${String(_ptoTradeAsk) === String(value) ? ' checked' : ''}${_ptoTradeOn ? '' : ' disabled'}>
+          <span class="pto-trade-name">${escapeHtml(name)}</span>
+          ${ctx ? `<span class="pto-trade-ctx">${escapeHtml(ctx)}</span>` : ''}
+        </label>`;
+    return `
+        <div class="pto-trade-head">You're on call <b>${_callFmtWeek(cs)}</b> during this PTO.</div>
+        <label class="pto-trade-toggle"><input type="checkbox" id="ptoTradeOn"${_ptoTradeOn ? ' checked' : ''}> Ask to trade this call week</label>
+        <div class="pto-trade-opts">
+          ${opt('all', 'All pathologists', 'Volunteers each offer one of their weeks; you pick one.', false)}
+          ${people.map(x => opt(x.p.id, x.p.name, x.ctx.join(' · '), x.busy)).join('')}
+        </div>
+        <div class="pto-trade-foot">They take your call week and choose one of their upcoming weeks for you to take.
+          Your PTO request goes to the director once the trade is agreed; both are finalized when the director approves.</div>`;
+}
+
+// Is the call-trade section active for the current form?
+function _ptoTradeActive() {
+    const el = document.getElementById('ptoDayTrade');
+    return !el.hidden && !!el.querySelector('#ptoTradeOn') && _ptoTradeOn;
+}
+
+// Live bar + heads-ups + trade section under the form (no pop-ups).
+function _updatePtoDayForm() {
+    const admin = isAdmin();
+    const pid = parseInt(document.getElementById('ptoDayPath').value, 10);
+    const r = _ptoDayFormRange();
+    const bar = document.getElementById('ptoDayBar');
+    const notesEl = document.getElementById('ptoDayNotes');
+    const tradeEl = document.getElementById('ptoDayTrade');
+    const addBtn = document.getElementById('ptoDayAdd');
+    const addBtns = [addBtn, document.getElementById('ptoDayAddRecompute')];
+    const text = document.getElementById('ptoDayRangeText');
+    if (!pid || !r) {
+        bar.innerHTML = r ? '' : '<div class="pto-note pto-note-warn">Choose a To date on or after the From date.</div>';
+        notesEl.innerHTML = '';
+        tradeEl.hidden = true;
+        addBtns.forEach(b => { b.disabled = true; });
+        return;
+    }
+    const work = _workdaysIn(r.s, r.e);
+    const fresh = work.filter(d => !isOnPto(pid, d));
+    if (!text.hidden) text.textContent = _ptoRangeLabelDates(r.s, r.e) + ` · ${work.length} working day${work.length === 1 ? '' : 's'}`;
+    bar.innerHTML = _ptoBarHtml(pid, r);
+
+    const notes = [];
+    const isYou = !admin && pid === loggedInPathId;
+    // On call during the PTO: pathologists get the trade section instead.
+    const trade = isYou ? _ptoTradeHtml(pid, r) : '';
+    tradeEl.innerHTML = trade;
+    tradeEl.hidden = !trade;
+    if (!isYou) {
+        const oc = onCallDaysInRange(pid, r.s, r.e);
+        if (oc.length) {
+            notes.push(['warn', `${_shortPathName(pid)} is on call ${oc.length === 1 ? 'on' : 'on ' + oc.length + ' of these days:'} ${_callPtoDayList(oc)}. It will show on the Conflicts page until call is reassigned.`]);
+        }
+    }
+    // Existing PTO overlap (only new days count).
+    const own = vacations.filter(v => v.pathologistId === pid
+        && v.end.getTime() >= r.s.getTime() && v.start.getTime() <= r.e.getTime());
+    if (own.length) notes.push(['info', `Overlaps PTO already scheduled (${own.map(_ptoRangeLabel).join(', ')}); only new days count.`]);
+    if (!admin) {
+        const dup = _myPendingRequests(['pto_add']).filter(([, q]) => q.payload && q.payload.start
+            && parseDate(q.payload.end || q.payload.start).getTime() >= r.s.getTime()
+            && parseDate(q.payload.start).getTime() <= r.e.getTime());
+        if (dup.length) notes.push(['info', `You already requested ${dup.map(([, q]) => _reqRangeLabel(q)).join(', ')}.`]);
+    }
+    const hols = [];
+    for (let d = new Date(r.s); d.getTime() <= r.e.getTime(); d = addDays(d, 1)) {
+        const h = getFederalHoliday(d);
+        if (h && !isWeekend(d)) hols.push(h);
+    }
+    if (hols.length) notes.push(['info', `${hols.join(', ')} ${hols.length === 1 ? 'is a holiday' : 'are holidays'} — not counted.`]);
+    if (getAcademicYearOfDate(r.e) !== getAcademicYearOfDate(r.s)) notes.push(['info', 'Spans two fiscal years; each year counts its own days.']);
+    if (!admin && r.s.getTime() < today.getTime()) notes.push(['warn', 'Starts in the past.']);
+    if (fresh.length === 0) notes.unshift(['warn', work.length ? 'Already on PTO for all of these days.' : 'No working days in this range.']);
+    notesEl.innerHTML = notes.map(([k, t]) => `<div class="pto-note pto-note-${k}">${escapeHtml(t)}</div>`).join('');
+
+    addBtns.forEach(b => { b.disabled = fresh.length === 0; });
+    addBtn.textContent = admin ? 'Add PTO' : (_ptoTradeActive() ? 'Request PTO & call trade' : 'Request PTO');
+}
+
+async function _ptoDayAdd(choice) {
+    const admin = isAdmin();
+    const pid = parseInt(document.getElementById('ptoDayPath').value, 10);
+    const r = _ptoDayFormRange();
+    if (!pid || !r) return;
+    if (!admin) {
+        const note = document.getElementById('ptoDayNote').value;
+        const payload = { start: fmt(r.s), end: fmt(r.e) };
+        let opts;
+        if (_ptoTradeActive()) {
+            const week = fmt(getCallCycleStart(onCallDaysInRange(pid, r.s, r.e)[0]));
+            payload.callTrade = { week, ask: _ptoTradeAsk === 'all' ? 'all' : Number(_ptoTradeAsk), chosen: null };
+            const asked = _ptoTradeAsk === 'all' ? 'all pathologists' : _shortPathName(Number(_ptoTradeAsk));
+            opts = { status: 'awaiting_call', toast: `Call trade sent to ${asked}. Your PTO request goes to the director once the trade is agreed.` };
+        }
+        const ok = await submitRequest('pto_add', payload, note, opts);
+        if (ok && activePtoDayDate) openPtoDayModal(activePtoDayDate);   // show it as pending
+        return;
+    }
+    await db.ref('scheduler/vacations').push({ pathologistId: pid, start: fmt(r.s), end: fmt(r.e) });
+    await clearConflictingServiceOverridesForPto(pid, fmt(r.s), fmt(r.e));
+    logChange(Object.assign({
+        kind: 'pto', type: 'pto_add', forPathId: pid, startDate: fmt(r.s), endDate: fmt(r.e),
+    }, _chgSummaryPtoAdd(pid, fmt(r.s), fmt(r.e))));
+    _closePtoDayModal();
+    setPendingRecomputeChoice(choice);
+    await maybeOfferRecompute({}, {
+        fromDate: r.s,
+        dayBeforeFix: true,
+        message: 'PTO added. Recompute the future schedule for everyone using the rotation rules?',
+    });
+}
+
+// Admin: remove a whole PTO range, or just the panel's day out of it (the
+// range is trimmed, or split in two around the day).
+async function _ptoDayRemove(key, justThisDay) {
+    const v = vacations.find(x => x.key === key);
+    const day = activePtoDayDate;
+    if (!v || !day || !isAdmin()) return;
+    const ref = db.ref('scheduler/vacations/' + key);
+    let removedStart = v.start, removedEnd = v.end;
+    if (!justThisDay || sameDay(v.start, v.end)) {
+        await ref.remove();
+    } else {
+        removedStart = removedEnd = day;
+        if (sameDay(day, v.start)) {
+            await ref.update({ start: fmt(addDays(day, 1)) });
+        } else if (sameDay(day, v.end)) {
+            await ref.update({ end: fmt(addDays(day, -1)) });
+        } else {
+            await ref.update({ end: fmt(addDays(day, -1)) });
+            await db.ref('scheduler/vacations').push({
+                pathologistId: v.pathologistId, start: fmt(addDays(day, 1)), end: fmt(v.end),
+            });
+        }
+    }
+    logChange(Object.assign({
+        kind: 'pto', type: 'pto_remove', forPathId: v.pathologistId,
+        startDate: fmt(removedStart), endDate: fmt(removedEnd),
+    }, _chgSummaryPtoRemove(v.pathologistId, fmt(removedStart), fmt(removedEnd))));
+    openPtoDayModal(day);   // refresh the panel in place
+    await maybeOfferRecompute({}, {
+        fromDate: removedStart,
+        dayBeforeFix: false,
+        message: 'PTO removed. Recompute the future schedule for everyone using the rotation rules?',
+    });
+}
+
+// Pathologist: ask the admin to remove one of your PTO ranges.
+async function _ptoDayRequestRemoval(key) {
+    const v = vacations.find(x => x.key === key);
+    if (!v || v.pathologistId !== loggedInPathId) return;
+    const note = document.getElementById('ptoDayNote').value;
+    const ok = await submitRequest('pto_remove', { vacationKey: key, start: fmt(v.start), end: fmt(v.end) }, note);
+    if (ok && activePtoDayDate) openPtoDayModal(activePtoDayDate);
+}
+
+document.getElementById('ptoDayDays').addEventListener('click', e => {
+    const b = e.target.closest('.call-day');
+    if (b) openPtoDayModal(parseDate(b.dataset.date));
+});
+['ptoDayList', 'ptoDayPending'].forEach(id => document.getElementById(id).addEventListener('click', async e => {
+    const b = e.target.closest('button[data-key]');
+    if (!b) return;
+    const act = b.dataset.act;
+    if (act === 'day' || act === 'all') _ptoDayRemove(b.dataset.key, act === 'day');
+    else if (act === 'reqremove') _ptoDayRequestRemoval(b.dataset.key);
+    else if (act === 'withdraw') {
+        await _withdrawRequest(b.dataset.key);
+        if (activePtoDayDate) openPtoDayModal(activePtoDayDate);
+    }
+}));
+document.querySelectorAll('input[name="ptoDayRange"]').forEach(r => r.addEventListener('change', () => {
+    setPtoRangeMode('ptoDay', r.value);
+    _updatePtoDayForm();
+}));
+['ptoDayPath', 'ptoDayStart', 'ptoDayEnd'].forEach(id =>
+    document.getElementById(id).addEventListener('change', () => {
+        // Keep To on or after From.
+        const sEl = document.getElementById('ptoDayStart'), eEl = document.getElementById('ptoDayEnd');
+        if (id === 'ptoDayStart' && sEl.value && eEl.value && sEl.value > eEl.value) eEl.value = sEl.value;
+        _updatePtoDayForm();
+    }));
+document.getElementById('ptoDayTrade').addEventListener('change', e => {
+    if (e.target.id === 'ptoTradeOn') _ptoTradeOn = e.target.checked;
+    else if (e.target.name === 'ptoTradeAsk') _ptoTradeAsk = e.target.value;
+    _updatePtoDayForm();
+});
+document.getElementById('ptoDayAdd').addEventListener('click', () =>
+    _ptoDayAdd(_recomputeChoiceFrom('ptoDayHorizon', false)));
+document.getElementById('ptoDayAddRecompute').addEventListener('click', () =>
+    _ptoDayAdd(_recomputeChoiceFrom('ptoDayHorizon', true)));
+document.getElementById('ptoDayCancel').addEventListener('click', _closePtoDayModal);
+document.getElementById('ptoDayModalBack').addEventListener('click', e => {
+    if (e.target.id === 'ptoDayModalBack') _closePtoDayModal();
+});
+
+// ────────────── CALL REQUEST PANEL (pathologists, year view Call mode) ──────────────
+// The pathologist's version of the call week panel. Each section files a
+// request for the admin:
+//   Coverage — your week/day: ask a colleague to cover it;
+//              someone else's: offer to cover it yourself.
+//   Trade    — swap a whole call week with another (oncall_swap).
+// Heads-ups (PTO clashes) show inline; pending call requests for the week
+// can be withdrawn here.
+let activeCallReqDate = null;
+
+// Upcoming call weeks (this one through ~a year out) as week starts.
+function _upcomingCallWeeks(n) {
+    const out = [];
+    let w = getCallCycleStart(today);
+    for (let i = 0; i < (n || 56); i++) {
+        out.push(w);
+        w = addDays(getCallCycleEnd(w), 1);
+    }
+    return out;
+}
+
+// PTO days of pid within [s, e], for the inline heads-ups.
+function _ptoDaysIn(pid, s, e) {
+    const out = [];
+    for (let d = new Date(s); d.getTime() <= e.getTime(); d = addDays(d, 1)) {
+        if (isOnPto(pid, d)) out.push(new Date(d));
+    }
+    return out;
+}
+
+function _callReqScope() {
+    const r = document.querySelector('input[name="callReqScope"]:checked');
+    return r ? r.value : 'week';
+}
+
+function openCallRequestModal(date) {
+    if (!isPathologistAccount()) return;
+    activeCallReqDate = date;
+    const me = loggedInPathId;
+    const cs = getCallCycleStart(date);
+    const ce = getCallCycleEnd(cs);
+    const holder = _callWeekHolder(cs);
+    const past = _callWeekIsPast(cs);
+    const hol = getFederalHoliday(date);
+
+    document.getElementById('callReqTitle').textContent = 'Call week · ' + _callFmtWeek(cs);
+    document.getElementById('callReqSub').textContent =
+        `${DOW[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}`
+        + `  •  ${holder === me ? 'Your call week' : _shortPathName(holder) + ' is on call'}`
+        + (hol ? `  •  ⭐ ${hol}` : '')
+        + (past ? '  •  In the past — view only' : '');
+
+    // Day strip, same as the admin's.
+    const days = [];
+    for (let d = new Date(cs); d.getTime() <= ce.getTime(); d = addDays(d, 1)) days.push(new Date(d));
+    document.getElementById('callReqDays').innerHTML = days.map(d => {
+        const pid = onCallIdForDay(d);
+        const p = pathologists.find(x => x.id === pid);
+        const dayOv = onCallDayOverrides[fmt(d)] !== undefined;
+        const cls = ['call-day'];
+        if (sameDay(d, date)) cls.push('is-clicked');
+        if (dayOv) cls.push('is-override');
+        return `<button type="button" class="${cls.join(' ')}" data-date="${fmt(d)}" style="--c:${p ? p.color : 'var(--rule)'}"
+                    title="${p ? escapeHtml(p.name) : 'Nobody'} on call${dayOv ? ' (single-day change)' : ''}">
+                  <span class="call-day-dow">${DOW[d.getDay()]}</span>
+                  <span class="call-day-num">${d.getDate()}</span>
+                  <span class="call-day-who">${p ? escapeHtml(p.initials) : '—'}</span>
+                </button>`;
+    }).join('');
+
+    // Pending call requests of mine that touch this week.
+    const inWeek = k => { if (!k) return false; const t = parseDate(k).getTime(); return t >= cs.getTime() && t <= ce.getTime(); };
+    const pend = _myPendingRequests(['oncall_change', 'oncall_swap']).filter(([, r]) =>
+        r.payload && (inWeek(r.payload.date) || inWeek(r.payload.aStart) || inWeek(r.payload.bStart)));
+    document.getElementById('callReqPendingWrap').hidden = pend.length === 0;
+    document.getElementById('callReqPending').innerHTML = pend.map(([key, r]) => {
+        const d = describeRequest(r);
+        const tmp = document.createElement('div');
+        tmp.innerHTML = d.body || '';
+        return `<div class="pto-list-item pto-pending" style="--c:var(--ink-3)">
+          <div class="pdot"></div>
+          <div class="prange">
+            <div class="pname">${r.type === 'oncall_swap' ? 'Trade request' : 'Coverage request'} <span class="pto-pending-tag">with the director</span></div>
+            <div class="pdates">${escapeHtml(tmp.textContent.trim())}</div>
+          </div>
+          <div class="pto-day-actions"><button type="button" data-act="withdraw" data-key="${key}">Withdraw</button></div>
+        </div>`;
+    }).join('');
+
+    // Coverage: default scope = whole week when it's yours, else the day.
+    const dayLbl = `Just ${DOW[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}`;
+    document.getElementById('callReqScopeDayLbl').textContent = dayLbl;
+    document.getElementById(holder === me ? 'callReqScopeWeek' : 'callReqScopeDay').checked = true;
+    document.getElementById('callReqNote').value = '';
+
+    // Trade: my week ↔ another's, or another's week ↔ one of mine.
+    const swapSel = document.getElementById('callReqSwapWith');
+    // Only weeks that haven't started — a week already underway can't be traded.
+    const upcoming = _upcomingCallWeeks().filter(w => w.getTime() > today.getTime());
+    let opts = [];
+    if (holder === me) {
+        document.getElementById('callReqSwapLabel').textContent = 'Trade this week for';
+        opts = upcoming.filter(w => fmt(w) !== fmt(cs) && _callWeekHolder(w) !== me)
+            .map(w => `<option value="${fmt(w)}">${_callFmtWeek(w)} · ${escapeHtml(_shortPathName(_callWeekHolder(w)))}</option>`);
+    } else {
+        document.getElementById('callReqSwapLabel').textContent = `Trade one of your weeks for this one (${_shortPathName(holder)}'s)`;
+        opts = upcoming.filter(w => _callWeekHolder(w) === me)
+            .map(w => `<option value="${fmt(w)}">Your week of ${_callFmtWeek(w)}</option>`);
+    }
+    swapSel.innerHTML = opts.length ? opts.join('')
+        : `<option value="">${holder === me ? 'No other upcoming weeks to trade for' : 'You have no upcoming call weeks to trade'}</option>`;
+    swapSel.disabled = !opts.length || past;
+    document.getElementById('callReqSwapBtn').disabled = !opts.length || past;
+
+    _updateCallReqCover();
+    _updateCallReqSwapNotes();
+    ['callReqScopeWeek', 'callReqScopeDay', 'callReqCoverPath', 'callReqCoverBtn', 'callReqNote']
+        .forEach(id => { document.getElementById(id).disabled = past; });
+    document.getElementById('callReqModalBack').classList.add('open');
+}
+
+// Coverage section for the chosen scope: ask (it's mine) or offer (it isn't).
+function _updateCallReqCover() {
+    const date = activeCallReqDate;
+    if (!date) return;
+    const me = loggedInPathId;
+    const scope = _callReqScope();
+    const cs = getCallCycleStart(date);
+    const from = scope === 'week' ? cs : date;
+    const to = scope === 'week' ? getCallCycleEnd(cs) : date;
+    const current = scope === 'week' ? _callWeekHolder(cs) : onCallIdForDay(date);
+    const mine = current === me;
+    const sel = document.getElementById('callReqCoverPath');
+    const btn = document.getElementById('callReqCoverBtn');
+    document.getElementById('callReqCoverLabel').textContent = mine ? 'Ask someone to cover' : 'Offer to cover';
+    if (mine) {
+        sel.hidden = false;
+        sel.innerHTML = pathologists.filter(p => p.id !== me)
+            .map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('');
+        btn.textContent = 'Request coverage';
+    } else {
+        sel.hidden = true;
+        sel.innerHTML = `<option value="${me}"></option>`;
+        btn.textContent = scope === 'week'
+            ? `Offer to take ${_shortPathName(current)}'s week`
+            : `Offer to take ${DOW[date.getDay()]} from ${_shortPathName(current)}`;
+    }
+    const newPid = parseInt(sel.value, 10);
+    const notes = [];
+    const pto = newPid ? _ptoDaysIn(newPid, from, to) : [];
+    if (pto.length) {
+        notes.push(['warn', `${newPid === me ? 'You are' : _shortPathName(newPid) + ' is'} on PTO ${_callPtoDayList(pto)} during this.`]);
+    }
+    if (!mine && scope === 'day' && onCallDayOverrides[fmt(date)] !== undefined) {
+        notes.push(['info', 'This day already has a single-day call change.']);
+    }
+    document.getElementById('callReqCoverNotes').innerHTML =
+        notes.map(([k, t]) => `<div class="pto-note pto-note-${k}">${escapeHtml(t)}</div>`).join('');
+}
+
+function _updateCallReqSwapNotes() {
+    const date = activeCallReqDate;
+    const el = document.getElementById('callReqSwapNotes');
+    const v = document.getElementById('callReqSwapWith').value;
+    if (!date || !v) { el.innerHTML = ''; return; }
+    const cs = getCallCycleStart(date);
+    const other = parseDate(v);
+    const pa = _callWeekHolder(cs), pb = _callWeekHolder(other);
+    const notes = [];
+    const aPto = _ptoDaysIn(pb, cs, getCallCycleEnd(cs));        // pb would take cs
+    const bPto = _ptoDaysIn(pa, other, getCallCycleEnd(other));  // pa would take other
+    if (aPto.length) notes.push(['warn', `${_shortPathName(pb)} is on PTO ${_callPtoDayList(aPto)} — during the week they'd take.`]);
+    if (bPto.length) notes.push(['warn', `${_shortPathName(pa)} is on PTO ${_callPtoDayList(bPto)} — during the week they'd take.`]);
+    notes.push(['info', `${_shortPathName(pb)} takes ${_callFmtWeek(cs)}; ${_shortPathName(pa)} takes ${_callFmtWeek(other)}.`]);
+    el.innerHTML = notes.map(([k, t]) => `<div class="pto-note pto-note-${k}">${escapeHtml(t)}</div>`).join('');
+}
+
+async function _callReqCover() {
+    const date = activeCallReqDate;
+    if (!date) return;
+    const scope = _callReqScope();
+    const newPid = parseInt(document.getElementById('callReqCoverPath').value, 10);
+    if (!newPid) return;
+    const ok = await submitRequest('oncall_change', { date: fmt(date), scope, newPathId: newPid },
+        document.getElementById('callReqNote').value);
+    if (ok) openCallRequestModal(date);
+}
+
+async function _callReqSwap() {
+    const date = activeCallReqDate;
+    const v = document.getElementById('callReqSwapWith').value;
+    if (!date || !v) return;
+    const cs = getCallCycleStart(date);
+    const other = parseDate(v);
+    // a = the requester's week, b = the other person's.
+    const mineIsCs = _callWeekHolder(cs) === loggedInPathId;
+    const aStart = mineIsCs ? cs : other, bStart = mineIsCs ? other : cs;
+    const ok = await submitRequest('oncall_swap', {
+        aStart: fmt(aStart), bStart: fmt(bStart),
+        aHolder: _callWeekHolder(aStart), bHolder: _callWeekHolder(bStart),
+    }, document.getElementById('callReqNote').value);
+    if (ok) openCallRequestModal(date);
+}
+
+document.getElementById('callReqDays').addEventListener('click', e => {
+    const b = e.target.closest('.call-day');
+    if (b) openCallRequestModal(parseDate(b.dataset.date));
+});
+document.getElementById('callReqPending').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-act="withdraw"]');
+    if (!b) return;
+    await _withdrawRequest(b.dataset.key);
+    if (activeCallReqDate) openCallRequestModal(activeCallReqDate);
+});
+document.querySelectorAll('input[name="callReqScope"]').forEach(r => r.addEventListener('change', _updateCallReqCover));
+document.getElementById('callReqCoverPath').addEventListener('change', _updateCallReqCover);
+document.getElementById('callReqSwapWith').addEventListener('change', _updateCallReqSwapNotes);
+document.getElementById('callReqCoverBtn').addEventListener('click', _callReqCover);
+document.getElementById('callReqSwapBtn').addEventListener('click', _callReqSwap);
+document.getElementById('callReqModalBack').addEventListener('click', e => {
+    if (e.target.id === 'callReqModalBack') e.target.classList.remove('open');
+});
+
+// Week-level call writes that swap two weeks' holders (an override only
+// where the new holder differs from the default rotation). Shared by the
+// oncall_swap request's approve and revoke.
+function _callSwapWrites(aStart, bStart) {
+    const pa = _callWeekHolder(aStart), pb = _callWeekHolder(bStart);
+    const writes = {};
+    writes['scheduler/onCallOverrides/' + fmt(aStart)] = defaultOnCallId(aStart) === pb ? null : pb;
+    writes['scheduler/onCallOverrides/' + fmt(bStart)] = defaultOnCallId(bStart) === pa ? null : pa;
+    return { writes, pa, pb };
+}
+
+function _logCallSwap(aStart, bStart, pa, pb, extra) {
+    const na = _shortPathName(pa), nb = _shortPathName(pb);
+    logChange(Object.assign({
+        kind: 'oncall', type: 'oncall_swap',
+        forPathId: pa, otherPathId: pb,
+        date: fmt(aStart), otherDate: fmt(bStart), scope: 'week',
+        summary: `Call weeks swapped — ${na} ↔ ${nb}`,
+        details: `${_callFmtWeek(aStart)}: ${na} → ${nb}  ·  ${_callFmtWeek(bStart)}: ${nb} → ${na}`,
+    }, extra || {}));
 }
 
 // ────────────── ON-CALL OVERRIDE MODAL ──────────────
@@ -11400,7 +12469,7 @@ function downloadIcs(filename, content) {
 // ── Wire up the export modal ──
 document.getElementById('exportBtn').addEventListener('click', () => {
     if (!isAdmin()) {
-        showToast('Only the admin can export the schedule.', { type: 'error' });
+        showToast('Only the director can export the schedule.', { type: 'error' });
         return;
     }
     // Populate pathologist dropdown
@@ -11655,6 +12724,8 @@ document.getElementById('exportDownload').addEventListener('click', () => {
     // their page-shell; settings is the full settings page.
     function setPage(page) {
         if (isLakeForest() && page === 'tracking') page = 'schedule'; // LF guest: no tracking page
+        // Kathleen / gross room / histology: no Requests page (once signed in).
+        if (page === 'requests' && loggedInPathId !== null && !canSeeRequestsPage()) page = 'schedule';
         if (!VALID_PAGES.includes(page)) page = 'schedule';
         currentPage = page;
 

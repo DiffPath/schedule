@@ -1911,7 +1911,7 @@ function _chgSummaryRecompute(processed, fromDateKey, dayBeforeProcessed, firstK
 // ── Wire up the Recompute Schedule modal ──
 document.getElementById('recomputeBtn').addEventListener('click', () => {
     if (!isAdmin()) {
-        showToast('Only the admin can recompute the schedule.', { type: 'error' });
+        showToast('Only the director can recompute the schedule.', { type: 'error' });
         return;
     }
     triggerManualRecompute();

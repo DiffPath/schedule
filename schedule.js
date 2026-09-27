@@ -435,6 +435,14 @@ if (!VALID_DEFAULT_PAGES.includes(settings.defaultPage)) settings.defaultPage = 
 if (!VALID_LF_DEFAULT_VIEWS.includes(settings.lfDefaultView)) settings.lfDefaultView = 'year';
 if (!VALID_HOURLY_SHOWS.includes(settings.hourlyShows)) settings.hourlyShows = 'both';
 
+// What the hourly grid shows for the signed-in account. The setting lives
+// in this browser's storage, so it would otherwise carry over to whoever
+// signs in next — but only pathologists have meetings (and the switch), so
+// for everyone else (gross room, Kathleen, guests) it's always procedures.
+function hourlyShowsNow() {
+    return isPathologistAccount() ? settings.hourlyShows : 'procedures';
+}
+
 // Seed active view from the saved default (fallback 'week'). Mobile always
 // starts in Day view (only mobile view with the procedure schedule) — not
 // persisted, so a phone session never overwrites a desktop default.
@@ -6867,8 +6875,8 @@ function renderWeek() {
 // enabled to add a procedure; existing procedures render as removable pills.
 function renderHourGrid(date) {
     const dayKey = fmt(date);
-    const showProcs = settings.hourlyShows !== 'meetings';
-    const showMeetings = settings.hourlyShows !== 'procedures';
+    const showProcs = hourlyShowsNow() !== 'meetings';
+    const showMeetings = hourlyShowsNow() !== 'procedures';
     const procs = showProcs ? getProceduresForDay(dayKey) : [];
     // The signed-in presenter's own conferences (see getConferencesForDay),
     // each merged with its Outlook meeting when there is one, so a tumor
@@ -7280,7 +7288,7 @@ function attachHourGridHandlers() {
             if (e.target.closest('.proc-item') || e.target.closest('.conf-item')
                 || e.target.closest('.meeting-item')) return;
             // Procedures hidden (meetings-only) → nowhere to show a new one.
-            if (settings.hourlyShows === 'meetings') return;
+            if (hourlyShowsNow() === 'meetings') return;
             const dayKey = row.dataset.day;
             const timeKey = row.dataset.time;
             if (!dayKey || !timeKey) return;
@@ -8065,6 +8073,14 @@ function renderYear() {
 
     // Admin in Call mode: click opens the call-week modal, drag swaps weeks.
     const callEdit = yearMode === 'call' && isAdmin() && !isLakeForest();
+    // Call/PTO overlaps get a red cell (like the purple holiday cell), in
+    // both modes, from the same conflict list as the Conflicts page:
+    // accepted ones are quieter. The director sees all; a pathologist sees
+    // their own; a single-pathologist filter narrows it to that person.
+    const yFilterId = currentPathFilter === 'all' ? null : parseInt(currentPathFilter, 10);
+    const yearCallPto = date => (isLakeForest() || !loggedInPathId) ? [] : callPtoConflictsForDay(date)
+        .filter(c => (isAdmin() || c.pathId === loggedInPathId) && (yFilterId === null || c.pathId === yFilterId));
+
     // PTO mode: admin and pathologists get the PTO day panel (no dragging);
     // Call mode: pathologists get the call request panel.
     const ptoEdit = yearMode === 'pto' && !isLakeForest() && (isAdmin() || isPathologistAccount());
@@ -8104,6 +8120,8 @@ function renderYear() {
             if (td) classes.push('today');
             const holiday = inMonth ? getFederalHoliday(date) : null;
             if (holiday) classes.push('holiday');
+            const callPto = inMonth ? yearCallPto(date) : [];
+            if (callPto.length) classes.push(callPto.some(c => !c.accepted) ? 'callpto' : 'callpto-accepted');
             if (content) {
                 classes.push('has-data');
                 if (content.multi) classes.push('multi');
@@ -8112,9 +8130,11 @@ function renderYear() {
 
             const dragTip = callEdit && content && classes.includes('call-draggable') ? ' · drag onto another week to swap' : '';
             if ((ptoEdit || callReq) && inMonth) classes.push('pto-editable');
-            const titleAttr = (content || holiday)
-                ? ` title="${holiday ? holiday + (content ? ' · ' : '') : ''}${content ? content.title : ''}${dragTip}"`
+            const cpTip = callPto.length
+                ? callPto.map(c => '⚠ ' + c.detail + (c.accepted ? ' (accepted)' : '')).join(' · ')
                 : '';
+            const titleText = [holiday, content ? content.title + dragTip : '', cpTip].filter(Boolean).join(' · ');
+            const titleAttr = titleText ? ` title="${escapeHtml(titleText)}"` : '';
             const squareStyle = content ? ` style="background:${content.background}"` : '';
             const labelHtml = content ? `<span class="md-label">${content.label}</span>` : '';
             const inner = `<span class="md-num">${date.getDate()}</span><span class="md-square"${squareStyle}>${labelHtml}</span>`;

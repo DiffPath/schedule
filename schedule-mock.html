@@ -53,7 +53,6 @@
             </div>
 
             <nav class="page-nav" id="pageNav">
-                <div class="nav-section-label">Pages</div>
                 <button class="nav-item active" data-page="schedule">
                     <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="2" y="3" width="12" height="11" rx="1.5"/>
@@ -179,10 +178,6 @@
                 </button>
 
                 <div class="toolbar-left">
-                    <div class="path-tabs" id="pathTabs">
-                        <button class="path-tab active" data-filter="all"><span class="tab-full">Group</span><span class="tab-short">Group</span></button>
-                        <button class="path-tab" data-filter="me" id="pathTabMe" style="display:none;"><span class="tab-full">Individual</span><span class="tab-short">Individual</span></button>
-                    </div>
                     <!-- Hourly grid content (pathologists, Day/Week only), mirroring Settings → Hourly schedule.
                          fitHourlyControl() picks tabs (full or short labels) or the compact select, whichever fits beside the centered date. -->
                     <div class="path-tabs hourly-tabs" id="hourlyTabs" role="radiogroup" aria-label="Hourly schedule shows" style="display:none;">
@@ -205,7 +200,7 @@
 
                 <div class="toolbar-center">
                     <button class="nav-btn" id="prevBtn" title="Previous">‹</button>
-                    <button class="current-period" id="currentPeriod" type="button" title="Tap to jump to today">—</button>
+                    <button class="current-period" id="currentPeriod" type="button" title="Go to a date" aria-haspopup="dialog" aria-expanded="false">—</button>
                     <button class="nav-btn" id="nextBtn" title="Next">›</button>
                 </div>
 
@@ -220,19 +215,13 @@
 
                 </div>
 
-                <!-- Mobile-only compact controls: single-row toolbar [hamburger | date | path ▾ | view ▾]; arrows replaced by swipe. Selects mirror the desktop tab state (setPathFilter() + the view-tabs handler). Hidden on desktop. -->
+                <!-- Mobile-only compact controls: single-row toolbar [hamburger | date | hourly ▾ | view ▾]; arrows replaced by swipe. Selects mirror the desktop tab state (setPathFilter() + the view-tabs handler). Hidden on desktop. -->
                 <div class="mobile-toolbar-controls" id="mobileToolbarControls">
                     <div class="mobile-select-wrap" id="mobileHourlySelectWrap" style="display:none;">
                         <select id="mobileHourlySelect" class="mobile-toolbar-select" aria-label="Hourly schedule shows">
                             <option value="both">Both</option>
                             <option value="procedures">Proc</option>
                             <option value="meetings">Mtg</option>
-                        </select>
-                    </div>
-                    <div class="mobile-select-wrap" id="mobilePathSelectWrap">
-                        <select id="mobilePathSelect" class="mobile-toolbar-select" aria-label="Filter">
-                            <option value="all">Group</option>
-                            <option value="me">Individual</option>
                         </select>
                     </div>
                     <div class="mobile-select-wrap">
@@ -572,6 +561,16 @@
                                 <button class="seg-btn" type="button" role="radio" data-value="meetings">Meetings</button>
                             </div>
                         </div>
+                        <div class="settings-row settings-row-stack" id="defaultFilterRow">
+                            <span class="settings-row-label">
+                                <span class="settings-row-name">Pathologists shown</span>
+                                <span class="settings-row-desc">The whole group, or just your own schedule. Applies now and when the app opens.</span>
+                            </span>
+                            <div class="settings-segmented" id="defaultFilterSeg" role="radiogroup" aria-label="Pathologists shown">
+                                <button class="seg-btn" type="button" role="radio" data-value="all">Group</button>
+                                <button class="seg-btn" type="button" role="radio" data-value="me">Individual</button>
+                            </div>
+                        </div>
                     </section>
 
                     <section class="settings-section">
@@ -597,16 +596,6 @@
                                 <button class="seg-btn" type="button" role="radio" data-value="week">Week</button>
                                 <button class="seg-btn" type="button" role="radio" data-value="month">Month</button>
                                 <button class="seg-btn" type="button" role="radio" data-value="year">Year</button>
-                            </div>
-                        </div>
-                        <div class="settings-row settings-row-stack" id="defaultFilterRow">
-                            <span class="settings-row-label">
-                                <span class="settings-row-name">Default pathologists</span>
-                                <span class="settings-row-desc">Whose schedule to show on launch.</span>
-                            </span>
-                            <div class="settings-segmented" id="defaultFilterSeg" role="radiogroup" aria-label="Default pathologists">
-                                <button class="seg-btn" type="button" role="radio" data-value="all">Group</button>
-                                <button class="seg-btn" type="button" role="radio" data-value="me">Individual</button>
                             </div>
                         </div>
                     </section>
@@ -1229,6 +1218,23 @@
                 <button id="consultDelete" class="danger" style="display:none;" type="button">Delete</button>
                 <button id="consultCancel" type="button">Cancel</button>
                 <button id="consultSave" class="primary" type="button">Add consult</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reason panel (askReason in schedule.js): deny / revoke a request with
+         an optional note for the requester. Last in the DOM so it stacks
+         above the Requests panel it's opened from. -->
+    <div class="modal-back" id="reasonModalBack">
+        <div class="modal">
+            <h3 id="reasonModalTitle">Deny request</h3>
+            <div class="sub" id="reasonModalSub"></div>
+            <label for="reasonModalInput">Reason <span class="label-optional">(optional)</span></label>
+            <textarea id="reasonModalInput" rows="3" maxlength="500"></textarea>
+            <div class="reason-hint">The requester sees this exactly as you type it.</div>
+            <div class="modal-actions">
+                <button id="reasonModalCancel" type="button">Cancel</button>
+                <button id="reasonModalConfirm" class="danger" type="button">Deny request</button>
             </div>
         </div>
     </div>

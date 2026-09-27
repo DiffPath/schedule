@@ -367,16 +367,10 @@ function canRequestScheduleChange() {
     return isPathologistAccount();
 }
 
-// Update the path-tab toggle to reflect val ('all' or a stringified pathId)
+// Whose schedule is shown: 'all' or a stringified pathId. Chosen in
+// Settings → Pathologists shown (there's no toolbar toggle).
 function setPathFilter(val) {
     currentPathFilter = val;
-    document.querySelectorAll('.path-tab').forEach(btn => {
-        const wantsAll = btn.dataset.filter === 'all';
-        btn.classList.toggle('active', wantsAll ? val === 'all' : val !== 'all');
-    });
-    // Mirror to the mobile select ('all'/'me'; any non-'all' filter shows as 'me').
-    const mobileSel = document.getElementById('mobilePathSelect');
-    if (mobileSel) mobileSel.value = (val === 'all') ? 'all' : 'me';
 }
 let view;                             // 'day' | 'week' | 'month' | 'year' — assigned after settings load below
 let today;
@@ -1580,22 +1574,10 @@ function checkReady() {
     }
 }
 
-// Signed in: show "Me", default to own id (or keep a valid prior choice).
-// Signed out: hide "Me", force "All".
+// Signed-in pathologist: their saved choice (or keep a valid prior one).
+// Everyone else — gross room, manager, guests, signed out — sees all.
 function populatePathFilter() {
-    const meTab = document.getElementById('pathTabMe');
-    if (!meTab) return;
-
-    // Without "Me" the mobile select has one option — hide it entirely.
-    const mobileSel = document.getElementById('mobilePathSelect');
-    const mobileWrap = document.getElementById('mobilePathSelectWrap');
-    const mobileMeOpt = mobileSel ? mobileSel.querySelector('option[value="me"]') : null;
-
-    // Gross room / manager / histology: always show all pathologists with no option to switch
     if (isGrossRoom() || isManager() || isReadOnlyGuest()) {
-        meTab.style.display = 'none';
-        if (mobileMeOpt) mobileMeOpt.hidden = true;
-        if (mobileWrap) mobileWrap.style.display = 'none';
         setPathFilter('all');
         return;
     }
@@ -1605,17 +1587,11 @@ function populatePathFilter() {
         : null;
 
     if (me) {
-        meTab.style.display = '';
-        if (mobileMeOpt) mobileMeOpt.hidden = false;
-        if (mobileWrap) mobileWrap.style.display = '';
         const validVals = new Set(['all', String(me.id)]);
         const fallback = settings.defaultPathFilter === 'all' ? 'all' : String(me.id);
         const next = validVals.has(currentPathFilter) ? currentPathFilter : fallback;
         setPathFilter(next);
     } else {
-        meTab.style.display = 'none';
-        if (mobileMeOpt) mobileMeOpt.hidden = true;
-        if (mobileWrap) mobileWrap.style.display = 'none';
         setPathFilter('all');
     }
 }
@@ -3454,11 +3430,66 @@ async function approveRequest(reqKey, choice) {
     }
 }
 
+// ── Reason panel ── the app's own panel in place of the browser prompt().
+// Resolves with the typed text ('' when left blank), or null on Cancel / ×.
+let _reasonResolve = null;
+
+function askReason({ title, sub, confirmLabel }) {
+    const back = document.getElementById('reasonModalBack');
+    const input = document.getElementById('reasonModalInput');
+    document.getElementById('reasonModalTitle').textContent = title;
+    document.getElementById('reasonModalSub').textContent = sub || '';
+    document.getElementById('reasonModalConfirm').textContent = confirmLabel;
+    input.value = '';
+    if (_reasonResolve) _reasonResolve(null);   // a stale panel counts as cancelled
+    back.classList.add('open');
+    setTimeout(() => input.focus(), 0);
+    return new Promise(resolve => { _reasonResolve = resolve; });
+}
+
+function _closeReason(value) {
+    document.getElementById('reasonModalBack').classList.remove('open');
+    const resolve = _reasonResolve;
+    _reasonResolve = null;
+    if (resolve) resolve(value);
+}
+
+document.getElementById('reasonModalCancel').addEventListener('click', () => _closeReason(null));
+document.getElementById('reasonModalConfirm').addEventListener('click', () => {
+    _closeReason(document.getElementById('reasonModalInput').value);
+});
+document.getElementById('reasonModalBack').addEventListener('click', e => {
+    if (e.target.id === 'reasonModalBack') _closeReason(null);
+});
+document.getElementById('reasonModalInput').addEventListener('keydown', e => {
+    // Enter confirms; Shift+Enter adds a line.
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        document.getElementById('reasonModalConfirm').click();
+    } else if (e.key === 'Escape') {
+        e.stopPropagation();
+        _closeReason(null);
+    }
+});
+
+// The request, as plain text, for the reason panel's subtitle
+// ("Rehman → Add PTO · Requesting PTO for Oct 7 – 9, 2026.").
+function _reasonSubFor(req) {
+    if (!req) return '';
+    const d = describeRequest(req);
+    const tmp = document.createElement('div');
+    tmp.innerHTML = d.body || '';
+    return [d.title, tmp.textContent.trim()].filter(Boolean).join(' · ');
+}
+
 async function denyRequest(reqKey) {
     if (!isAdmin()) { showToast('Only the admin can deny.', { type: 'error' }); return; }
-    const reason = prompt('Optional reason for denial (visible to requester):', '');
-    // prompt() returning null = user clicked Cancel — bail out
-    if (reason === null) return;
+    const reason = await askReason({
+        title: 'Deny request',
+        sub: _reasonSubFor(requests[reqKey]),
+        confirmLabel: 'Deny request',
+    });
+    if (reason === null) return;   // cancelled
 
     try {
         await db.ref('scheduler/requests/' + reqKey).update({
@@ -3481,8 +3512,12 @@ async function revokeApproval(reqKey) {
     const req = requests[reqKey];
     if (!req || req.status !== 'approved') return;
 
-    const reason = prompt('Optional reason for revoking this approval (visible to requester):', '');
-    if (reason === null) return;   // user clicked Cancel — bail out
+    const reason = await askReason({
+        title: 'Revoke approval',
+        sub: _reasonSubFor(req),
+        confirmLabel: 'Revoke approval',
+    });
+    if (reason === null) return;   // cancelled
 
     let rcFromDate = null;
     let rcDayBeforeFix = false;
@@ -6661,11 +6696,14 @@ function renderHourGrid(date) {
     const showProcs = settings.hourlyShows !== 'meetings';
     const showMeetings = settings.hourlyShows !== 'procedures';
     const procs = showProcs ? getProceduresForDay(dayKey) : [];
-    const meetings = showMeetings ? getMeetingsForDay(dayKey) : [];
-    // The signed-in presenter's own conferences for the day (see
-    // getConferencesForDay); they share the hourly grid but render as a
-    // distinct banner.
-    const confs = getConferencesForDay(dayKey);
+    // The signed-in presenter's own conferences (see getConferencesForDay),
+    // each merged with its Outlook meeting when there is one, so a tumor
+    // board shows once, highlighted (pairConferencesWithMeetings).
+    const paired = pairConferencesWithMeetings(
+        getConferencesForDay(dayKey),
+        showMeetings ? getMeetingsForDay(dayKey) : []);
+    const confs = paired.confs;
+    const meetings = paired.meetings;
 
     // Bucket procedures into half-hour slots (8:15 → 8:00, 8:45 → 8:30):
     // fixed grid, arbitrary start times.
@@ -6677,11 +6715,11 @@ function renderHourGrid(date) {
         bySlot[slotKey].push(p);
     });
 
-    // Conferences bucket the same way. Tagged so the slot renderer knows to
-    // draw a conference pill rather than a procedure pill.
+    // Conferences bucket by their Outlook start when paired (the calendar's
+    // time is the live one), else by the logged time.
     const confBySlot = {};
     confs.forEach(c => {
-        const slotKey = slotKeyForTime(c.time);
+        const slotKey = clampedSlotKeyForTime(c.meeting ? c.meeting.start : c.time);
         if (!slotKey) return; // outside the visible window
         if (!confBySlot[slotKey]) confBySlot[slotKey] = [];
         confBySlot[slotKey].push(c);
@@ -6710,11 +6748,17 @@ function renderHourGrid(date) {
             // Conference pills render first so they sit at the front of the
             // slot and catch the eye before the procedure pills.
             const confItems = (confBySlot[timeKey] || []).map(c => {
-                const lbl = `${formatTime12Short(c.time)} ${c.label}`;
-                const tipParts = [c.label, formatTime12(c.time)];
+                const m = c.meeting;
+                const start = m ? m.start : c.time;
+                const lbl = `${formatTime12Short(start)} ${m ? m.title : c.label}`;
+                const tipParts = [
+                    'Your conference: ' + c.label,
+                    m ? `${formatTime12(m.start)} – ${formatTime12(m.end)}` : formatTime12(c.time),
+                ];
+                if (m) tipParts.push('Outlook: ' + m.title);
                 if (c.note) tipParts.push(c.note);
                 const tooltip = tipParts.join(' — ');
-                return `<span class="conf-item conf-type-${escapeHtml(c.type)}" data-day="${dayKey}" data-conf-key="${escapeHtml(c.key)}" tabindex="0" title="${escapeHtml(tooltip)}"><span class="conf-item-dot" aria-hidden="true"></span>${escapeHtml(lbl)}</span>`;
+                return `<span class="conf-item conf-type-${escapeHtml(c.type)}" data-day="${dayKey}" data-conf-key="${escapeHtml(c.key)}" tabindex="0" title="${escapeHtml(tooltip)}"><span class="conf-item-icon" aria-hidden="true"></span>${escapeHtml(lbl)}</span>`;
             }).join('');
             const items = (bySlot[timeKey] || []).map(p => {
                 // Pill label always prefixes the exact start time
@@ -6793,22 +6837,12 @@ function getProceduresForDay(dayKey) {
 }
 
 // The signed-in pathologist's Outlook meetings for the day, sorted by start
-// (all-day first). A meeting that is really one of their logged conferences
-// (conference-like title, starts within 30 min of it) is dropped so the
-// conference pill isn't duplicated.
-const MEETING_CONF_TITLE_RE = /tumou?r\s*board|\bTB\b|\bconf(erence)?\b|\bCDH\b|morning\s*report/i;
-const MEETING_CONF_MATCH_MIN = 30;
-
+// (all-day first).
 function getMeetingsForDay(dayKey) {
     const raw = outlookMeetings[dayKey];
     if (!raw) return [];
-    const confMins = getConferencesForDay(dayKey)
-        .filter(c => isValidClockTime(c.time)).map(c => clockMinutes(c.time));
-    const isConference = m => !m.allDay && MEETING_CONF_TITLE_RE.test(m.title)
-        && confMins.some(c => Math.abs(c - clockMinutes(m.start)) <= MEETING_CONF_MATCH_MIN);
     return Object.values(raw)
         .filter(m => m && m.title && (m.allDay || isValidClockTime(m.start)))
-        .filter(m => !isConference(m))
         .map(m => ({
             title: String(m.title),
             allDay: !!m.allDay,
@@ -6817,6 +6851,76 @@ function getMeetingsForDay(dayKey) {
         }))
         .sort((a, b) => (a.allDay ? 0 : 1) - (b.allDay ? 0 : 1)
             || String(a.start).localeCompare(String(b.start)));
+}
+
+// ── Conferences ⇄ Outlook meetings ──
+// A conference the pathologist is assigned (logged on the Tracking page) is
+// usually also a meeting on their Outlook calendar. Show it ONCE: pair each
+// conference with at most one meeting and render the pair as the
+// highlighted conference pill, using Outlook's title and times. Preference:
+// a title naming the conference's type within an hour, else any
+// conference-like title within 30 min, nearest start first. A meeting is
+// used by one conference at most; unpaired meetings stay ordinary meetings.
+const MEETING_CONF_TITLE_RE = /tumou?r\s*board|\bTB\b|\bconf(erence)?\b|\bCDH\b|morning\s*report/i;
+const CONF_TYPE_TITLE_RE = {
+    breast: /breast/i,
+    lung: /lung|thoracic/i,
+    thoracic: /thoracic|lung/i,
+    cdh: /\bCDH\b|morning/i,
+};
+const CDH_SUBTYPE_TITLE_RE = {
+    GI: /\bGI\b|gastro/i,
+    Heme: /\bheme|hemato/i,
+    Thoracic: /thoracic|lung/i,
+    Neuro: /neuro/i,
+};
+const CONF_MATCH_TYPED_MIN = 60;
+const CONF_MATCH_GENERIC_MIN = 30;
+
+// Does this meeting title name the conference's own type?
+function _titleNamesConference(title, c) {
+    if (c.type === 'cdh' && c.subtype && CDH_SUBTYPE_TITLE_RE[c.subtype]
+        && CDH_SUBTYPE_TITLE_RE[c.subtype].test(title)) return true;
+    if (c.type === 'other' && c.otherTitle) {
+        const words = String(c.otherTitle).toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+        const t = title.toLowerCase();
+        if (words.some(w => t.includes(w))) return true;
+    }
+    const re = CONF_TYPE_TITLE_RE[c.type];
+    return !!(re && re.test(title));
+}
+
+// Does it name a DIFFERENT conference type (a "Breast Conference" is never
+// someone's Lung conference, however close the times)?
+function _titleNamesOtherConference(title, c) {
+    const own = CONF_TYPE_TITLE_RE[c.type];
+    return Object.entries(CONF_TYPE_TITLE_RE).some(([type, re]) =>
+        type !== c.type && type !== 'cdh' && re.test(title) && !(own && own.test(title)));
+}
+
+// { confs: [conference + meeting|null], meetings: [unpaired meetings] }
+function pairConferencesWithMeetings(confs, meetings) {
+    const used = new Set();
+    const paired = confs.map(c => {
+        if (!isValidClockTime(c.time)) return Object.assign({}, c, { meeting: null });
+        const cm = clockMinutes(c.time);
+        let best = null;
+        meetings.forEach((m, i) => {
+            if (used.has(i) || m.allDay) return;
+            const diff = Math.abs(clockMinutes(m.start) - cm);
+            const typed = _titleNamesConference(m.title, c);
+            const ok = typed ? diff <= CONF_MATCH_TYPED_MIN
+                : (MEETING_CONF_TITLE_RE.test(m.title) && diff <= CONF_MATCH_GENERIC_MIN
+                    && !_titleNamesOtherConference(m.title, c));
+            if (!ok) return;
+            // Typed matches beat generic ones; then the nearest start.
+            const score = (typed ? 0 : 1000) + diff;
+            if (!best || score < best.score) best = { i, score };
+        });
+        if (best) used.add(best.i);
+        return Object.assign({}, c, { meeting: best ? meetings[best.i] : null });
+    });
+    return { confs: paired, meetings: meetings.filter((m, i) => !used.has(i)) };
 }
 
 function clockMinutes(t) {
@@ -7387,21 +7491,16 @@ async function deleteProcedure() {
 // Wire up the modal once. Inputs delegate from the modal back so the
 // dynamically-rendered procedure-type buttons work without re-binding.
 
-// ── Restructure procedure modal HTML ── richer markup the new CSS
-// expects.
+// ── Procedure modal HTML ── the shared panel layout (title, date, labelled
+// sections, bottom bar) around this panel's own widgets.
 (function initProcedureModalStructure() {
     const back = document.getElementById('procModalBack');
     if (!back) return;
     const modal = back.querySelector('.modal');
     if (!modal) return;
     modal.innerHTML = `
-<div class="modal-inner">
-  <div class="proc-header">
-    <div class="proc-header-text">
-      <h3 id="procModalTitle">Add Procedure</h3>
-    </div>
-    <p class="sub proc-header-date" id="procModalSub"></p>
-  </div>
+  <h3 id="procModalTitle">Add Procedure</h3>
+  <div class="sub" id="procModalSub"></div>
 
   <div class="proc-section-label">Time</div>
   <div class="proc-time-row">
@@ -7427,10 +7526,10 @@ async function deleteProcedure() {
 
   <div class="modal-actions">
     <button id="procDelete" class="danger" type="button" style="display:none;">Delete</button>
+    <span class="modal-actions-spacer"></span>
     <button id="procCancel">Cancel</button>
     <button id="procConfirm" class="primary" disabled>Add Procedure</button>
-  </div>
-</div>`;
+  </div>`;
 })();
 
 // Re-enable the confirm button when the user edits the time input. Delegated
@@ -10556,14 +10655,6 @@ document.getElementById('todayBtn').addEventListener('click', () => {
     renderMain();
 });
 
-document.getElementById('pathTabs').addEventListener('click', e => {
-    const btn = e.target.closest('.path-tab');
-    if (!btn) return;
-    const filter = btn.dataset.filter === 'me' ? String(loggedInPathId) : 'all';
-    setPathFilter(filter);
-    renderMain();
-});
-
 // ── Mobile dropdown handlers ── the selects delegate to the hidden tab
 // buttons via .click() so the canonical logic runs from one code path.
 const mobileViewSel = document.getElementById('mobileViewSelect');
@@ -10575,18 +10666,6 @@ if (mobileViewSel) {
     });
     // Initial sync — pick up whatever 'view' the page booted with.
     mobileViewSel.value = view;
-}
-
-const mobilePathSel = document.getElementById('mobilePathSelect');
-if (mobilePathSel) {
-    mobilePathSel.addEventListener('change', e => {
-        const want = e.target.value; // 'all' | 'me'
-        const filter = want === 'me' && loggedInPathId !== null
-            ? String(loggedInPathId)
-            : 'all';
-        setPathFilter(filter);
-        renderMain();
-    });
 }
 
 // ── Swipe navigation (mobile only) ── prev/next periods are
@@ -10972,12 +11051,123 @@ window.addEventListener('resize', () => {
     });
 })();
 
-// Tap-to-today on the period label: desktop only when off-today; mobile
-// always (no dedicated Today button).
-document.getElementById('currentPeriod').addEventListener('click', () => {
-    cursor = new Date(today);
+// ────────────── MINI CALENDAR (period label) ──────────────
+// Clicking the date at the top opens a small month calendar for jumping
+// anywhere: ‹ › step months, a date click moves the schedule there (the
+// current view keeps its type — week view shows that date's week, etc.),
+// and Today returns to today. Built once, positioned under the label.
+let _miniCalMonth = null;   // first of the month the picker is showing
+
+function miniCalEl() {
+    let el = document.getElementById('miniCal');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'miniCal';
+    el.className = 'mini-cal';
+    el.setAttribute('role', 'dialog');
+    el.setAttribute('aria-label', 'Go to date');
+    el.hidden = true;
+    document.body.appendChild(el);
+    el.addEventListener('click', e => {
+        e.stopPropagation();
+        const nav = e.target.closest('[data-mc-nav]');
+        if (nav) {
+            _miniCalMonth = new Date(_miniCalMonth.getFullYear(), _miniCalMonth.getMonth() + Number(nav.dataset.mcNav), 1);
+            renderMiniCal();
+            return;
+        }
+        const day = e.target.closest('[data-mc-date]');
+        if (day) { goToDate(parseDate(day.dataset.mcDate)); return; }
+        if (e.target.closest('[data-mc-today]')) goToDate(new Date(today));
+    });
+    return el;
+}
+
+function goToDate(d) {
+    d.setHours(0, 0, 0, 0);
+    cursor = d;
+    closeMiniCal();
     renderMain();
+}
+
+// The dates the schedule is showing, so the picker can shade them.
+function miniCalShownRange() {
+    if (view === 'day') return [cursor, cursor];
+    if (view === 'week') { const s = startOfWeek(cursor); return [s, addDays(s, 6)]; }
+    return null; // month/year: the header month is enough
+}
+
+function renderMiniCal() {
+    const el = miniCalEl();
+    const first = _miniCalMonth;
+    const gridStart = addDays(first, -first.getDay());
+    const range = miniCalShownRange();
+    const inRange = d => range && fmt(d) >= fmt(range[0]) && fmt(d) <= fmt(range[1]);
+    let cells = '';
+    for (let i = 0; i < 42; i++) {
+        const d = addDays(gridStart, i);
+        const cls = ['mc-day'];
+        if (d.getMonth() !== first.getMonth()) cls.push('mc-out');
+        if (sameDay(d, today)) cls.push('mc-today');
+        if (inRange(d)) cls.push('mc-shown');
+        if (range && sameDay(d, range[0])) cls.push('mc-shown-start');
+        if (range && sameDay(d, range[1])) cls.push('mc-shown-end');
+        cells += `<button type="button" class="${cls.join(' ')}" data-mc-date="${fmt(d)}" aria-label="${DOW[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}">${d.getDate()}</button>`;
+    }
+    el.innerHTML = `
+      <div class="mc-head">
+        <button type="button" class="mc-nav" data-mc-nav="-1" aria-label="Previous month">‹</button>
+        <span class="mc-title">${MONTHS[first.getMonth()]} <span class="year">${first.getFullYear()}</span></span>
+        <button type="button" class="mc-nav" data-mc-nav="1" aria-label="Next month">›</button>
+      </div>
+      <div class="mc-grid">
+        ${DOW_MINI.map(x => `<span class="mc-dow">${x}</span>`).join('')}
+        ${cells}
+      </div>
+      <div class="mc-foot"><button type="button" class="mc-today-btn" data-mc-today>Today</button></div>`;
+}
+
+// Fixed-position under the label, kept on screen (phones included).
+function positionMiniCal() {
+    const el = document.getElementById('miniCal');
+    const label = document.getElementById('currentPeriod');
+    if (!el || el.hidden || !label) return;
+    const r = label.getBoundingClientRect();
+    const w = el.offsetWidth;
+    const left = Math.min(Math.max(8, r.left + r.width / 2 - w / 2), window.innerWidth - w - 8);
+    el.style.left = left + 'px';
+    el.style.top = (r.bottom + 6) + 'px';
+}
+
+function openMiniCal() {
+    _miniCalMonth = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    renderMiniCal();
+    const el = miniCalEl();
+    el.hidden = false;
+    positionMiniCal();
+    document.getElementById('currentPeriod').setAttribute('aria-expanded', 'true');
+}
+
+function closeMiniCal() {
+    const el = document.getElementById('miniCal');
+    if (el) el.hidden = true;
+    document.getElementById('currentPeriod').setAttribute('aria-expanded', 'false');
+}
+
+document.getElementById('currentPeriod').addEventListener('click', e => {
+    e.stopPropagation();
+    const el = document.getElementById('miniCal');
+    if (el && !el.hidden) closeMiniCal();
+    else openMiniCal();
 });
+document.addEventListener('click', e => {
+    const el = document.getElementById('miniCal');
+    if (el && !el.hidden && !el.contains(e.target)) closeMiniCal();
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeMiniCal();
+});
+window.addEventListener('resize', positionMiniCal);
 
 // Keyboard shortcuts
 document.addEventListener('keydown', e => {
@@ -11402,8 +11592,8 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         });
     }
 
-    // Default-pathologists segmented control. Same caveat: this is just the
-    // launch default; the active filter is unchanged by toggling it here.
+    // Pathologists-shown control: the only Group/Individual switch (the
+    // toolbar has none), so it applies now as well as on launch.
     const defaultFilterSeg = document.getElementById('defaultFilterSeg');
     if (defaultFilterSeg) {
         defaultFilterSeg.addEventListener('click', e => {
@@ -11415,6 +11605,10 @@ document.getElementById('exportDownload').addEventListener('click', () => {
             settings.defaultPathFilter = v;
             saveSettings();
             applySettings();
+            if (typeof loggedInPathId === 'number') {
+                setPathFilter(v === 'all' ? 'all' : String(loggedInPathId));
+                renderMain();
+            }
         });
     }
 
@@ -11677,3 +11871,49 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         init();
     }
 })();
+// ────────────── PANEL CLOSE (×) ──────────────
+// Every panel gets the day editor's × in its top-right corner. It clicks the
+// panel's own Cancel/Close button, so each panel's close logic (resetting
+// state, clearing selections) runs unchanged; that bar button is then hidden
+// as redundant, unless it's the only button showing in the bar.
+const MODAL_DISMISS_RE = /^(cancel|close)$/i;
+
+function modalDismissButton(modal) {
+    return [...modal.querySelectorAll('.modal-actions button')]
+        .find(b => MODAL_DISMISS_RE.test(b.textContent.trim())) || null;
+}
+
+function ensureModalCloseButton(back) {
+    const modal = back.querySelector(':scope > .modal');
+    if (!modal) return;
+    if (!modal.querySelector(':scope > .modal-close-x')) {
+        const x = document.createElement('button');
+        x.type = 'button';
+        x.className = 'modal-close-x';
+        x.setAttribute('aria-label', 'Close');
+        x.title = 'Close';
+        x.innerHTML = '&times;';
+        x.addEventListener('click', () => {
+            const d = modalDismissButton(modal);
+            if (d) d.click();
+            else back.classList.remove('open');
+        });
+        modal.insertBefore(x, modal.firstChild);
+    }
+    const d = modalDismissButton(modal);
+    if (d) {
+        d.classList.remove('modal-dismiss-hidden');
+        const others = [...modal.querySelectorAll('.modal-actions button')]
+            .filter(b => b !== d && b.offsetParent !== null);
+        d.classList.toggle('modal-dismiss-hidden', others.length > 0);
+    }
+}
+
+document.querySelectorAll('.modal-back').forEach(ensureModalCloseButton);
+// Re-check on open: which bar buttons show depends on the panel's mode.
+new MutationObserver(muts => muts.forEach(m => {
+    const t = m.target;
+    if (t.classList && t.classList.contains('modal-back') && t.classList.contains('open')) {
+        ensureModalCloseButton(t);
+    }
+})).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });

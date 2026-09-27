@@ -99,13 +99,37 @@
     }
 
     // ── data store ──────────────────────────────────────────────────────
+    // Set before loadData() runs (addMeetingDemo top-up flag).
+    var MEETING_DEMO_KEY = 'mockScheduler.meetingDemo.v2';
     var data = loadData();
+
+    // Mock databases created before the meeting demo existed get it added
+    // once (their other data untouched); new ones get it from buildSeed().
+    function addMeetingDemo(db) {
+        var demo = buildMeetingDemo(new Date());
+        var sch = db.scheduler || (db.scheduler = {});
+        sch.outlookFeeds = Object.assign(sch.outlookFeeds || {}, demo.outlookFeeds);
+        sch.outlookMeetings = Object.assign(sch.outlookMeetings || {}, demo.outlookMeetings);
+        sch.conferenceLog = sch.conferenceLog || {};
+        delete sch.conferenceLog.seedconf1;   // the earlier single example
+        Object.assign(sch.conferenceLog, demo.conferenceLog);
+        return db;
+    }
 
     function loadData() {
         var raw = lsGet(DB_KEY);
         if (raw) {
-            try { return JSON.parse(raw) || {}; } catch (_) { /* fall through */ }
+            try {
+                var db = JSON.parse(raw) || {};
+                if (!lsGet(MEETING_DEMO_KEY)) {
+                    addMeetingDemo(db);
+                    lsSet(DB_KEY, JSON.stringify(db));
+                    lsSet(MEETING_DEMO_KEY, '1');
+                }
+                return db;
+            } catch (_) { /* fall through */ }
         }
+        lsSet(MEETING_DEMO_KEY, '1');
         var seeded = buildSeed();
         lsSet(DB_KEY, JSON.stringify(seeded));
         return seeded;
@@ -423,8 +447,48 @@
         while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
         return d;
     }
+    // Outlook meetings + assigned conferences for each pathologist (ids 1–4),
+    // showing every way the hourly grid draws them:
+    //   next workday   ★ Breast Conference 12:00 — assigned AND in Outlook:
+    //                    one highlighted pill with Outlook's title/time
+    //                  Neuro Tumor Board 7:30 — in Outlook, not assigned:
+    //                    an ordinary (outlined) meeting
+    //                  Weekly Pathology Grossing Meeting 9:00 — ordinary
+    //   workday after  ★ Morning/CDH (GI) 7:30 — assigned, NOT in Outlook:
+    //                    highlighted with its logged label
+    //                  Digital Pathology Workgroup 9:30, and an all-day item
+    //   today          a couple of ordinary meetings, one after the grid
+    function buildMeetingDemo(today) {
+        var d0 = isoLocal(today);
+        var d1 = isoLocal(nextWorkday(today, 1));
+        var d2 = isoLocal(nextWorkday(today, 2));
+        var out = { outlookFeeds: {}, outlookMeetings: {}, conferenceLog: {} };
+        ['1', '2', '3', '4'].forEach(function (id) {
+            var meetings = {};
+            meetings[d0] = [
+                { title: 'Weekly Pathology Grossing Meeting', start: '09:00', end: '09:30' },
+                { title: 'Lab Path Discussion (late)', start: '17:15', end: '17:45' },
+            ];
+            meetings[d1] = [
+                { title: 'Neuro Tumor Board', start: '07:30', end: '08:30' },
+                { title: 'Weekly Pathology Grossing Meeting', start: '09:00', end: '09:30' },
+                { title: 'Breast Conference', start: '12:00', end: '13:00' },
+            ];
+            meetings[d2] = [
+                { title: 'CAP Inspection Prep', allDay: true },
+                { title: 'Digital Pathology Workgroup', start: '09:30', end: '10:00' },
+            ];
+            out.outlookMeetings[id] = meetings;
+            out.outlookFeeds[id] = { enc: 'mock', connectedAt: today.getTime(), lastRun: today.getTime(), count: 7 };
+            out.conferenceLog['democonf-breast-' + id] = { date: d1, type: 'breast', time: '12:00', pathologistId: Number(id), createdAt: today.getTime() };
+            out.conferenceLog['democonf-cdh-' + id] = { date: d2, type: 'cdh', subtype: 'GI', time: '07:30', pathologistId: Number(id), createdAt: today.getTime() };
+        });
+        return out;
+    }
+
     function buildSeed() {
         var today = new Date();
+        var meetingDemo = buildMeetingDemo(today);
         var reqDay = nextWorkday(today, 3);
         var ptoStart = nextWorkday(today, 10);
         var ptoEnd = nextWorkday(ptoStart, 2);
@@ -513,33 +577,11 @@
                     m[isoLocal(d)] = { '4': 'ft:CAP Inspection' };
                     return m;
                 })(),
-                // Dr. Moravek's (id 1) Outlook meetings as the sync function
-                // writes them: today and the next workday, one all-day, one
-                // after the grid (pins to the last slot), and a Breast TB
-                // that matches his logged Breast conference (hidden as a
-                // duplicate).
-                outlookFeeds: {
-                    '1': { enc: 'mock', connectedAt: today.getTime(), lastRun: today.getTime(), count: 6 },
-                },
-                conferenceLog: (function () {
-                    var m = {};
-                    m.seedconf1 = { date: isoLocal(nextWorkday(today, 1)), type: 'breast', time: '07:30', pathologistId: 1, createdAt: today.getTime() };
-                    return m;
-                })(),
-                outlookMeetings: { '1': (function () {
-                    var m = {};
-                    m[isoLocal(today)] = [
-                        { title: 'Neuro Tumor Board', start: '07:30', end: '08:30' },
-                        { title: 'Weekly Pathology Grossing Meeting', start: '09:00', end: '09:30' },
-                        { title: 'Lab Path Discussion (late)', start: '17:15', end: '17:45' },
-                    ];
-                    m[isoLocal(nextWorkday(today, 1))] = [
-                        { title: 'CAP Inspection Prep', allDay: true },
-                        { title: 'West Region Breast TB', start: '07:00', end: '08:00' },
-                        { title: 'Digital Pathology Workgroup', start: '09:30', end: '10:00' },
-                    ];
-                    return m;
-                })() },
+                // Outlook meetings + assigned conferences for every
+                // pathologist (buildMeetingDemo).
+                outlookFeeds: meetingDemo.outlookFeeds,
+                conferenceLog: meetingDemo.conferenceLog,
+                outlookMeetings: meetingDemo.outlookMeetings,
             },
         };
     }
@@ -547,6 +589,7 @@
     // ── reset + banner ──────────────────────────────────────────────────
     function resetDemo() {
         lsRemove(DB_KEY);
+        lsRemove(MEETING_DEMO_KEY);
         lsRemove(AUTH_KEY);
         window.location.reload();
     }

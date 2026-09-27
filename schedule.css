@@ -61,6 +61,10 @@
     --proc-fs:       #b8900a;   /* 4. Free-text starting with FS → golden-yellow */
     --proc-hh:       #7050b0;   /* 5. Other HH procedures → purple */
     --proc-mh:       #3a8ab5;   /* 6. Other MH procedures → blue   */
+    /* Conference pills (your tumor boards): highlighted gold. */
+    --conf-bg:       #fdefb2;
+    --conf-line:     #d4a72c;
+    --conf-ink:      #5c4300;
     /* Outlook meeting pills: outlined in the app's navy accent. */
     --meeting-ink:   #1a5276;
     --meeting-line:  #8fb3cc;
@@ -1170,52 +1174,41 @@ main {
     opacity: 1;
 }
 
-/* ── Conference pill ── the presenter's own conference: full-width banner,
-   CONF badge, indigo fill + gold accent — distinct in KIND from procedure
-   pills. Presenter-only; read-only here (edited on the Tracking page). */
+/* ── Conference pill ── a conference the signed-in pathologist is assigned
+   (Tracking page), merged with its Outlook meeting when there is one. Same
+   pill shape and type as procedures and meetings; HIGHLIGHTED in gold with a
+   star so "your tumor board" stands out. Read-only here. */
 .conf-item {
-    display: flex;                 /* full-width banner, unlike the inline proc pills */
-    width: 100%;
+    display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 3px 8px 3px 7px;
+    gap: 4px;
+    padding: 1px 6px;              /* + 1px border = the proc pill's 2px */
     border-radius: 4px;
-    background: #1e1b4b;           /* deep indigo — outside the entire procedure palette */
-    color: #fef9c3;
+    border: 1px solid var(--conf-line);
+    background: var(--conf-bg);
+    color: var(--conf-ink);
     font-size: 10px;
-    font-weight: 700;
-    line-height: 1.35;
-    letter-spacing: 0.2px;
-    border-left: 4px solid #facc15; /* bright gold accent bar */
-    box-shadow: 0 1px 4px rgba(30, 27, 75, 0.4);
+    font-weight: 600;
+    line-height: 1.3;
     cursor: default;
     white-space: normal;
     word-break: break-word;
+    max-width: 100%;
     box-sizing: border-box;
+    box-shadow: 0 1px 2px rgba(122, 90, 0, 0.12);
 }
-
-/* Small leading "CONF" badge — an unmistakable cue this row is a conference
-   and not a procedure. */
-.conf-item .conf-item-dot {
+/* Star glyph (mask, so it follows the text color). */
+.conf-item .conf-item-icon {
     flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 4px;
-    height: 13px;
-    border-radius: 3px;
-    background: #facc15;
-    color: #1e1b4b;
-    font-size: 8px;
-    font-weight: 800;
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
+    width: 10px;
+    height: 10px;
+    background: currentColor;
+    -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 1.2l2.1 4.3 4.7.7-3.4 3.3.8 4.7L8 12l-4.2 2.2.8-4.7L1.2 6.2l4.7-.7z'/></svg>") center / contain no-repeat;
+            mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 1.2l2.1 4.3 4.7.7-3.4 3.3.8 4.7L8 12l-4.2 2.2.8-4.7L1.2 6.2l4.7-.7z'/></svg>") center / contain no-repeat;
 }
-.conf-item .conf-item-dot::before { content: 'Conf'; }
-
 .conf-item:focus { outline: none; }
 .conf-item:focus-visible {
-    box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px #1e1b4b;
+    box-shadow: 0 0 0 1.5px var(--paper), 0 0 0 3px var(--conf-line);
 }
 
 /* ── Outlook meeting pill ── synced from the pathologist's published Outlook
@@ -1264,176 +1257,23 @@ main {
 /* ─────────────────── ADD PROCEDURE PANEL ─────────────────── */
 /* All rules scoped to #procModalBack so they never bleed into other modals. */
 
-/* Modal shell — slightly wider, overflow hidden to clip accent strip */
-#procModalBack .modal {
-    max-width: 500px;
-    padding: 0;
-    overflow: hidden;
-    border-radius: 12px;
-    border: 1px solid var(--rule);
-    box-shadow:
-        0 24px 60px rgba(17, 24, 39, 0.22),
-        0 4px 12px rgba(17, 24, 39, 0.08);
-    /* Flex column pins the 4px gradient strip; .modal-inner takes the rest and
-       scrolls. */
-    display: flex;
-    flex-direction: column;
-    max-height: 90vh;
-}
+/* Same frame, title, labels and inputs as every other panel (the day
+   editor is the reference); only the panel's own widgets — location cards,
+   procedure-type grid — are styled here. */
+#procModalBack .modal { max-width: 500px; }
 
-/* Vivid top-accent strip */
-#procModalBack .modal::before {
-    content: '';
-    display: block;
-    height: 4px;
-    background: linear-gradient(90deg, var(--accent) 0%, #2e86c1 60%, #5dade2 100%);
-}
-
-/* Inner wrapper restores padding the .modal override removed; grows +
-   scrolls internally so the action buttons never clip. */
-#procModalBack .modal-inner {
-    padding: 20px 24px 22px;
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-}
-
-/* Header block: title on the left, date on the right of the same line */
-#procModalBack .proc-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 14px;
-    margin-bottom: 10px;
-    padding-bottom: 12px;
-    border-bottom: 1px solid var(--rule-soft);
-}
-
-#procModalBack .proc-header-text {
-    flex: 1 1 auto;
-    min-width: 0;
-}
-
-#procModalBack .proc-header-icon {
-    width: 38px;
-    height: 38px;
-    border-radius: 9px;
-    background: var(--accent-soft);
-    border: 1px solid rgba(26, 82, 118, 0.15);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 17px;
-    flex-shrink: 0;
-    margin-top: 2px;
-}
-
-#procModalBack .proc-header-text h3 {
-    font-family: var(--serif);
-    font-size: 21px;
-    font-weight: 400;
-    color: var(--ink);
-    line-height: 1.1;
-    margin: 0;
-}
-
-#procModalBack .proc-header-date {
-    flex: 0 0 auto;
-    font-size: 11px;
-    color: var(--ink-3);
-    margin: 0;
-    font-family: var(--mono);
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    text-align: right;
-    white-space: nowrap;
-}
-
-/* Legacy: kept in case .sub still appears inside header-text anywhere */
-#procModalBack .proc-header-text .sub {
-    font-size: 11px;
-    color: var(--ink-3);
-    margin: 0;
-    font-family: var(--mono);
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-}
-
-/* Section label with a left accent bar */
+/* Section labels read exactly like `.modal label`. */
 #procModalBack .proc-section-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
     font-family: var(--mono);
-    font-size: 9.5px;
+    font-size: 10px;
     text-transform: uppercase;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.14em;
     color: var(--ink-3);
-    margin: 8px 0 8px;
+    margin: 12px 0 5px;
 }
 
-#procModalBack .proc-section-label::before {
-    content: '';
-    width: 3px;
-    height: 12px;
-    border-radius: 2px;
-    background: var(--accent);
-    opacity: 0.5;
-    flex-shrink: 0;
-}
-
-/* ── Time input row ── native time input styled like the freetext input;
-   prefilled with the double-clicked slot, fully editable. */
-#procModalBack .proc-time-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-#procModalBack .proc-time-input {
-    flex: 0 0 auto;
-    padding: 10px 12px;
-    background: var(--bg);
-    border: 1.5px solid var(--rule-soft);
-    border-radius: 8px;
-    outline: none;
-    color: var(--ink);
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    line-height: 1.2;
-    transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
-    box-shadow: none;
-    min-width: 0;
-    margin: 0;
-    text-transform: none;
-}
-
-#procModalBack .proc-time-input:hover {
-    border-color: var(--ink-3);
-}
-
-#procModalBack .proc-time-input:focus,
-#procModalBack .proc-time-input:focus-visible {
-    border-color: var(--accent);
-    background: var(--paper);
-    box-shadow: 0 0 0 3px rgba(26, 82, 118, 0.14);
-}
-
-#procModalBack .proc-time-input:invalid {
-    border-color: #b94e2a;
-    box-shadow: 0 0 0 3px rgba(185, 78, 42, 0.12);
-}
-
-#procModalBack .proc-time-hint {
-    font-family: var(--sans);
-    font-size: 11px;
-    color: var(--ink-4);
-    line-height: 1.3;
-    font-style: italic;
-}
+/* Native time input: the shared input look, just not full width. */
+#procModalBack .proc-time-input { width: auto; min-width: 140px; }
 
 /* ── Location toggle (HH / MH) ── */
 /* Two cards side by side; selected one fills with the accent colour. */
@@ -1526,7 +1366,8 @@ main {
 /* 2-column grid keeps rows aligned and maximises panel space. */
 .proc-type-grid {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    /* minmax(0, …): long names wrap instead of widening the panel on phones. */
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 7px;
     margin: 0;
 }
@@ -1876,72 +1717,8 @@ main {
 
 
 
-/* ── Actions bar ── Delete (left, edit-only) | Cancel | primary (right);
-   a hidden Delete's auto column collapses to zero. */
-#procModalBack .modal-actions {
-    display: grid;
-    grid-template-columns: auto auto 1fr;
-    gap: 8px;
-    margin-top: 14px;
-    padding-top: 12px;
-    border-top: 1px solid var(--rule-soft);
-}
-
-#procModalBack .modal-actions button:not(.primary) {
-    padding: 9px 16px;
-    border-radius: 7px;
-    font-size: 12.5px;
-    font-weight: 500;
-    background: transparent;
-    border: 1.5px solid var(--rule);
-    color: var(--ink-2);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    white-space: nowrap;
-}
-
-#procModalBack .modal-actions button:not(.primary):hover {
-    background: var(--bg);
-    border-color: var(--ink-3);
-    color: var(--ink);
-}
-
-/* Delete button — danger styling, scoped to win over the :not(.primary) rule */
-#procModalBack .modal-actions button.danger {
-    color: #b94e2a;
-    border-color: rgba(185, 78, 42, 0.3);
-}
-
-#procModalBack .modal-actions button.danger:hover {
-    background: rgba(185, 78, 42, 0.06);
-    border-color: #b94e2a;
-    color: #b94e2a;
-}
-
-#procModalBack .modal-actions button.primary {
-    padding: 10px 18px;
-    border-radius: 7px;
-    font-size: 13px;
-    font-weight: 600;
-    background: var(--accent);
-    border: 1.5px solid var(--accent);
-    color: #fff;
-    cursor: pointer;
-    transition: all 0.18s ease;
-    letter-spacing: 0.01em;
-    box-shadow: 0 3px 10px rgba(26, 82, 118, 0.22);
-}
-
-#procModalBack .modal-actions button.primary:hover {
-    background: #154360;
-    border-color: #154360;
-    box-shadow: 0 4px 14px rgba(26, 82, 118, 0.32);
-    transform: translateY(-0.5px);
-}
-
-/* Disabled — both this modal and any other modal sharing the primary class */
-.modal-actions button.primary:disabled,
-#procModalBack .modal-actions button.primary:disabled {
+/* Disabled primary (e.g. Add Procedure before a type is picked). */
+.modal-actions button.primary:disabled {
     background: var(--rule);
     border-color: var(--rule);
     color: var(--ink-3);
@@ -1951,10 +1728,10 @@ main {
     transform: none;
 }
 
-#procModalBack .modal-actions button.primary:disabled:hover {
+.modal-actions button.primary:disabled:hover {
     background: var(--rule);
     border-color: var(--rule);
-    transform: none;
+    color: var(--ink-3);
 }
 
 /* ─────────────────── MONTH VIEW ─────────────────── */
@@ -2617,6 +2394,7 @@ main {
 }
 
 .modal {
+    position: relative;            /* anchors the × close button */
     background: var(--paper);
     border-radius: 10px;
     padding: 22px 24px 20px;
@@ -2634,6 +2412,9 @@ main {
     font-weight: 400;
     margin-bottom: 4px;
 }
+/* Keep the title clear of the × (every panel has one; see
+   ensureModalCloseButtons in schedule.js). */
+.modal > h3:first-of-type { padding-right: 40px; }
 
 .modal .sub {
     font-size: 12px;
@@ -2652,7 +2433,8 @@ main {
 }
 
 .modal input,
-.modal select {
+.modal select,
+.modal textarea {
     width: 100%;
     padding: 8px 10px;
     border: 1px solid var(--rule);
@@ -2735,43 +2517,52 @@ main {
     border-color: var(--ink-2);
 }
 
+/* Bottom bar — the day editor's plain buttons on every panel. The main
+   action (.primary) is marked by weight, not a dark fill. */
 .modal-actions {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     justify-content: flex-end;
     gap: 8px;
     margin-top: 18px;
     padding-top: 14px;
     border-top: 1px solid var(--rule-soft);
 }
+.modal-actions .modal-actions-spacer { flex: 1; }
 
 .modal-actions button {
-    padding: 8px 16px;
+    padding: 8px 12px;
     border-radius: 5px;
-    font-size: 12px;
+    font-size: 11.5px;
     font-weight: 500;
+    white-space: nowrap;
     cursor: pointer;
     border: 1px solid var(--rule);
-    background: transparent;
+    background: var(--bg);
     color: var(--ink-2);
     transition: all 0.15s ease;
 }
 
 .modal-actions button:hover {
-    background: var(--bg);
+    background: var(--paper);
     border-color: var(--ink-3);
     color: var(--ink);
 }
 
 .modal-actions button.primary {
-    background: var(--ink);
-    color: var(--paper);
-    border-color: var(--ink);
+    font-weight: 600;
+    color: var(--ink);
+    border-color: var(--ink-3);
 }
 
 .modal-actions button.primary:hover {
-    background: var(--accent);
-    border-color: var(--accent);
+    background: var(--paper);
+    border-color: var(--ink-2);
 }
+
+/* The × replaces a bar button that only dismissed the panel. */
+.modal-actions .modal-dismiss-hidden { display: none; }
 
 .modal-actions button.danger {
     color: #b94e2a;
@@ -3036,7 +2827,8 @@ main {
     justify-content: flex-start;
 }
 .day-modal-actions .day-edit-spacer { flex: 1; }
-.modal .day-modal-actions .rc-horizon select { width: auto; }
+/* Horizon picker in any bottom bar: natural width (outranks .modal select). */
+.modal .modal-actions .rc-horizon select { width: auto; }
 .day-modal-actions button,
 .day-modal-actions button:not(.danger):hover {
     padding: 8px 12px;
@@ -3744,7 +3536,8 @@ main {
         padding: 3px 8px;
     }
 
-    .meeting-item {
+    .meeting-item,
+    .conf-item {
         font-size: 11px;
         padding: 2px 7px;
     }
@@ -4292,6 +4085,14 @@ main {
     margin-top: 8px;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+}
+/* The admin's reason sits inside the (uppercase, mono) status line; show it
+   exactly as typed, in normal text — all caps reads as shouting. */
+.req-card .req-meta .req-note {
+    font-family: var(--sans);
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: normal;
 }
 
 .req-card-actions {
@@ -4869,15 +4670,6 @@ main {
     display: block;
 }
 
-/* "Pages" section label: collapse to nothing but keep a little vertical rhythm */
-.app.sidebar-hidden .nav-section-label {
-    height: 0;
-    padding: 0;
-    margin: 0;
-    overflow: hidden;
-    visibility: hidden;
-}
-
 /* Nav items: icon-only, centered, no gap, no text */
 .app.sidebar-hidden .nav-item {
     justify-content: center;
@@ -4969,21 +4761,12 @@ aside {
     padding-bottom: 2px;
 }
 
-/* Pages section */
+/* Page list — directly under the brand (no section label). */
 .page-nav {
     display: flex;
     flex-direction: column;
     gap: 2px;
     margin-top: 10px;
-}
-
-.nav-section-label {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.18em;
-    color: var(--ink-3);
-    padding: 6px 8px 8px;
 }
 
 .nav-item {
@@ -8109,3 +7892,119 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
 .hourly-tabs.short .ht-full { display: none; }
 .hourly-tabs.short .ht-short { display: inline; }
 .hourly-tabs.short .path-tab { padding-left: 11px; padding-right: 11px; }
+
+/* ─────────────────── MINI CALENDAR (period label popover) ─────────────────── */
+.mini-cal {
+    position: fixed;
+    z-index: 60;                    /* above the sticky toolbar (30) */
+    width: 252px;
+    padding: 10px 10px 8px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    box-shadow: 0 14px 36px rgba(24, 23, 26, 0.16);
+    font-family: var(--sans);
+}
+.mini-cal[hidden] { display: none; }
+.mc-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+.mc-title {
+    font-family: var(--serif);
+    font-size: 17px;
+    color: var(--ink);
+}
+.mc-title .year {
+    color: var(--ink-3);
+    font-style: italic;
+    margin-left: 4px;
+}
+.mc-nav {
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--ink-2);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+}
+.mc-nav:hover { background: var(--paper-2); color: var(--ink); border-color: var(--ink-3); }
+.mc-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    row-gap: 2px;
+}
+.mc-dow {
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.08em;
+    color: var(--ink-3);
+    padding: 3px 0 4px;
+}
+.mc-day {
+    height: 30px;
+    border: none;
+    background: transparent;
+    color: var(--ink);
+    font-size: 12px;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.mc-day:hover { background: var(--accent-soft); }
+.mc-day.mc-out { color: var(--ink-4); }
+/* Dates the schedule is showing (the week, or the day) as one soft band. */
+.mc-day.mc-shown { background: var(--bg-2); border-radius: 0; }
+.mc-day.mc-shown-start { border-top-left-radius: 6px; border-bottom-left-radius: 6px; }
+.mc-day.mc-shown-end { border-top-right-radius: 6px; border-bottom-right-radius: 6px; }
+.mc-day.mc-today {
+    background: var(--accent);
+    color: #fff;
+    font-weight: 600;
+    border-radius: 6px;
+}
+.mc-foot {
+    display: flex;
+    justify-content: center;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--rule-soft);
+}
+.mc-today-btn {
+    padding: 5px 14px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    background: var(--bg);
+    color: var(--ink-2);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+}
+.mc-today-btn:hover { background: var(--paper-2); border-color: var(--ink-3); color: var(--ink); }
+
+/* ─────────────────── REASON PANEL (deny / revoke) ─────────────────── */
+.modal textarea {
+    resize: vertical;
+    min-height: 72px;
+    line-height: 1.45;
+}
+.modal textarea:focus {
+    outline: 1px solid var(--ink-2);
+    border-color: var(--ink-2);
+}
+.modal label .label-optional {
+    text-transform: none;
+    letter-spacing: normal;
+    font-family: var(--sans);
+    color: var(--ink-4);
+}
+.reason-hint {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--ink-3);
+}

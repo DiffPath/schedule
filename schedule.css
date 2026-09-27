@@ -1260,7 +1260,6 @@ main {
 /* Same frame, title, labels and inputs as every other panel (the day
    editor is the reference); only the panel's own widgets — location cards,
    procedure-type grid — are styled here. */
-#procModalBack .modal { max-width: 500px; }
 
 /* Section labels read exactly like `.modal label`. */
 #procModalBack .proc-section-label {
@@ -2399,7 +2398,7 @@ main {
     border-radius: 10px;
     padding: 22px 24px 20px;
     width: 100%;
-    max-width: 460px;
+    max-width: 620px;              /* one width for every panel */
     border: 1px solid var(--rule);
     box-shadow: 0 20px 50px rgba(24, 23, 26, 0.18);
     max-height: 90vh;
@@ -2740,7 +2739,7 @@ main {
 /* ── Day modal as the service editor (admin, workdays) ──
    Each row keeps the pathologist's color (dot + tint); the select is plain
    white. */
-#dayModalBack .modal { max-width: 620px; position: relative; }
+#dayModalBack .modal { position: relative; }
 #dayModalBack .modal h3 { padding-right: 40px; }
 
 /* Close: a small × square in the top-right corner, styled like the
@@ -3931,7 +3930,6 @@ main {
 
 /* Wider modal for the request inbox so long titles fit */
 .modal.modal-wide {
-    max-width: 640px;
     width: calc(100vw - 40px);
 }
 
@@ -7494,7 +7492,7 @@ table.tracking-summary tbody td.t-sum-empty {
 }
 
 /* ── Call week modal ── */
-#callModalBack .modal { position: relative; max-width: 520px; }
+#callModalBack .modal { position: relative; }
 #callModalBack .modal h3 { padding-right: 40px; }
 .call-days {
     display: flex;
@@ -8014,8 +8012,6 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
 
 /* ─────────────────── PTO DAY / CALL REQUEST PANELS (year view) ───────────────────
    Reuse the call panel's day strip and sections (.call-days, .call-section). */
-#ptoDayModalBack .modal,
-#callReqModalBack .modal { max-width: 540px; }
 .pto-days .call-day.is-empty { background: var(--paper); }
 .pto-days .call-day.is-empty .call-day-who { background: transparent; color: var(--ink-4); }
 .pto-day-list .pto-list-item { margin-bottom: 6px; }
@@ -8241,3 +8237,60 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
     text-align: center;
 }
 @media (max-width: 480px) { .modal .pto-range-toggle { flex-wrap: wrap; } .modal .pto-range-toggle .oc-scope-opt { flex: 1 1 45%; } }
+
+/* Year view: someone on call while on PTO — red cell, the holiday cell's
+   treatment. Accepted conflicts: a quieter dashed outline, no fill. */
+.year-month .mini-grid .md.callpto {
+    background: #fde2e1;
+    box-shadow: inset 0 0 0 1.5px #dc2626;
+}
+.year-month .mini-grid .md.callpto .md-num {
+    color: #b91c1c;
+    font-weight: 700;
+}
+.year-month .mini-grid .md.callpto.today {
+    box-shadow: inset 0 0 0 1.5px #dc2626, 0 0 0 1.5px var(--accent);
+}
+.year-month .mini-grid .md.callpto-accepted {
+    outline: 1.5px dashed #e39a9a;
+    outline-offset: -1.5px;
+}
+
+/* ── Stable panel sizes ── panels whose content changes with the user's
+   choices (PTO, call requests, Manage PTO) keep one height: title and ×
+   pinned on top, bottom bar pinned below, only the middle scrolls if it
+   ever overflows. Heights ≈ each panel's largest normal content. */
+.modal.modal-stable {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.modal-stable > .modal-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    margin: 0 -24px;
+    padding: 0 24px 6px;
+}
+.modal-stable > .modal-actions { flex-shrink: 0; }
+#ptoDayModalBack .modal-stable { height: min(920px, 90vh); }
+#callReqModalBack .modal-stable { height: min(660px, 90vh); }
+#ptoModalBack .modal-stable { height: min(580px, 90vh); }
+@media (max-width: 800px) {
+    .modal-stable > .modal-scroll { margin: 0 -18px; padding: 0 18px 6px; }
+    #ptoDayModalBack .modal-stable,
+    #callReqModalBack .modal-stable,
+    #ptoModalBack .modal-stable { height: 88vh; }
+}
+/* PTO dates: the range text and the From/To fields take turns in one
+   fixed-height slot, so choosing "Choose dates" doesn't shift the panel. */
+.pto-range-slot {
+    min-height: 40px;
+    margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.pto-range-slot .pto-range-text,
+.pto-range-slot .pto-day-dates { margin-top: 0; }
+

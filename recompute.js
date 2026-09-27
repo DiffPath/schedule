@@ -1745,7 +1745,7 @@ function showRecomputeDialog(opts) {
             color: 'var(--ink, #222)',
             padding: '22px 24px',
             borderRadius: '8px',
-            maxWidth: '480px',
+            maxWidth: '620px',            // same width as the app's panels
             width: '92%',
             boxShadow: '0 14px 42px rgba(0,0,0,0.22)',
             fontFamily: 'inherit',

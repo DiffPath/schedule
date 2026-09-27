@@ -705,13 +705,23 @@
 
             <label>Pathologist</label>
             <select id="ptoPath"></select>
-            <label>Start date</label>
-            <input type="date" id="ptoStart" />
-            <label>End date (inclusive)</label>
-            <input type="date" id="ptoEnd" />
+            <label>Dates</label>
+            <div class="oc-scope-toggle pto-range-toggle" role="radiogroup" aria-label="PTO dates">
+                <label class="oc-scope-opt"><input type="radio" name="ptoRange" value="date" id="ptoRangeDate"> This date</label>
+                <label class="oc-scope-opt" id="ptoRangeToFriOpt"><input type="radio" name="ptoRange" value="tofri" id="ptoRangeToFri"> <span id="ptoRangeToFriLbl">Today through Friday</span></label>
+                <label class="oc-scope-opt"><input type="radio" name="ptoRange" value="week" id="ptoRangeWeek"> Whole week</label>
+                <label class="oc-scope-opt"><input type="radio" name="ptoRange" value="custom" id="ptoRangeCustom"> Choose dates</label>
+            </div>
+            <div class="pto-range-text" id="ptoRangeText"></div>
+            <div id="ptoDates">
+                <label>Start date</label>
+                <input type="date" id="ptoStart" />
+                <label>End date (inclusive)</label>
+                <input type="date" id="ptoEnd" />
+            </div>
 
             <div id="ptoNoteWrap" style="display:none;">
-                <label>Note for admin (optional)</label>
+                <label>Note for the director (optional)</label>
                 <textarea id="ptoNote" rows="2" placeholder="e.g. family wedding, conference travel…"
                     style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
             </div>
@@ -745,7 +755,7 @@
             <div class="day-detail-rows" id="dayDetailRows"></div>
 
             <div class="day-detail-actions">
-                <button id="dayAddPto">Add PTO for this day</button>
+                <button id="dayAddPto">Add PTO for this date</button>
                 <button id="dayChangeOnCall">Change who's on call</button>
                 <button id="dayChangeService">Override services this day</button>
                 <button id="dayAddLfSendout">Add Lake Forest</button>
@@ -812,6 +822,124 @@
         </div>
     </div>
 
+    <!-- PTO panel (year view PTO mode, "Request PTO for this date", New PTO
+         Request). Director: edit PTO directly. Pathologists: request PTO and
+         removals; when the PTO lands on their call week they can ask
+         colleagues to trade it (see the call-trade section in schedule.js). -->
+    <div class="modal-back" id="ptoDayModalBack">
+        <div class="modal">
+            <h3 id="ptoDayTitle">PTO</h3>
+            <div class="sub" id="ptoDaySub"></div>
+
+            <div class="call-days pto-days" id="ptoDayDays"></div>
+
+            <div class="pto-day-cols">
+                <div class="call-section">
+                    <label>On PTO this day</label>
+                    <div class="pto-day-list" id="ptoDayList"></div>
+                </div>
+                <div class="call-section">
+                    <label>On call this day</label>
+                    <div class="pto-day-list" id="ptoDayOnCall"></div>
+                </div>
+            </div>
+
+            <div class="call-section" id="ptoDayPendingWrap" hidden>
+                <label>Your pending requests</label>
+                <div class="pto-day-list" id="ptoDayPending"></div>
+            </div>
+
+            <div class="call-section">
+                <label for="ptoDayPath" id="ptoDayAddLabel">Request PTO for this date</label>
+                <div class="call-row" id="ptoDayPathRow">
+                    <select id="ptoDayPath"></select>
+                </div>
+                <div class="oc-scope-toggle pto-range-toggle" role="radiogroup" aria-label="PTO dates">
+                    <label class="oc-scope-opt"><input type="radio" name="ptoDayRange" value="date" id="ptoDayRangeDate"> This date</label>
+                    <label class="oc-scope-opt" id="ptoDayRangeToFriOpt"><input type="radio" name="ptoDayRange" value="tofri" id="ptoDayRangeToFri"> <span id="ptoDayRangeToFriLbl">Today through Friday</span></label>
+                    <label class="oc-scope-opt"><input type="radio" name="ptoDayRange" value="week" id="ptoDayRangeWeek"> Whole week</label>
+                    <label class="oc-scope-opt"><input type="radio" name="ptoDayRange" value="custom" id="ptoDayRangeCustom"> Choose dates</label>
+                </div>
+                <div class="pto-range-text" id="ptoDayRangeText"></div>
+                <div class="call-row pto-day-dates" id="ptoDayDates">
+                    <label class="pto-day-date">From <input type="date" id="ptoDayStart"></label>
+                    <label class="pto-day-date">To <input type="date" id="ptoDayEnd"></label>
+                </div>
+                <div class="pto-bar" id="ptoDayBar"></div>
+                <div class="pto-notes" id="ptoDayNotes"></div>
+                <div class="pto-trade" id="ptoDayTrade" hidden></div>
+                <div id="ptoDayNoteWrap" hidden>
+                    <label for="ptoDayNote">Note for the director <span class="label-optional">(optional)</span></label>
+                    <textarea id="ptoDayNote" rows="2" maxlength="500"></textarea>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button id="ptoDayCancel" type="button">Close</button>
+                <label class="rc-horizon" id="ptoDayHorizonWrap">Horizon
+                    <select id="ptoDayHorizon">
+                        <option value="30">30 days</option>
+                        <option value="90">90 days</option>
+                        <option value="180" selected>180 days</option>
+                        <option value="365">365 days</option>
+                    </select>
+                </label>
+                <button class="primary" id="ptoDayAdd" type="button">Add PTO</button>
+                <button class="primary" id="ptoDayAddRecompute" type="button">Add PTO &amp; recompute</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Call request panel (pathologists; year view → Call mode): ask for
+         coverage, offer to cover, or request a week trade. Each section files
+         its own request for the admin. -->
+    <div class="modal-back" id="callReqModalBack">
+        <div class="modal">
+            <h3 id="callReqTitle">Call week</h3>
+            <div class="sub" id="callReqSub">—</div>
+
+            <div class="call-days" id="callReqDays"></div>
+
+            <div class="call-section" id="callReqPendingWrap" hidden>
+                <label>Your pending requests</label>
+                <div class="pto-day-list" id="callReqPending"></div>
+            </div>
+
+            <div class="call-section" id="callReqCoverSec">
+                <label id="callReqCoverLabel">Ask someone to cover</label>
+                <div class="oc-scope-toggle">
+                    <label class="oc-scope-opt">
+                        <input type="radio" name="callReqScope" value="week" id="callReqScopeWeek">
+                        <span id="callReqScopeWeekLbl">Whole week</span>
+                    </label>
+                    <label class="oc-scope-opt">
+                        <input type="radio" name="callReqScope" value="day" id="callReqScopeDay">
+                        <span id="callReqScopeDayLbl">Just this day</span>
+                    </label>
+                </div>
+                <div class="call-row">
+                    <select id="callReqCoverPath"></select>
+                    <button type="button" id="callReqCoverBtn">Request</button>
+                </div>
+                <div class="pto-notes" id="callReqCoverNotes"></div>
+            </div>
+
+            <div class="call-section" id="callReqSwapSec">
+                <label for="callReqSwapWith" id="callReqSwapLabel">Trade weeks</label>
+                <div class="call-row">
+                    <select id="callReqSwapWith"></select>
+                    <button type="button" id="callReqSwapBtn">Request trade</button>
+                </div>
+                <div class="pto-notes" id="callReqSwapNotes"></div>
+            </div>
+
+            <div class="call-section" id="callReqNoteSec">
+                <label for="callReqNote">Note for the director <span class="label-optional">(optional)</span></label>
+                <textarea id="callReqNote" rows="2" maxlength="500"></textarea>
+            </div>
+        </div>
+    </div>
+
     <!-- On-call override modal -->
     <div class="modal-back" id="ocModalBack">
         <div class="modal">
@@ -833,7 +961,7 @@
             <select id="ocPath"></select>
 
             <div id="ocNoteWrap" style="display:none;">
-                <label style="margin-top:14px;">Note for admin (optional)</label>
+                <label style="margin-top:14px;">Note for the director (optional)</label>
                 <textarea id="ocNote" rows="2" placeholder="Reason for swap…"
                     style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
             </div>
@@ -855,7 +983,7 @@
             <div id="svcAssignments"></div>
 
             <div id="svcNoteWrap" style="display:none;">
-                <label style="margin-top:14px;">Note for admin (optional)</label>
+                <label style="margin-top:14px;">Note for the director (optional)</label>
                 <textarea id="svcNote" rows="2" placeholder="Reason for change…"
                     style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
             </div>
@@ -908,7 +1036,7 @@
     <div class="modal-back" id="lfReqModalBack">
         <div class="modal">
             <h3>Request Lake Forest sendout</h3>
-            <div class="sub">Ask the admin to add or remove a sendout day. You'll see the decision under Requests.</div>
+            <div class="sub">Ask the director to add or remove a sendout day. You'll see the decision under Requests.</div>
 
             <label>Date</label>
             <input type="date" id="lfReqDate" />
@@ -926,7 +1054,7 @@
 
             <div class="lf-status" id="lfReqStatus" style="margin-top:14px; padding:10px 12px; border-radius:6px; font-size:12.5px;"></div>
 
-            <label>Note for admin (optional)</label>
+            <label>Note for the director (optional)</label>
             <textarea id="lfReqNote" rows="2" placeholder="e.g. extra sendout volume expected…"
                 style="width:100%; padding:8px 10px; border:1px solid var(--rule); border-radius:5px; font-family:inherit; font-size:13px; resize:vertical; box-sizing:border-box;"></textarea>
 

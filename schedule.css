@@ -2412,6 +2412,9 @@ main {
     font-weight: 400;
     margin-bottom: 4px;
 }
+/* The hidden attribute always wins inside panels, even over a display:flex
+   row style (e.g. .call-row). */
+.modal [hidden] { display: none !important; }
 /* Keep the title clear of the × (every panel has one; see
    ensureModalCloseButtons in schedule.js). */
 .modal > h3:first-of-type { padding-right: 40px; }
@@ -8008,3 +8011,233 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
     font-size: 11px;
     color: var(--ink-3);
 }
+
+/* ─────────────────── PTO DAY / CALL REQUEST PANELS (year view) ───────────────────
+   Reuse the call panel's day strip and sections (.call-days, .call-section). */
+#ptoDayModalBack .modal,
+#callReqModalBack .modal { max-width: 540px; }
+.pto-days .call-day.is-empty { background: var(--paper); }
+.pto-days .call-day.is-empty .call-day-who { background: transparent; color: var(--ink-4); }
+.pto-day-list .pto-list-item { margin-bottom: 6px; }
+.pto-day-list .empty {
+    font-size: 12px;
+    color: var(--ink-3);
+    padding: 8px 2px;
+}
+.pto-you {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-left: 4px;
+}
+.pto-pending { border-style: dashed; }
+.pto-pending-tag {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #8a6614;
+    background: rgba(216, 163, 42, 0.15);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-left: 4px;
+}
+.pto-day-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.pto-day-actions button {
+    padding: 5px 9px;
+    border-radius: 5px;
+    border: 1px solid var(--rule);
+    background: var(--bg);
+    color: var(--ink-2);
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.pto-day-actions button:hover:not(:disabled) { background: var(--paper); border-color: var(--ink-3); color: var(--ink); }
+.pto-day-actions button:disabled { opacity: 0.6; cursor: default; }
+.pto-day-actions button.danger { color: #b94e2a; border-color: rgba(185, 78, 42, 0.3); }
+.pto-day-actions button.danger:hover { background: rgba(185, 78, 42, 0.06); border-color: #b94e2a; }
+/* PTO date choice: This date · Whole week (Mon–Fri) · Choose dates — the
+   on-call scope toggle's look; the chosen range shows as text below. */
+.modal .pto-range-toggle { margin: 6px 0 0; }
+.pto-range-text {
+    margin-top: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+}
+.pto-day-dates { margin-top: 8px; }
+/* "From"/"To" read as inline captions, not the uppercase section labels. */
+.modal .pto-day-date {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    font-family: var(--sans);
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--ink-2);
+}
+.modal .pto-day-date input { flex: 1; min-width: 0; width: auto; }
+.pto-day-summary {
+    margin-top: 8px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-2);
+}
+.pto-day-summary.is-over { color: #b94e2a; }
+.pto-notes { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.pto-notes:empty { display: none; }
+.pto-note {
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    line-height: 1.4;
+}
+.pto-note-info { background: var(--bg); border: 1px solid var(--rule-soft); color: var(--ink-2); }
+.pto-note-warn {
+    background: rgba(216, 163, 42, 0.12);
+    border: 1px solid rgba(216, 163, 42, 0.45);
+    color: #7a5a14;
+}
+#callReqModalBack .oc-scope-toggle { margin: 4px 0 8px; }
+#callReqModalBack .call-row button { flex-shrink: 0; }
+/* Year view, PTO mode / pathologist Call mode: days are clickable, never draggable. */
+.year-view .md.pto-editable { cursor: pointer; }
+
+/* ── PTO panel: two-column "on PTO / on call" row, allotment bar, call trade ── */
+.pto-day-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 480px) { .pto-day-cols { grid-template-columns: 1fr; gap: 0; } }
+.pto-day-cols .pto-list-item { flex-wrap: wrap; }
+.pto-bar { margin-top: 10px; }
+.pto-bar:empty { display: none; }
+.pto-bar-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11.5px;
+    color: var(--ink-2);
+    margin-bottom: 5px;
+}
+.pto-bar-head b { color: var(--ink); }
+.pto-bar-over { color: #b94e2a !important; }
+.pto-bar-track {
+    position: relative;
+    display: flex;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    overflow: hidden;
+}
+.pto-bar-used { background: var(--accent); }
+.pto-bar-add {
+    background: repeating-linear-gradient(135deg, #5dade2 0 4px, #8fc5ea 4px 8px);
+}
+.pto-bar-track.is-over .pto-bar-add {
+    background: repeating-linear-gradient(135deg, #d9785a 0 4px, #e9a48c 4px 8px);
+}
+.pto-bar-mark {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 2px;
+    background: var(--ink);
+}
+.pto-bar-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin-top: 5px;
+    font-size: 11px;
+    color: var(--ink-3);
+}
+.pto-bar-legend b { color: var(--ink); }
+.pto-key { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.pto-key-used { background: var(--accent); }
+.pto-key-add { background: repeating-linear-gradient(135deg, #5dade2 0 3px, #8fc5ea 3px 6px); }
+.pto-range-text:empty { display: none; }
+
+.pto-trade {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid rgba(216, 163, 42, 0.45);
+    background: rgba(216, 163, 42, 0.08);
+}
+.pto-trade-head { font-size: 12.5px; color: var(--ink); }
+.modal .pto-trade-toggle {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 8px 0 6px;
+    font-family: var(--sans);
+    font-size: 12.5px;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--ink);
+    cursor: pointer;
+}
+.pto-trade-opts { display: flex; flex-direction: column; gap: 4px; }
+.modal .pto-trade-opt {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 8px;
+    align-items: center;
+    margin: 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--rule-soft);
+    background: var(--paper);
+    font-family: var(--sans);
+    font-size: 12px;
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--ink);
+    cursor: pointer;
+}
+.modal .pto-trade-opt:has(input:checked) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.modal .pto-trade-opt:has(input:disabled) { opacity: 0.55; cursor: default; }
+.modal .pto-trade-opt input,
+.modal .pto-trade-toggle input { width: auto; margin: 0; accent-color: var(--accent); }
+.pto-trade-name { font-weight: 600; }
+.pto-trade-ctx { grid-column: 2; font-size: 11px; color: var(--ink-3); }
+.pto-trade-opt.is-warn .pto-trade-ctx { color: #8a6614; }
+.pto-trade-foot { margin-top: 8px; font-size: 11px; color: var(--ink-3); line-height: 1.45; }
+
+/* Requests page: call-trade asks, offers and status on PTO cards. */
+.req-card.status-awaiting_call { border-left-color: #d8a32a; }
+.req-card .req-status-pill.awaiting_call { background: rgba(216, 163, 42, 0.15); color: #8a6614; }
+.req-trade-offers { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.req-trade-offer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 6px 10px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+    background: var(--paper);
+    font-size: 12.5px;
+}
+.req-trade-status { margin-top: 8px; font-size: 12px; color: var(--ink-2); }
+.req-trade-ask { margin-top: 8px; font-size: 12.5px; color: var(--ink); }
+.req-trade-ask select {
+    padding: 6px 8px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    background: var(--paper);
+    font: inherit;
+    font-size: 12px;
+}
+/* Four PTO date options on one line: tighter than the two-option call toggle. */
+.modal .pto-range-toggle .oc-scope-opt {
+    padding: 7px 6px;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    text-align: center;
+}
+@media (max-width: 480px) { .modal .pto-range-toggle { flex-wrap: wrap; } .modal .pto-range-toggle .oc-scope-opt { flex: 1 1 45%; } }

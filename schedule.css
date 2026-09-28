@@ -3110,37 +3110,56 @@ main {
     font-size: 14px;
 }
 
-/* On-call scope toggle (day vs week) */
+/* Switches (on-call day/week, PTO / Leave / Off service, PTO dates, call
+   request scope): one connected bar framed and filled like the dropdowns
+   and text fields beside them; the chosen option fills its whole segment
+   with the border colour, edge to edge. */
 .oc-scope-toggle {
     display: flex;
-    gap: 4px;
+    gap: 0;
     margin: 12px 0 4px;
-    background: var(--bg-2);
-    border-radius: 7px;
-    padding: 3px;
+    background: var(--bg);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 0;
+    min-height: 35px;               /* same height as the text fields */
+    overflow: hidden;
 }
 
-.oc-scope-opt {
+/* .oc-scope-toggle prefix outranks `.modal label` (mono caps). */
+.oc-scope-toggle .oc-scope-opt {
     flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 7px 12px;
-    border-radius: 5px;
+    margin: 0;
+    padding: 8px 10px;
+    border-radius: 0;
+    border-left: 1px solid var(--rule);
     font-family: var(--sans);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--ink-2);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    user-select: none;
-    letter-spacing: 0.02em;
-}
-
-.oc-scope-opt:has(input:checked) {
-    background: var(--paper);
+    font-size: 13px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    text-align: center;
+    line-height: 1.25;
     color: var(--ink);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+    user-select: none;
+}
+.oc-scope-toggle .oc-scope-opt:first-child { border-left: none; }
+.oc-scope-toggle .oc-scope-opt:hover { background: var(--paper); }
+
+/* Chosen option: filled with the frame's own light blue, dark text. */
+.oc-scope-toggle .oc-scope-opt:has(input:checked) {
+    background: var(--rule);
+    color: var(--ink);
+    font-weight: 400;
+}
+.oc-scope-toggle .oc-scope-opt:has(input:focus-visible) {
+    outline: 2px solid var(--accent);
+    outline-offset: -4px;
 }
 
 .oc-scope-opt input[type="radio"] {
@@ -3753,7 +3772,7 @@ main {
 
     /* On-call modal scope toggle: stack vertically if it gets squeezed */
     .oc-scope-toggle {
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
     }
 }
 
@@ -8231,12 +8250,10 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
 }
 /* Four PTO date options on one line: tighter than the two-option call toggle. */
 .modal .pto-range-toggle .oc-scope-opt {
-    padding: 7px 6px;
-    letter-spacing: 0.04em;
+    padding: 8px 6px;
     white-space: nowrap;
-    text-align: center;
 }
-@media (max-width: 480px) { .modal .pto-range-toggle { flex-wrap: wrap; } .modal .pto-range-toggle .oc-scope-opt { flex: 1 1 45%; } }
+@media (max-width: 480px) { .modal .pto-range-toggle .oc-scope-opt { white-space: normal; font-size: 11.5px; padding: 7px 4px; } }
 
 /* Year view: someone on call while on PTO — red cell, the holiday cell's
    treatment. Accepted conflicts: a quieter dashed outline, no fill. */
@@ -8294,3 +8311,84 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
 .pto-range-slot .pto-range-text,
 .pto-range-slot .pto-day-dates { margin-top: 0; }
 
+
+/* ── Leave & off service ── */
+.pto-kind-toggle { margin: 6px 0 8px; }
+.pto-kind-tag {
+    font-family: var(--mono);
+    font-size: 8.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #5b4a8a;
+    background: rgba(112, 80, 176, 0.12);
+    border-radius: 3px;
+    padding: 1px 5px;
+    margin-left: 4px;
+    white-space: nowrap;
+}
+.pto-kind-tag.is-offsvc { color: #7a5a14; background: rgba(216, 163, 42, 0.15); }
+#ptoDayLeaveRow input { width: 100%; }
+/* Year view: leave days get a light stripe over the pathologist colour. */
+.year-month .mini-grid .md.has-leave .md-square { position: relative; overflow: hidden; }
+.year-month .mini-grid .md.has-leave .md-square::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.32) 0 3px, transparent 3px 7px);
+    pointer-events: none;
+}
+
+/* PTO panel: both add buttons keep one width whatever the type (PTO /
+   Leave / Off service) — sized to the longest label, "Set off service &
+   recompute" — so toggling doesn't make them grow and shrink. */
+#ptoDayAdd,
+#ptoDayAddRecompute {
+    width: 182px;
+    justify-content: center;
+    text-align: center;
+    white-space: nowrap;
+}
+@media (max-width: 480px) {
+    #ptoDayAdd,
+    #ptoDayAddRecompute { width: auto; flex: 1 1 0; }
+}
+
+/* PTO panel form rows: [doctor | dates] and [type | leave name / off-service
+   type]. The type switch keeps one width so the field beside it doesn't
+   shift when it appears; rows stack on phones. */
+.pto-form-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    margin-top: 8px;
+}
+.pto-form-row .oc-scope-toggle { margin: 0; }
+.pto-form-path { flex: 0 0 172px; min-width: 0; }
+.modal .pto-form-path select { height: 100%; }
+.pto-form-row .pto-range-toggle { flex: 1 1 auto; min-width: 0; }
+.modal .pto-form-row .pto-range-toggle .oc-scope-opt { padding: 8px 5px; font-size: 12.5px; }
+.pto-form-row .pto-kind-toggle { flex: 0 0 260px; }
+.pto-form-kind-field { flex: 1 1 auto; min-width: 0; }
+.modal .pto-form-kind-field input,
+.modal .pto-form-kind-field select { height: 100%; }
+.pto-form-kind-field > div { height: 100%; }
+@media (max-width: 560px) {
+    .pto-form-row { flex-direction: column; gap: 6px; }
+    .pto-form-path,
+    .pto-form-row .pto-kind-toggle { flex: none; }
+    .pto-form-kind-field:has(> div:not([hidden])) { min-height: 35px; }
+}
+/* One fixed height for everything in the PTO form rows, so switching
+   PTO / Leave / Off service never resizes them: native dropdowns render
+   2px taller than text boxes, which used to stretch the switch. */
+.modal .pto-form-row select,
+.modal .pto-form-row input {
+    height: 36px;
+    box-sizing: border-box;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+.pto-form-row .oc-scope-toggle { height: 36px; min-height: 0; box-sizing: border-box; }
+@media (max-width: 560px) {
+    .pto-form-row .pto-range-toggle { height: auto; min-height: 36px; }
+}

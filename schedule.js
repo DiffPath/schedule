@@ -1504,7 +1504,7 @@ function ptoDaysScheduled(pathId, opts) {
 
     // Collect and clamp all ranges for this pathologist.
     const ranges = [];
-    vacations.filter(v => v.pathologistId === pathId).forEach(v => {
+    vacations.filter(v => v.pathologistId === pathId && v.type !== 'leave').forEach(v => {
         const effStart = v.start.getTime() < rangeStart.getTime() ? rangeStart : v.start;
         const effEnd = (rangeEnd && v.end.getTime() > rangeEnd.getTime()) ? rangeEnd : v.end;
         if (effEnd.getTime() < effStart.getTime()) return;
@@ -1849,6 +1849,10 @@ regListener('scheduler/vacations', snap => {
             pathologistId: v.pathologistId,
             start: parseDate(v.start),
             end: parseDate(v.end),
+            // 'leave' (parental, medical, …) is time off like PTO for the
+            // schedule, but doesn't count toward the PTO allotment.
+            type: v.type === 'leave' ? 'leave' : 'pto',
+            label: v.label || null,
         }));
     }
     clearDayCache();
@@ -2617,13 +2621,31 @@ function getCallPtoConflicts() {
     return out;
 }
 
+// The PTO / leave entry covering pathId on date (or null).
+function timeOffOn(pathId, date) {
+    const t = date.getTime();
+    return vacations.find(v => v.pathologistId === pathId
+        && t >= v.start.getTime() && t <= v.end.getTime()) || null;
+}
+// "PTO", or the leave's name ("Paternity leave") — full for tooltips…
+function timeOffName(v) {
+    if (!v || v.type !== 'leave') return 'PTO';
+    return v.label || 'Leave';
+}
+// …and short enough for a schedule row.
+function timeOffRowLabel(pathId, date) {
+    const v = timeOffOn(pathId, date);
+    if (!v || v.type !== 'leave') return 'PTO';
+    return (v.label && v.label.length <= 16) ? escapeHtml(v.label) : 'Leave';
+}
+
 function _describeCallPto(vacation, run, startStr, endStr) {
     const range = _reqDateRange(startStr, endStr);
     const vac = _reqDateRange(fmt(vacation.start), fmt(vacation.end));
     const dayCount = `${run.days} day${run.days === 1 ? '' : 's'}`;
     const sameRange = startStr === fmt(vacation.start) && endStr === fmt(vacation.end);
     return `${_shortPathName(vacation.pathologistId)} is on call ${range} (${dayCount})`
-        + (sameRange ? ' while on PTO' : ` during PTO ${vac}`);
+        + (sameRange ? ` while on ${timeOffName(vacation)}` : ` during ${timeOffName(vacation)} ${vac}`);
 }
 
 // Which on-call/PTO conflicts cover a given date (usually none).
@@ -3971,8 +3993,8 @@ function renderRequestsList(targetEl, tabState) {
                 const affectsRotation = req.type === 'pto_add'
                     || req.type === 'pto_remove' || req.type === 'service_change';
                 const rcHtml = affectsRotation ? `
-                                <label class="rc-horizon rc-horizon-inline">Horizon
-                                    <select data-rchorizon="${key}">
+                                <label class="rc-horizon rc-horizon-inline" title="How far ahead to recompute the schedule">
+                                    <select data-rchorizon="${key}" aria-label="How far ahead to recompute">
                                         <option value="30">30 days</option>
                                         <option value="90">90 days</option>
                                         <option value="180" selected>180 days</option>
@@ -6739,7 +6761,7 @@ function renderDay() {
         if (a.type === 'pto') {
             rows += `<div class="wd-row pto" style="--c:${p.color}">
           <span class="pid">${p.initials}</span>
-          <span class="svc">PTO</span>
+          <span class="svc">${timeOffRowLabel(p.id, d)}</span>
           ${oc}
         </div>`;
         } else if (a.type === 'off_site') {
@@ -6827,7 +6849,7 @@ function renderWeek() {
             if (a.type === 'pto') {
                 rows += `<div class="wd-row pto" style="--c:${p.color}">
             <span class="pid">${p.initials}</span>
-            <span class="svc">PTO</span>
+            <span class="svc">${timeOffRowLabel(p.id, d)}</span>
             ${oc}
           </div>`;
             } else if (a.type === 'off_site') {
@@ -7884,9 +7906,9 @@ function renderMonth() {
             const lockCls = locked ? ' locked' : '';
             const lockTip = locked ? ' · Approved & locked' : '';
             if (a.type === 'pto') {
-                rows += `<div class="wd-row pto" style="--c:${p.color}" title="${p.name} — PTO${a.onCall ? ' · On call' : ''}">
+                rows += `<div class="wd-row pto" style="--c:${p.color}" title="${p.name} — ${escapeHtml(timeOffName(timeOffOn(p.id, date)))}${a.onCall ? ' · On call' : ''}">
             <span class="pid">${p.initials}</span>
-            <span class="svc">PTO</span>
+            <span class="svc">${timeOffRowLabel(p.id, date)}</span>
             ${oc}
           </div>`;
             } else if (a.type === 'off_site') {
@@ -7981,8 +8003,8 @@ function cellContent(date) {
 
         const colors = folks.map(p => p.color);
         const initials = folks.map(p => p.initials);
-        const names = folks.map(p => p.name.replace(/^Dr\. /, ''));
-        const title = `${names.join(', ')} — PTO`;
+        const title = folks.map(p => `${p.name.replace(/^Dr\. /, '')} — ${timeOffName(timeOffOn(p.id, date))}`).join(', ');
+        const leave = folks.some(p => { const v = timeOffOn(p.id, date); return v && v.type === 'leave'; });
 
         let label;
         if (folks.length === 1) label = initials[0];
@@ -7994,6 +8016,7 @@ function cellContent(date) {
             background: gradientFor(colors),
             label,
             title,
+            leave,
             multi: folks.length > 1,
             count: folks.length > 2,
         };
@@ -8045,7 +8068,7 @@ function renderYear() {
     // Mode tabs + pathologist key
     const modeTabsHtml = `
       <div class="mode-tabs" role="tablist">
-        <button class="${yearMode === 'pto' ? 'active' : ''}" data-mode="pto">PTO</button>
+        <button class="${yearMode === 'pto' ? 'active' : ''}" data-mode="pto">Time off</button>
         <button class="${yearMode === 'call' ? 'active' : ''}" data-mode="call">Call</button>
       </div>
       ${ptoDaysSummaryHtml}`;
@@ -8125,6 +8148,7 @@ function renderYear() {
             if (content) {
                 classes.push('has-data');
                 if (content.multi) classes.push('multi');
+                if (content.leave) classes.push('has-leave');
                 if (content.count) classes.push('count');
             }
 
@@ -8311,7 +8335,7 @@ function openDayDetail(date) {
             return `<div class="day-detail-row pto-row${adminCls}"${adminAttrs} style="--c:${p.color}">
           <div class="ddot"></div>
           <div class="dname">${p.name}</div>
-          <div class="dservice">PTO</div>
+          <div class="dservice">${timeOffRowLabel(p.id, date)}</div>
           ${ocPill}
         </div>`;
         }
@@ -9109,7 +9133,7 @@ function renderPtoList() {
         return `<div class="pto-list-item" style="--c:${p.color}">
         <div class="pdot"></div>
         <div class="prange">
-          <div class="pname">${p.name.replace(/^Dr\. /, '')}</div>
+          <div class="pname">${p.name.replace(/^Dr\. /, '')}${v.type === 'leave' ? ` <span class="pto-kind-tag">${escapeHtml(timeOffName(v))}</span>` : ''}</div>
           <div class="pdates">${range}</div>
         </div>
         <button data-key="${v.key}" ${disabledAttr}>${label}</button>
@@ -9498,7 +9522,7 @@ function openPtoDayModal(date, opts) {
     const me = loggedInPathId;
     const hol = getFederalHoliday(date);
     document.getElementById('ptoDayTitle').textContent =
-        `PTO · ${DOW[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+        `Time off · ${DOW[date.getDay()]}, ${MONTHS_SHORT[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
     const subBits = [];
     if (hol) subBits.push(`⭐ ${hol}`);
     if (date.getTime() < today.getTime()) subBits.push('In the past');
@@ -9530,7 +9554,8 @@ function openPtoDayModal(date, opts) {
     // On PTO this day (director removes; a pathologist can ask to remove theirs).
     const pendingRemoves = new Set(_myPendingRequests(['pto_remove']).map(([, r]) => r.payload.vacationKey));
     const onDay = _ptoOnDay(date);
-    document.getElementById('ptoDayList').innerHTML = onDay.length === 0
+    const offSvc = _offServiceOnDay(date);
+    document.getElementById('ptoDayList').innerHTML = (onDay.length === 0 && offSvc.length === 0)
         ? '<div class="empty">Nobody.</div>'
         : onDay.map(v => {
             const p = pathologists.find(x => x.id === v.pathologistId);
@@ -9548,8 +9573,24 @@ function openPtoDayModal(date, opts) {
             return `<div class="pto-list-item" style="--c:${p.color}">
                 <div class="pdot"></div>
                 <div class="prange">
-                  <div class="pname">${escapeHtml(p.name.replace(/^Dr\. /, ''))}${v.pathologistId === me ? ' <span class="pto-you">you</span>' : ''}</div>
+                  <div class="pname">${escapeHtml(p.name.replace(/^Dr\. /, ''))}${v.pathologistId === me ? ' <span class="pto-you">you</span>' : ''}${v.type === 'leave' ? ` <span class="pto-kind-tag">${escapeHtml(timeOffName(v))}</span>` : ''}</div>
                   <div class="pdates">${_ptoRangeLabel(v)}</div>
+                </div>
+                <div class="pto-day-actions">${actions}</div>
+              </div>`;
+        }).join('') + offSvc.map(o => {
+            const p = pathologists.find(x => x.id === o.pid);
+            if (!p) return '';
+            const multi = o.days.length > 1;
+            const actions = admin
+                ? (multi ? `<button type="button" data-act="offday" data-pid="${o.pid}" data-sid="${escapeHtml(o.sid)}">Remove this day</button>` : '')
+                  + `<button type="button" class="danger" data-act="offall" data-pid="${o.pid}" data-sid="${escapeHtml(o.sid)}">${multi ? 'Remove all' : 'Remove'}</button>`
+                : '';
+            return `<div class="pto-list-item" style="--c:${p.color}">
+                <div class="pdot"></div>
+                <div class="prange">
+                  <div class="pname">${escapeHtml(p.name.replace(/^Dr\. /, ''))}${o.pid === me ? ' <span class="pto-you">you</span>' : ''} <span class="pto-kind-tag is-offsvc">${escapeHtml(o.name)}</span></div>
+                  <div class="pdates">${_chgFmtRange(fmt(o.days[0]), fmt(o.days[o.days.length - 1]))}${multi ? ` · ${o.days.length} working days` : ''}</div>
                 </div>
                 <div class="pto-day-actions">${actions}</div>
               </div>`;
@@ -9605,7 +9646,12 @@ function openPtoDayModal(date, opts) {
         sel.innerHTML = mine ? `<option value="${mine.id}">${escapeHtml(mine.name)}</option>` : '';
     }
     document.getElementById('ptoDayPathRow').hidden = !admin;
-    document.getElementById('ptoDayAddLabel').textContent = admin ? 'Add PTO for this date' : 'Request PTO for this date';
+    document.getElementById('ptoDayKindRow').hidden = !admin;
+    document.querySelector('input[name="ptoDayKind"][value="pto"]').checked = true;
+    document.getElementById('ptoDayLeaveName').value = '';
+    document.getElementById('ptoDayOffSvc').innerHTML = OFF_SERVICES
+        .map(o => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join('');
+    document.getElementById('ptoDayAddLabel').textContent = admin ? 'Add time off for this date' : 'Request PTO for this date';
     document.getElementById('ptoDayNoteWrap').hidden = admin;
     document.getElementById('ptoDayNote').value = '';
     _showRecomputeControls('ptoDayHorizon', 'ptoDayAddRecompute', admin);
@@ -9721,12 +9767,27 @@ function _updatePtoDayForm() {
         addBtns.forEach(b => { b.disabled = true; });
         return;
     }
+    const kind = ptoDayKind();
+    document.getElementById('ptoDayLeaveRow').hidden = kind !== 'leave';
+    document.getElementById('ptoDayOffRow').hidden = kind !== 'offsvc';
     const work = _workdaysIn(r.s, r.e);
-    const fresh = work.filter(d => !isOnPto(pid, d));
+    const fresh = kind === 'offsvc' ? work : work.filter(d => !isOnPto(pid, d));
     if (!text.hidden) text.textContent = _ptoRangeLabelDates(r.s, r.e) + ` · ${work.length} working day${work.length === 1 ? '' : 's'}`;
-    bar.innerHTML = _ptoBarHtml(pid, r);
+    bar.innerHTML = kind === 'pto' ? _ptoBarHtml(pid, r) : '';
+    if (admin) {
+        const verb = { pto: 'Add PTO', leave: 'Add leave', offsvc: 'Set off service' }[kind];
+        document.getElementById('ptoDayAdd').dataset.label = verb;
+        document.getElementById('ptoDayAddRecompute').textContent = verb + ' & recompute';
+    }
 
     const notes = [];
+    if (kind === 'leave') notes.push(['info', 'Leave doesn\'t count toward the PTO allotment.']);
+    if (kind === 'offsvc') {
+        const svc = OFF_SERVICES.find(o => o.id === document.getElementById('ptoDayOffSvc').value);
+        notes.push(['info', `Sets ${svc ? svc.name : 'Off Service'} on ${work.length} working day${work.length === 1 ? '' : 's'} (weekends and holidays skipped), locked so recompute keeps it.`]);
+        const off = work.filter(d => isOnPto(pid, d));
+        if (off.length) notes.push(['warn', `${_shortPathName(pid)} is already off ${_callPtoDayList(off)} — time off takes precedence on those days.`]);
+    }
     const isYou = !admin && pid === loggedInPathId;
     // On call during the PTO: pathologists get the trade section instead.
     const trade = isYou ? _ptoTradeHtml(pid, r) : '';
@@ -9739,9 +9800,9 @@ function _updatePtoDayForm() {
         }
     }
     // Existing PTO overlap (only new days count).
-    const own = vacations.filter(v => v.pathologistId === pid
+    const own = kind === 'offsvc' ? [] : vacations.filter(v => v.pathologistId === pid
         && v.end.getTime() >= r.s.getTime() && v.start.getTime() <= r.e.getTime());
-    if (own.length) notes.push(['info', `Overlaps PTO already scheduled (${own.map(_ptoRangeLabel).join(', ')}); only new days count.`]);
+    if (own.length) notes.push(['info', `Overlaps time off already scheduled (${own.map(v => timeOffName(v) + ' ' + _ptoRangeLabel(v)).join(', ')}); only new days count.`]);
     if (!admin) {
         const dup = _myPendingRequests(['pto_add']).filter(([, q]) => q.payload && q.payload.start
             && parseDate(q.payload.end || q.payload.start).getTime() >= r.s.getTime()
@@ -9756,11 +9817,11 @@ function _updatePtoDayForm() {
     if (hols.length) notes.push(['info', `${hols.join(', ')} ${hols.length === 1 ? 'is a holiday' : 'are holidays'} — not counted.`]);
     if (getAcademicYearOfDate(r.e) !== getAcademicYearOfDate(r.s)) notes.push(['info', 'Spans two fiscal years; each year counts its own days.']);
     if (!admin && r.s.getTime() < today.getTime()) notes.push(['warn', 'Starts in the past.']);
-    if (fresh.length === 0) notes.unshift(['warn', work.length ? 'Already on PTO for all of these days.' : 'No working days in this range.']);
+    if (fresh.length === 0) notes.unshift(['warn', work.length ? 'Already off for all of these days.' : 'No working days in this range.']);
     notesEl.innerHTML = notes.map(([k, t]) => `<div class="pto-note pto-note-${k}">${escapeHtml(t)}</div>`).join('');
 
     addBtns.forEach(b => { b.disabled = fresh.length === 0; });
-    addBtn.textContent = admin ? 'Add PTO' : (_ptoTradeActive() ? 'Request PTO & call trade' : 'Request PTO');
+    addBtn.textContent = admin ? (addBtn.dataset.label || 'Add PTO') : (_ptoTradeActive() ? 'Request PTO & call trade' : 'Request PTO');
 }
 
 async function _ptoDayAdd(choice) {
@@ -9782,17 +9843,116 @@ async function _ptoDayAdd(choice) {
         if (ok && activePtoDayDate) openPtoDayModal(activePtoDayDate);   // show it as pending
         return;
     }
-    await db.ref('scheduler/vacations').push({ pathologistId: pid, start: fmt(r.s), end: fmt(r.e) });
+    const kind = ptoDayKind();
+    if (kind === 'offsvc') { await _offServiceAdd(pid, r, choice); return; }
+    const entry = { pathologistId: pid, start: fmt(r.s), end: fmt(r.e) };
+    const leaveName = (document.getElementById('ptoDayLeaveName').value || '').trim();
+    if (kind === 'leave') { entry.type = 'leave'; entry.label = leaveName || 'Leave'; }
+    await db.ref('scheduler/vacations').push(entry);
     await clearConflictingServiceOverridesForPto(pid, fmt(r.s), fmt(r.e));
     logChange(Object.assign({
         kind: 'pto', type: 'pto_add', forPathId: pid, startDate: fmt(r.s), endDate: fmt(r.e),
-    }, _chgSummaryPtoAdd(pid, fmt(r.s), fmt(r.e))));
+    }, kind === 'leave'
+        ? { summary: `${_chgShortName(pid)} — ${entry.label} added on ${_chgFmtRange(fmt(r.s), fmt(r.e))}` }
+        : _chgSummaryPtoAdd(pid, fmt(r.s), fmt(r.e))));
     _closePtoDayModal();
     setPendingRecomputeChoice(choice);
     await maybeOfferRecompute({}, {
         fromDate: r.s,
         dayBeforeFix: true,
-        message: 'PTO added. Recompute the future schedule for everyone using the rotation rules?',
+        message: `${kind === 'leave' ? 'Leave' : 'PTO'} added. Recompute the future schedule for everyone using the rotation rules?`,
+    });
+}
+
+// ── Director: time-off kind and off-service ranges ──
+function ptoDayKind() {
+    if (!isAdmin()) return 'pto';
+    const r = document.querySelector('input[name="ptoDayKind"]:checked');
+    return r ? r.value : 'pto';
+}
+
+// Off-service assignments (Off Service / Director Retreat / Lab Inspection)
+// covering date, each with its run of consecutive working days.
+//   [{ pid, sid, name, days: [Date…] }]
+function _offServiceOnDay(date) {
+    const out = [];
+    const dk = fmt(date);
+    pathologists.forEach(p => {
+        const sid = (serviceOverrides[dk] || {})[p.id];
+        const svc = OFF_SERVICES.find(o => o.id === sid);
+        if (!svc) return;
+        out.push({ pid: p.id, sid, name: svc.name, days: _offServiceRun(p.id, date, sid) });
+    });
+    return out;
+}
+function _offServiceRun(pid, date, sid) {
+    const has = d => (serviceOverrides[fmt(d)] || {})[pid] === sid;
+    const skip = d => isWeekend(d) || !!getFederalHoliday(d);
+    const days = [new Date(date)];
+    for (let d = addDays(date, -1), n = 0; n < 400; d = addDays(d, -1), n++) {
+        if (skip(d)) continue;
+        if (!has(d)) break;
+        days.unshift(new Date(d));
+    }
+    for (let d = addDays(date, 1), n = 0; n < 400; d = addDays(d, 1), n++) {
+        if (skip(d)) continue;
+        if (!has(d)) break;
+        days.push(new Date(d));
+    }
+    return days;
+}
+
+// Set an off-service type, locked, on every working day of the range.
+async function _offServiceAdd(pid, r, choice) {
+    const sid = document.getElementById('ptoDayOffSvc').value;
+    const svc = OFF_SERVICES.find(o => o.id === sid);
+    if (!svc) return;
+    const days = _workdaysIn(r.s, r.e);
+    if (!days.length) return;
+    const writes = {}, pins = {};
+    days.forEach(d => {
+        const dk = fmt(d);
+        writes[`scheduler/serviceOverrides/${dk}/${pid}`] = sid;
+        writes[`scheduler/serviceLocks/${dk}/${pid}`] = sid;
+        pins[dk] = { [pid]: sid };
+    });
+    await db.ref().update(writes);
+    logChange({
+        kind: 'service', type: 'service_set', forPathId: pid,
+        date: fmt(days[0]), startDate: fmt(days[0]), endDate: fmt(days[days.length - 1]),
+        summary: `${_chgShortName(pid)} → ${svc.name} (locked), ${_chgFmtRange(fmt(days[0]), fmt(days[days.length - 1]))}`,
+    });
+    _closePtoDayModal();
+    setPendingRecomputeChoice(choice);
+    await maybeOfferRecompute(pins, {
+        fromDate: days[0],
+        dayBeforeFix: true,
+        message: `${svc.name} set. Recompute the future schedule for everyone using the rotation rules?`,
+    });
+}
+
+// Clear an off-service run (or just the panel's day of it).
+async function _offServiceRemove(pid, sid, justThisDay) {
+    const day = activePtoDayDate;
+    if (!day || !isAdmin()) return;
+    const days = justThisDay ? [day] : _offServiceRun(pid, day, sid);
+    const writes = {};
+    days.forEach(d => {
+        writes[`scheduler/serviceOverrides/${fmt(d)}/${pid}`] = null;
+        writes[`scheduler/serviceLocks/${fmt(d)}/${pid}`] = null;
+    });
+    await db.ref().update(writes);
+    const svc = OFF_SERVICES.find(o => o.id === sid);
+    logChange({
+        kind: 'service', type: 'service_reset', forPathId: pid,
+        date: fmt(days[0]), startDate: fmt(days[0]), endDate: fmt(days[days.length - 1]),
+        summary: `${_chgShortName(pid)} — ${svc ? svc.name : 'Off service'} removed, ${_chgFmtRange(fmt(days[0]), fmt(days[days.length - 1]))}`,
+    });
+    openPtoDayModal(day);
+    await maybeOfferRecompute({}, {
+        fromDate: days[0],
+        dayBeforeFix: false,
+        message: 'Off service removed. Recompute the future schedule for everyone using the rotation rules?',
     });
 }
 
@@ -9814,9 +9974,9 @@ async function _ptoDayRemove(key, justThisDay) {
             await ref.update({ end: fmt(addDays(day, -1)) });
         } else {
             await ref.update({ end: fmt(addDays(day, -1)) });
-            await db.ref('scheduler/vacations').push({
+            await db.ref('scheduler/vacations').push(Object.assign({
                 pathologistId: v.pathologistId, start: fmt(addDays(day, 1)), end: fmt(v.end),
-            });
+            }, v.type === 'leave' ? { type: 'leave', label: v.label || 'Leave' } : {}));
         }
     }
     logChange(Object.assign({
@@ -9845,10 +10005,11 @@ document.getElementById('ptoDayDays').addEventListener('click', e => {
     if (b) openPtoDayModal(parseDate(b.dataset.date));
 });
 ['ptoDayList', 'ptoDayPending'].forEach(id => document.getElementById(id).addEventListener('click', async e => {
-    const b = e.target.closest('button[data-key]');
+    const b = e.target.closest('button[data-key], button[data-sid]');
     if (!b) return;
     const act = b.dataset.act;
     if (act === 'day' || act === 'all') _ptoDayRemove(b.dataset.key, act === 'day');
+    else if (act === 'offday' || act === 'offall') _offServiceRemove(Number(b.dataset.pid), b.dataset.sid, act === 'offday');
     else if (act === 'reqremove') _ptoDayRequestRemoval(b.dataset.key);
     else if (act === 'withdraw') {
         await _withdrawRequest(b.dataset.key);
@@ -9866,6 +10027,8 @@ document.querySelectorAll('input[name="ptoDayRange"]').forEach(r => r.addEventLi
         if (id === 'ptoDayStart' && sEl.value && eEl.value && sEl.value > eEl.value) eEl.value = sEl.value;
         _updatePtoDayForm();
     }));
+document.querySelectorAll('input[name="ptoDayKind"]').forEach(r => r.addEventListener('change', _updatePtoDayForm));
+document.getElementById('ptoDayOffSvc').addEventListener('change', _updatePtoDayForm);
 document.getElementById('ptoDayTrade').addEventListener('change', e => {
     if (e.target.id === 'ptoTradeOn') _ptoTradeOn = e.target.checked;
     else if (e.target.name === 'ptoTradeAsk') _ptoTradeAsk = e.target.value;

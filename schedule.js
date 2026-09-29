@@ -350,6 +350,12 @@ function isReadOnlyGuest() {
     return isHistology() || isLakeForest();
 }
 
+// Only the director and the gross room add, edit, move or delete procedures;
+// everyone else sees the procedure schedule read-only.
+function canEditProcedures() {
+    return isAdmin() || isGrossRoom();
+}
+
 // True only for the pathologist accounts — the ones that appear in
 // scheduler/pathologists. The special logins (manager, gross room,
 // histology, Lake Forest) all fail this.
@@ -1790,6 +1796,8 @@ auth.onAuthStateChanged(user => {
         if (typeof procOptionsSignedIn === 'function') procOptionsSignedIn(id);
         // This pathologist's own Outlook meetings (outlook-meetings.js).
         if (typeof outlookSignedIn === 'function') outlookSignedIn(id);
+        // What this account has already seen (nav dots), synced across devices.
+        userSeenSignedIn(id);
         // After re-login without reload, cached-warm listeners may not re-fire —
         // refresh filter + view directly.
         if (pathologistsReady && vacationsReady) {
@@ -1807,6 +1815,7 @@ auth.onAuthStateChanged(user => {
         stopDataListeners();
         if (typeof procOptionsSignedOut === 'function') procOptionsSignedOut();
         if (typeof outlookSignedOut === 'function') outlookSignedOut();
+        userSeenSignedOut();
         hideLoading();
         if (typeof showLoginOverlay === 'function') showLoginOverlay();
     }
@@ -2307,6 +2316,102 @@ function updateRequestsBadge() {
 }
 
 // ────────────── SIDEBAR NAV DOT INDICATOR ──────────────
+// ────────────── SEEN STATE (synced per account) ──────────────
+// What each account has already seen — the last visit to Requests and to
+// Changes, and the conflicts that were open at the last Conflicts visit —
+// lives in scheduler/userSeen/<account>, so a dot cleared on one computer
+// stays cleared on every other. This browser keeps a copy (the old
+// per-device keys) for an instant start and to seed the synced copy the
+// first time: visit times merge to the latest, conflict keys to the union.
+//   { requests: ms, changes: ms, conflicts: [conflictKey, …] }
+let _userSeen = null;          // null until the account's copy has loaded
+let _userSeenRef = null;
+let _userSeenId = null;
+
+const _SEEN_LOCAL = {
+    requests: id => 'reqDecisionAck_' + id,
+    changes: id => 'chgSeenAck_' + id,
+    conflicts: id => 'conflictSeenKeys_' + id,
+};
+function _seenLocalGet(field, id) {
+    try {
+        const raw = localStorage.getItem(_SEEN_LOCAL[field](id));
+        if (raw === null) return null;
+        if (field === 'conflicts') { const a = JSON.parse(raw); return Array.isArray(a) ? a : null; }
+        return +raw || null;
+    } catch (_) { return null; }
+}
+function _seenLocalSet(field, id, value) {
+    try {
+        localStorage.setItem(_SEEN_LOCAL[field](id),
+            field === 'conflicts' ? JSON.stringify(value) : String(value));
+    } catch (_) {}
+}
+
+function userSeenSignedIn(id) {
+    userSeenSignedOut();
+    if (id === null || id === undefined) return;
+    _userSeenId = String(id);
+    _userSeenRef = db.ref('scheduler/userSeen/' + _userSeenId);
+    _userSeenRef.on('value', snap => {
+        const remote = snap.val() || {};
+        const merged = Object.assign({}, remote);
+        const up = {};
+        // Seed / merge from this browser's copy: latest visit wins; conflict
+        // keys seen on any device stay seen.
+        ['requests', 'changes'].forEach(f => {
+            const local = _seenLocalGet(f, _userSeenId);
+            if (local && (!remote[f] || local > remote[f])) { merged[f] = local; up[f] = local; }
+            if (merged[f]) _seenLocalSet(f, _userSeenId, merged[f]);
+        });
+        const localC = _seenLocalGet('conflicts', _userSeenId);
+        const remoteC = Array.isArray(remote.conflicts) ? remote.conflicts : Object.values(remote.conflicts || {});
+        if (localC && localC.some(k => !remoteC.includes(k))) {
+            merged.conflicts = [...new Set([...remoteC, ...localC])];
+            up.conflicts = merged.conflicts;
+        } else {
+            merged.conflicts = remoteC;
+        }
+        if (merged.conflicts.length) _seenLocalSet('conflicts', _userSeenId, merged.conflicts);
+        _userSeen = merged;
+        if (Object.keys(up).length) _userSeenRef.update(up).catch(() => {});
+        if (typeof updateNavRequestsIndicator === 'function') updateNavRequestsIndicator();
+        if (typeof updateNavChangesIndicator === 'function') updateNavChangesIndicator();
+        if (typeof updateNavConflictsIndicator === 'function') updateNavConflictsIndicator();
+    }, err => console.warn('userSeen read failed; using this device\'s copy.', err));
+}
+
+function userSeenSignedOut() {
+    if (_userSeenRef) { try { _userSeenRef.off(); } catch (_) {} }
+    _userSeenRef = null;
+    _userSeenId = null;
+    _userSeen = null;
+}
+
+// A visit time; a first-ever look starts the clock now (so old history is
+// quiet). Until the synced copy loads, this device's copy stands in, and
+// with neither, nothing counts as new yet (no false red flash on load).
+function _seenTime(field) {
+    const id = loggedInPathId;
+    if (id === null || id === undefined) return Date.now();
+    if (_userSeen && String(id) === _userSeenId) {
+        if (_userSeen[field]) return _userSeen[field];
+        const now = Date.now();
+        _markSeenTime(field, now);
+        return now;
+    }
+    return _seenLocalGet(field, id) || Date.now();
+}
+function _markSeenTime(field, ms) {
+    const id = loggedInPathId;
+    if (id === null || id === undefined) return;
+    _seenLocalSet(field, id, ms);
+    if (_userSeen && String(id) === _userSeenId) {
+        _userSeen[field] = ms;
+        db.ref('scheduler/userSeen/' + _userSeenId + '/' + field).set(ms).catch(() => {});
+    }
+}
+
 // Dot on "Requests": red = a request that arrived since the last visit,
 // amber = pending but already seen, green = approved since last visit,
 // rust = denied since last visit. Visiting the page (or opening the
@@ -2314,17 +2419,7 @@ function updateRequestsBadge() {
 // older than that stamp counts as seen.
 function _getAckTs() {
     if (!loggedInPathId) return Date.now();
-    const key = 'reqDecisionAck_' + loggedInPathId;
-    try {
-        const stored = localStorage.getItem(key);
-        if (stored === null) {
-            // First activation: baseline to now so stale history is silent.
-            const now = String(Date.now());
-            localStorage.setItem(key, now);
-            return +now;
-        }
-        return +stored || 0;
-    } catch (_) { return 0; }
+    return _seenTime('requests');
 }
 
 // Pending requests that landed since the last visit — these light the dot
@@ -2432,8 +2527,7 @@ function _setNavDot(dot, toneClass, pop) {
 // flips their dot from red (unseen request) to amber (seen, still pending).
 function markRequestsPageSeen() {
     if (!loggedInPathId) return;
-    const key = 'reqDecisionAck_' + loggedInPathId;
-    try { localStorage.setItem(key, String(Date.now())); } catch (_) {}
+    _markSeenTime('requests', Date.now());
     updateNavRequestsIndicator();
 }
 
@@ -2444,17 +2538,7 @@ function markRequestsPageSeen() {
 // Changes the user made themselves never light the dot.
 function _getChangesAckTs() {
     if (loggedInPathId === null) return Date.now();
-    const key = 'chgSeenAck_' + loggedInPathId;
-    try {
-        const stored = localStorage.getItem(key);
-        if (stored === null) {
-            // First activation: baseline to now so stale history is silent.
-            const now = String(Date.now());
-            localStorage.setItem(key, now);
-            return +now;
-        }
-        return +stored || 0;
-    } catch (_) { return 0; }
+    return _seenTime('changes');
 }
 
 function updateNavChangesIndicator() {
@@ -2498,8 +2582,7 @@ function updateNavChangesIndicator() {
 // which changes are "new".
 function markChangesPageSeen() {
     if (typeof loggedInPathId !== 'number' && !isLakeForest()) return;
-    const key = 'chgSeenAck_' + loggedInPathId;
-    try { localStorage.setItem(key, String(Date.now())); } catch (_) {}
+    _markSeenTime('changes', Date.now());
     updateNavChangesIndicator();
 }
 
@@ -2746,17 +2829,13 @@ function getOpenConflicts() {
     return getConflicts().filter(c => !c.accepted);
 }
 
-// ── Seen state (per device, like the Requests/Changes dots) ─────────────
-// Stores the keys that were open at the last visit, so "new" means "a
-// conflict that wasn't on the list when you last looked".
+// ── Seen state (synced per account, like the Requests/Changes dots) ─────
+// The keys that were open at the last visit, so "new" means "a conflict
+// that wasn't on the list when you last looked" — on any computer.
 function _conflictSeenKeys() {
     if (!loggedInPathId) return new Set();
-    try {
-        const raw = localStorage.getItem('conflictSeenKeys_' + loggedInPathId);
-        if (!raw) return new Set();
-        const arr = JSON.parse(raw);
-        return new Set(Array.isArray(arr) ? arr : []);
-    } catch (_) { return new Set(); }
+    if (_userSeen && String(loggedInPathId) === _userSeenId) return new Set(_userSeen.conflicts || []);
+    return new Set(_seenLocalGet('conflicts', loggedInPathId) || []);
 }
 
 // Snapshot taken when the page is opened, so the visit that clears the dot
@@ -2765,12 +2844,12 @@ let _conflictVisitSeen = null;
 
 function markConflictsPageSeen() {
     if (!loggedInPathId || !isAdmin()) return;
-    try {
-        localStorage.setItem(
-            'conflictSeenKeys_' + loggedInPathId,
-            JSON.stringify(getOpenConflicts().map(c => c.key))
-        );
-    } catch (_) {}
+    const keys = getOpenConflicts().map(c => c.key);
+    _seenLocalSet('conflicts', loggedInPathId, keys);
+    if (_userSeen && String(loggedInPathId) === _userSeenId) {
+        _userSeen.conflicts = keys;
+        db.ref('scheduler/userSeen/' + _userSeenId + '/conflicts').set(keys).catch(() => {});
+    }
     updateNavConflictsIndicator();
 }
 
@@ -3890,6 +3969,20 @@ function openRequestsModal() {
     markRequestsPageSeen();
 }
 
+// The Requests page's tab row, with room at its right end for the page's
+// button (New PTO request / Request LF sendout dates). Made once.
+function _requestsPageBar() {
+    let bar = document.getElementById('requestsPageBar');
+    if (bar) return bar;
+    const tabsEl = document.getElementById('requestsPageTabs');
+    bar = document.createElement('div');
+    bar.id = 'requestsPageBar';
+    bar.className = 'requests-page-bar';
+    tabsEl.parentNode.insertBefore(bar, tabsEl);
+    bar.appendChild(tabsEl);
+    return bar;
+}
+
 function renderRequestsList(targetEl, tabState) {
     // No args → modal list + modal tab state; explicit args → that surface
     // (Requests page).
@@ -3968,7 +4061,7 @@ function renderRequestsList(targetEl, tabState) {
         // dates covering the request's window.
         const askLfBtnHtml = (isAdmin()
             && (req.type === 'pto_add' || req.type === 'pto_remove'))
-            ? `<button data-act="asklf" data-key="${key}">Request LF dates</button>`
+            ? `<button class="link" data-act="asklf" data-key="${key}">Request LF dates</button><span class="req-actions-spacer"></span>`
             : '';
         if (req.status === 'awaiting_call') {
             actions = _callTradeCardActions(key, req);
@@ -3988,26 +4081,12 @@ function renderRequestsList(targetEl, tabState) {
                             </div>`;
                 }
             } else if (isAdmin() && req.requesterId !== loggedInPathId) {
-                // Only PTO and service approvals move the rotation, so only
-                // those get the recompute pair; on-call/LF approvals don't.
-                const affectsRotation = req.type === 'pto_add'
-                    || req.type === 'pto_remove' || req.type === 'service_change';
-                const rcHtml = affectsRotation ? `
-                                <label class="rc-horizon rc-horizon-inline" title="How far ahead to recompute the schedule">
-                                    <select data-rchorizon="${key}" aria-label="How far ahead to recompute">
-                                        <option value="30">30 days</option>
-                                        <option value="90">90 days</option>
-                                        <option value="180" selected>180 days</option>
-                                        <option value="365">365 days</option>
-                                    </select>
-                                </label>
-                                <button class="approve" data-act="approverc" data-key="${key}">Approve &amp; recompute</button>` : '';
+                // PTO and service approvals then offer the recompute panel.
                 actions = `
                             <div class="req-card-actions">
                                 ${askLfBtnHtml}
                                 <button class="deny" data-act="deny" data-key="${key}">Deny</button>
                                 <button class="approve" data-act="approve" data-key="${key}">Approve</button>
-                                ${rcHtml}
                             </div>`;
             } else if (req.requesterId === loggedInPathId) {
                 actions = `
@@ -4046,7 +4125,7 @@ function renderRequestsList(targetEl, tabState) {
                                 <span class="req-who">${escapeHtml(desc.title)}</span>
                                 <span class="req-type">${typeShort}</span>
                             </div>
-                            <span class="req-status-pill ${req.status}">${isAskType && req.status === 'approved' ? 'completed' : (req.status === 'awaiting_call' ? 'waiting on colleague' : (req.status === 'pending' ? 'with director' : req.status))}</span>
+                            ${_requestStatusPillHtml(req, isAskType)}
                         </div>
                         <div class="req-detail">${desc.body}</div>
                         ${noteLine}
@@ -4062,12 +4141,7 @@ function renderRequestsList(targetEl, tabState) {
         btn.addEventListener('click', () => {
             const act = btn.dataset.act;
             const key = btn.dataset.key;
-            if (act === 'approve') approveRequest(key, { recompute: false });
-            else if (act === 'approverc') {
-                const sel = listEl.querySelector(`select[data-rchorizon="${key}"]`);
-                const h = sel ? parseInt(sel.value, 10) : CONFLICT_HORIZON_DEFAULT;
-                approveRequest(key, { recompute: true, horizonDays: h || CONFLICT_HORIZON_DEFAULT });
-            }
+            if (act === 'approve') approveRequest(key);
             else if (act === 'deny') denyRequest(key);
             else if (act === 'cancel') cancelRequest(key);
             else if (act === 'revoke') revokeApproval(key);
@@ -4096,6 +4170,61 @@ function renderRequestsList(targetEl, tabState) {
 //                a trade / withdraw.
 //   Colleague  — take the call week (choosing which of their weeks the
 //                requester takes) or decline; withdraw an offer.
+// "Dr. Moravek" for pathologists; other accounts by their display name.
+function _drLastName(id) {
+    const p = pathologists.find(x => x.id === id);
+    if (!p) return _pathName(id);
+    const last = p.name.replace(/^Dr\.\s*/, '').trim().split(/\s+/).pop();
+    return 'Dr. ' + last;
+}
+
+// Who an open request is waiting on (ids):
+//   pending                → the director (Lake Forest for a dates ask)
+//   awaiting_call, offers  → the requester, to choose one
+//   awaiting_call, no offer → the asked colleague(s) who haven't declined;
+//                             the requester if everyone asked declined
+function _requestWaitingOn(req) {
+    if (req.status === 'pending') {
+        if (req.type === 'lf_dates_request') return [req.targetId];
+        const dir = pathologists.find(p => isAdmin(p.id));
+        return dir ? [dir.id] : [];
+    }
+    if (req.status !== 'awaiting_call') return [];
+    const t = _callTrade(req);
+    if (!t) return [req.requesterId];
+    if (Object.keys(t.offers || {}).length) return [req.requesterId];
+    const declined = Object.keys(t.declined || {}).map(Number);
+    const asked = t.ask === 'all'
+        ? pathologists.filter(p => p.id !== req.requesterId && isPathologistAccount(p.id)).map(p => p.id)
+        : [Number(t.ask)];
+    const left = asked.filter(id => !declined.includes(id));
+    return left.length ? left : [req.requesterId];
+}
+
+// "Waiting on Dr. Moravek" / "Waiting on Drs. Mujeeb and Raouf" /
+// "Waiting on you"; '' when the request isn't open.
+function _requestWaitingText(req) {
+    const ids = _requestWaitingOn(req);
+    if (!ids.length) return '';
+    if (ids.includes(loggedInPathId)) return 'Waiting on you';
+    const names = ids.map(_drLastName);
+    if (names.length === 1) return 'Waiting on ' + names[0];
+    const bare = names.map(n => n.replace(/^Dr\. /, ''));
+    return 'Waiting on Drs. ' + bare.slice(0, -1).join(', ') + ' and ' + bare[bare.length - 1];
+}
+
+// Status pill: "Waiting on Dr. X" while open — left off when it's waiting
+// on the viewer (the card's own buttons say so); the decision otherwise.
+function _requestStatusPillHtml(req, isAskType) {
+    if (isOpenRequest(req)) {
+        const ids = _requestWaitingOn(req);
+        if (!ids.length || ids.includes(loggedInPathId)) return '';
+        return `<span class="req-status-pill ${req.status} is-waiting">${escapeHtml(_requestWaitingText(req))}</span>`;
+    }
+    const label = isAskType && req.status === 'approved' ? 'completed' : req.status;
+    return `<span class="req-status-pill ${req.status}">${label}</span>`;
+}
+
 function _callTradeCardActions(key, req) {
     const t = _callTrade(req) || {};
     const me = loggedInPathId;
@@ -4193,39 +4322,19 @@ function renderRequestsPage() {
         newBtn.id = 'requestsPageNewBtn';
         newBtn.type = 'button';
         newBtn.className = 'req-new-btn';
-        newBtn.textContent = 'New PTO Request';
-        newBtn.style.cssText = [
-            'margin: 0 0 12px',
-            'padding: 8px 14px',
-            'border-radius: 8px',
-            'border: 1px solid var(--accent-soft, #2a2a2a)',
-            'background: var(--accent-soft, #2a2a2a)',
-            'color: var(--ink-2, #ddd)',
-            'font: inherit',
-            'font-weight: 600',
-            'cursor: pointer',
-            'display: inline-flex',
-            'align-items: center',
-        ].join(';');
+        newBtn.textContent = 'New PTO request';
         newBtn.addEventListener('click', () => {
             // Lake Forest requests sendout days; everyone else requests PTO.
             if (isLakeForest()) { openLfRequestModal(today); return; }
             const addBtn = document.getElementById('addPtoBtn');
             if (addBtn) addBtn.click();
         });
-        // Place it directly above the tab bar so it's prominent without
-        // overlapping the page header/summary.
-        const tabsEl = document.getElementById('requestsPageTabs');
-        if (tabsEl && tabsEl.parentNode) {
-            tabsEl.parentNode.insertBefore(newBtn, tabsEl);
-        } else {
-            pg.appendChild(newBtn);
-        }
+        _requestsPageBar().appendChild(newBtn);
     }
     // Pathologists request PTO here; Lake Forest requests sendouts. Nobody
     // else (Kathleen, gross room, histology) gets the button.
     newBtn.style.display = (!admin && (canUsePto() || isLakeForest())) ? 'inline-flex' : 'none';
-    newBtn.textContent = isLakeForest() ? 'New Sendout Request' : 'New PTO Request';
+    newBtn.textContent = isLakeForest() ? 'New sendout request' : 'New PTO request';
 
     // Inject (once) an admin-only button that asks the Lake Forest account
     // for their sendout dates (files an lf_dates_request aimed at LF).
@@ -4235,27 +4344,9 @@ function renderRequestsPage() {
         askLfBtn.id = 'requestsPageAskLfBtn';
         askLfBtn.type = 'button';
         askLfBtn.className = 'req-new-btn';
-        askLfBtn.innerHTML = '<span aria-hidden="true" style="margin-right:6px;font-weight:700;">+</span>Request LF Sendout Dates';
-        askLfBtn.style.cssText = [
-            'margin: 0 0 12px',
-            'padding: 8px 14px',
-            'border-radius: 8px',
-            'border: 1px solid var(--accent-soft, #2a2a2a)',
-            'background: var(--accent-soft, #2a2a2a)',
-            'color: var(--ink-2, #ddd)',
-            'font: inherit',
-            'font-weight: 600',
-            'cursor: pointer',
-            'display: inline-flex',
-            'align-items: center',
-        ].join(';');
+        askLfBtn.textContent = 'Request LF sendout dates';
         askLfBtn.addEventListener('click', () => openLfAskModal());
-        const tabsEl = document.getElementById('requestsPageTabs');
-        if (tabsEl && tabsEl.parentNode) {
-            tabsEl.parentNode.insertBefore(askLfBtn, tabsEl);
-        } else {
-            pg.appendChild(askLfBtn);
-        }
+        _requestsPageBar().appendChild(askLfBtn);
     }
     askLfBtn.style.display = admin ? 'inline-flex' : 'none';
 
@@ -4939,21 +5030,41 @@ function suggestConsultCaseNumber(dateKey, excludeKey) {
     return 'MHSC' + yy + '-' + String(maxN + 1).padStart(4, '0');
 }
 
-// Next up = whoever follows the most recent consult's recipient in
-// `pathologists` order (no entries → first). A suggestion only — the logger
-// can pick someone else and the pointer continues from there.
-function nextConsultPathologist() {
-    if (!pathologists || pathologists.length === 0) return null;
+// The consult queue, first = next up: fewest consults this fiscal year
+// first; ties keep the rotation order, which starts with whoever follows the
+// most recent consult's recipient in `pathologists` order. If the first
+// person can't take one, the logger goes down the queue — the counts then
+// reorder it on their own.
+//   [{ p, count }]
+function consultQueue() {
+    if (!pathologists || pathologists.length === 0) return [];
     const entries = Object.values(consultLog || {})
         .filter(e => e && e.date && e.pathologistId !== undefined);
-    if (entries.length === 0) return pathologists[0];
     entries.sort((a, b) => {
         if (a.date !== b.date) return a.date < b.date ? 1 : -1;
         return (b.createdAt || 0) - (a.createdAt || 0);
     });
-    const lastPid = entries[0].pathologistId;
-    const idx = pathologists.findIndex(p => String(p.id) === String(lastPid));
-    return pathologists[(idx + 1) % pathologists.length];   // idx -1 → [0]
+    const n = pathologists.length;
+    const lastIdx = entries.length
+        ? pathologists.findIndex(p => String(p.id) === String(entries[0].pathologistId))
+        : -1;
+    const fy = getAcademicYearOfDate(today);
+    const count = {};
+    entries.forEach(e => {
+        if (getAcademicYearOfKey(e.date) === fy) count[e.pathologistId] = (count[e.pathologistId] || 0) + 1;
+    });
+    return pathologists
+        .map((_, i) => pathologists[(lastIdx + 1 + i) % n])            // rotation order
+        .map((p, rank) => ({ p, rank, count: count[p.id] || 0 }))
+        .sort((a, b) => a.count - b.count || a.rank - b.rank)
+        .map(({ p, count: c }) => ({ p, count: c }));
+}
+
+// Next up = the head of the queue. A suggestion only — the logger can pick
+// someone else.
+function nextConsultPathologist() {
+    const q = consultQueue();
+    return q.length ? q[0].p : null;
 }
 
 // Consults matching the tracking-page period filter (same fiscal-year
@@ -4968,11 +5079,17 @@ function getFilteredConsults() {
             filtered = entries.filter(([, e]) => getAcademicYearOfKey(e.date) === yr);
         }
     }
+    filtered = filtered.filter(([, e]) => trackingKeepDate(e.date));
     return filtered.sort((a, b) => {
         if (a[1].date !== b[1].date) return a[1].date < b[1].date ? 1 : -1;
         return (b[1].createdAt || 0) - (a[1].createdAt || 0);
     });
 }
+
+// "So far" (the Count switch in the Tracking header): entries and days
+// after today are left out of every section on the page.
+function trackingSoFar() { return trackingDaysMode === 'sofar'; }
+function trackingKeepDate(dateKey) { return !trackingSoFar() || dateKey <= fmt(today); }
 
 // ── Period helpers ───────────────────────────────────────────────────────
 // Academic year runs Sept 1 → Aug 31. We label it by the start year.
@@ -5008,6 +5125,7 @@ function getFilteredEntries() {
             filtered = entries.filter(([, e]) => getAcademicYearOfKey(e.date) === yr);
         }
     }
+    filtered = filtered.filter(([, e]) => trackingKeepDate(e.date));
 
     return filtered.sort((a, b) => {
         // newest date first; tiebreak by createdAt desc
@@ -5082,16 +5200,29 @@ function renderTrackingPto() {
             periodLabel = 'Sep ' + yr + ' – Aug ' + (yr + 1);
         }
     }
+    // "So far" stops at today.
+    if (trackingSoFar()) {
+        if (!range) range = { start: EARLIEST_DATE, end: new Date(today) };
+        else if (range.end.getTime() > today.getTime()) {
+            range = { start: range.start, end: new Date(today) };
+            periodLabel += ' · through today';
+        }
+    }
     if (periodLabelEl) periodLabelEl.textContent = periodLabel;
 
+    // "All time" has no allotment to measure against: bars scale to the most
+    // PTO anyone has taken, so every period draws the same rows.
+    const usedById = {};
+    pathologists.forEach(p => { usedById[p.id] = ptoDaysScheduled(p.id, range ? { start: range.start, end: range.end } : undefined); });
+    const maxUsed = Math.max(1, ...Object.values(usedById));
     listEl.innerHTML = pathologists.map(p => {
-        const used = ptoDaysScheduled(p.id, range ? { start: range.start, end: range.end } : undefined);
+        const used = usedById[p.id];
         // Allotments are per fiscal year (legacy value = fallback default) —
         // resolve against the selected period.
         const allot = fiscalYear !== null ? ptoAllotmentFor(p.id, fiscalYear) : 0;
         const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
 
-        let pctRaw = (showAllotted && allot > 0) ? (used / allot) : 0;
+        let pctRaw = showAllotted ? (allot > 0 ? used / allot : 0) : used / maxUsed;
         if (!Number.isFinite(pctRaw)) pctRaw = 0;
         const pct = Math.max(0, Math.min(1, pctRaw));
         const isOver = showAllotted && allot > 0 && used > allot;
@@ -5106,11 +5237,9 @@ function renderTrackingPto() {
                    <span class="tracking-pto-allot"> days</span>
                </span>`;
 
-        const barHtml = showAllotted
-            ? `<div class="tracking-pto-bar" aria-hidden="true">
+        const barHtml = `<div class="tracking-pto-bar" aria-hidden="true">
                    <div class="tracking-pto-bar-fill${isOver ? ' is-over' : ''}" style="width:${(pct * 100).toFixed(1)}%;"></div>
-               </div>`
-            : '';
+               </div>`;
 
         return `
             <div class="tracking-pto-row" style="--c:${p.color};" title="Dr. ${escapeHtml(lastName)} — ${used}${showAllotted ? ' of ' + allot : ''} working days of PTO">
@@ -5121,6 +5250,93 @@ function renderTrackingPto() {
             </div>`;
     }).join('');
 }
+
+// ── Days by assignment ── per pathologist, working days (weekdays that
+// aren't holidays) on each service, off service, PTO and leave in the
+// selected fiscal year, read from the schedule itself (rotation, overrides,
+// swaps and recomputes all count). "So far" stops at today; "Full year"
+// includes what's scheduled. 'all' runs from the first scheduled day to the
+// end of the current fiscal year.
+let trackingDaysMode = 'sofar';
+const TRACKING_DAY_COLS = [
+    { key: 'cyto', label: 'Cyto/​Gross' },
+    { key: 'bigs', label: 'Bigs' },
+    { key: 'cytobigs', label: 'Cyto/​Gross/​Bigs', onlyIfUsed: true },
+    { key: 'huntley', label: 'Huntley' },
+    { key: 'wfh', label: 'WFH' },
+    { key: 'off', label: 'Off service' },
+    { key: 'pto', label: 'PTO' },
+    { key: 'leave', label: 'Leave', onlyIfUsed: true },
+];
+
+function daysByAssignment(start, end) {
+    const out = {};
+    pathologists.forEach(p => {
+        out[p.id] = {};
+        TRACKING_DAY_COLS.forEach(c => { out[p.id][c.key] = 0; });
+    });
+    const from = start.getTime() < EARLIEST_DATE.getTime() ? new Date(EARLIEST_DATE) : new Date(start);
+    for (let d = from; d.getTime() <= end.getTime(); d = addDays(d, 1)) {
+        if (isWeekend(d) || getFederalHoliday(d)) continue;
+        const a = getDayAssignments(d);
+        pathologists.forEach(p => {
+            const x = a[p.id];
+            if (!x) return;
+            let key = null;
+            if (x.type === 'service' && x.service && out[p.id][x.service.id] !== undefined) key = x.service.id;
+            else if (x.type === 'off_site') key = 'off';
+            else if (x.type === 'pto') {
+                const v = timeOffOn(p.id, d);
+                key = v && v.type === 'leave' ? 'leave' : 'pto';
+            }
+            if (key) out[p.id][key]++;
+        });
+    }
+    return out;
+}
+
+function renderTrackingDays() {
+    const headEl = document.getElementById('trackingDaysHead');
+    const bodyEl = document.getElementById('trackingDaysBody');
+    const periodEl = document.getElementById('trackingDaysPeriod');
+    if (!headEl || !bodyEl) return;
+    if (!pathologists || pathologists.length === 0) {
+        headEl.innerHTML = '';
+        bodyEl.innerHTML = '<tr><td class="t-sum-empty">No pathologists loaded.</td></tr>';
+        return;
+    }
+    let range, label;
+    if (trackingPeriod === 'all') {
+        range = { start: EARLIEST_DATE, end: getFiscalYearRange(getAcademicYearOfDate(today)).end };
+        label = 'All time';
+    } else {
+        const yr = parseInt(trackingPeriod, 10);
+        range = getFiscalYearRange(Number.isFinite(yr) ? yr : getAcademicYearOfDate(today));
+        label = 'Sep ' + range.start.getFullYear() + ' – Aug ' + range.end.getFullYear();
+    }
+    const end = trackingDaysMode === 'sofar' && range.end.getTime() > today.getTime() ? today : range.end;
+    if (periodEl) periodEl.textContent = label + (trackingDaysMode === 'sofar' && end === today ? ' · through today' : '');
+
+    const counts = daysByAssignment(range.start, end);
+    const cols = TRACKING_DAY_COLS.filter(c => !c.onlyIfUsed || pathologists.some(p => counts[p.id][c.key] > 0));
+    headEl.innerHTML = '<th class="t-sum-name-col">Pathologist</th>'
+        + cols.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
+    bodyEl.innerHTML = pathologists.map(p => {
+        const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
+        return `<tr>
+            <td class="t-sum-name" style="--c:${p.color};">
+                <span class="t-sum-dot"></span>
+                <span>Dr. ${escapeHtml(lastName)}</span>
+            </td>
+            ${cols.map(c => { const n = counts[p.id][c.key]; return `<td class="${n === 0 ? 't-sum-zero' : ''}">${n}</td>`; }).join('')}
+        </tr>`;
+    }).join('');
+}
+
+document.querySelectorAll('input[name="trackingDaysMode"]').forEach(r => r.addEventListener('change', () => {
+    trackingDaysMode = r.value;
+    renderTrackingPage();
+}));
 
 // ── Holiday call tracker ─────────────────────────────────────────────────
 // Who is on call for each of the six federal holidays from the fixed start
@@ -5174,8 +5390,10 @@ function renderTrackingHolidayCall() {
     if (capEl) {
         const end = new Date();
         end.setFullYear(end.getFullYear() + 1);
-        capEl.textContent = 'Sep 1, 2025 – ' + MONTHS_SHORT[end.getMonth()] + ' '
-            + end.getDate() + ', ' + end.getFullYear() + ' · includes upcoming call';
+        capEl.textContent = trackingSoFar()
+            ? 'Sep 1, 2025 – today'
+            : 'Sep 1, 2025 – ' + MONTHS_SHORT[end.getMonth()] + ' '
+                + end.getDate() + ', ' + end.getFullYear() + ' · includes upcoming call';
     }
 
     // Header row: Pathologist | <each holiday> | Total.
@@ -5191,7 +5409,7 @@ function renderTrackingHolidayCall() {
         return;
     }
 
-    const entries = holidayCallEntries();
+    const entries = holidayCallEntries().filter(e => trackingKeepDate(fmt(e.date)));
 
     // (pathId → { holidayName → count, total }); a separate `former` bucket
     // collects holidays credited to ids no longer in the roster (departed
@@ -5447,17 +5665,22 @@ function renderConsultNext() {
         return;
     }
 
-    const next = nextConsultPathologist();
-    const nextId = next ? next.id : null;
-
-    const chips = pathologists.map((p, i) => {
-        const isNext = String(p.id) === String(nextId);
-        const arrow = i < pathologists.length - 1
+    // Boxes in queue order (fewest consults this fiscal year first), each
+    // with its count; those who can log consults click one to log it for
+    // that person — the way to go down the line when someone can't take it.
+    const queue = consultQueue();
+    const next = queue.length ? queue[0].p : null;
+    const canLog = canEditConsults();
+    const chips = queue.map(({ p, count }, i) => {
+        const isNext = i === 0;
+        const arrow = i < queue.length - 1
             ? '<span class="consult-rot-arrow" aria-hidden="true">›</span>'
             : '';
-        return `<span class="consult-rot-chip${isNext ? ' is-next' : ''}"
-                    style="--c:${p.color};"
-                    title="${escapeHtml(p.name)}${isNext ? ' — next up' : ''}">${escapeHtml(p.initials || '')}</span>${arrow}`;
+        const tip = `${p.name} — ${count} consult${count === 1 ? '' : 's'} this fiscal year${isNext ? ' · next up' : ''}${canLog ? ' · click to log a consult for them' : ''}`;
+        const tag = canLog ? 'button' : 'span';
+        return `<${tag} ${canLog ? 'type="button" ' : ''}class="consult-rot-chip${isNext ? ' is-next' : ''}${canLog ? ' is-clickable' : ''}"
+                    data-pid="${p.id}" style="--c:${p.color};"
+                    title="${escapeHtml(tip)}">${escapeHtml(p.initials || '')}<span class="consult-rot-count">${count}</span></${tag}>${arrow}`;
     }).join('');
 
     const nextLine = next
@@ -5468,8 +5691,10 @@ function renderConsultNext() {
         : '';
 
     card.innerHTML = `
-        <div class="consult-rot-strip" title="Rotation order — cycles back to the start after the last pathologist">${chips}</div>
+        <div class="consult-rot-strip" title="Next up first: fewest consults this fiscal year; ties follow the rotation">${chips}</div>
         ${nextLine}`;
+    card.querySelectorAll('.consult-rot-chip.is-clickable').forEach(b =>
+        b.addEventListener('click', () => openConsultModal(null, Number(b.dataset.pid))));
 }
 
 // ── Master renderer ──────────────────────────────────────────────────────
@@ -5507,6 +5732,7 @@ function renderTrackingPage() {
     renderTrackingTabCounts(filtered, filteredConsults.length);
     renderTrackingEntries(filtered);
     renderTrackingPto();
+    renderTrackingDays();
     renderTrackingHolidayCall();
 }
 
@@ -5565,7 +5791,7 @@ document.querySelectorAll('.nav-item[data-page="tracking"]').forEach(btn => {
 // date's year, regenerated on date change until hand-edited.
 let _editingConsultKey = null;
 
-function openConsultModal(editKey) {
+function openConsultModal(editKey, pickPid) {
     if (!canEditConsults()) return;
 
     const back = document.getElementById('consultModalBack');
@@ -5616,11 +5842,15 @@ function openConsultModal(editKey) {
         dateInput.value = todayKey;
         sourceInput.value = '';
         const next = nextConsultPathologist();
-        if (next) pathSel.value = String(next.id);
+        const picked = pickPid !== undefined && pickPid !== null
+            ? pathologists.find(p => p.id === pickPid) : null;
+        const who = picked || next;
+        if (who) pathSel.value = String(who.id);
         if (hintEl) {
-            hintEl.textContent = next
-                ? 'Rotation suggests ' + next.name + ' — pick someone else to skip them this round.'
-                : '';
+            hintEl.textContent = !next ? ''
+                : (picked && next && picked.id !== next.id)
+                    ? next.name + ' is next up; logging this one for ' + picked.name + ' instead.'
+                    : 'Next up: ' + next.name + ' (fewest consults this fiscal year) — pick someone else to skip them this round.';
         }
         caseInput.value = suggestConsultCaseNumber(todayKey, null);
         delete caseInput.dataset.userEdited;
@@ -6940,7 +7170,7 @@ function renderHourGrid(date) {
     const allDayHtml = meetings.filter(m => m.allDay).map(m =>
         `<div class="meeting-allday" title="${escapeHtml(m.title + ' — all day (Outlook)')}"><span class="meeting-icon" aria-hidden="true"></span>${escapeHtml(m.title)}</div>`
     ).join('');
-    const rowTitle = showProcs ? 'Double-click an empty slot to add a procedure' : '';
+    const rowTitle = showProcs && canEditProcedures() ? 'Double-click an empty slot to add a procedure' : '';
 
     let rowsHtml = '';
     for (let h = HOURS_START; h <= HOURS_END; h++) {
@@ -6962,7 +7192,7 @@ function renderHourGrid(date) {
                 if (m) tipParts.push('Outlook: ' + m.title);
                 if (c.note) tipParts.push(c.note);
                 const tooltip = tipParts.join(' — ');
-                return `<span class="conf-item conf-type-${escapeHtml(c.type)}" data-day="${dayKey}" data-conf-key="${escapeHtml(c.key)}" tabindex="0" title="${escapeHtml(tooltip)}"><span class="conf-item-icon" aria-hidden="true"></span>${escapeHtml(lbl)}</span>`;
+                return `<span class="conf-item conf-type-${escapeHtml(c.type)}" data-day="${dayKey}" data-conf-key="${escapeHtml(c.key)}" tabindex="0" title="${escapeHtml(tooltip)}"><span class="conf-item-icon" aria-hidden="true"></span><span class="pill-text">${escapeHtml(lbl)}</span></span>`;
             }).join('');
             const items = (bySlot[timeKey] || []).map(p => {
                 // Pill label always prefixes the exact start time
@@ -6974,11 +7204,11 @@ function renderHourGrid(date) {
                 // Hover tooltip: procedure label + time range. Each procedure
                 // is 30 min by default (durationMin can override).
                 const tooltip = `${baseLbl} — ${formatTimeRange(p.time, p.durationMin)}`;
-                return `<span class="proc-item ${pa.cls}"${pa.style} data-day="${dayKey}" data-key="${p.key}" tabindex="0" draggable="true" title="${escapeHtml(tooltip)}">${escapeHtml(lbl)}</span>`;
+                return `<span class="proc-item ${pa.cls}"${pa.style} data-day="${dayKey}" data-key="${p.key}" tabindex="0"${canEditProcedures() ? ' draggable="true"' : ''} title="${escapeHtml(tooltip)}"><span class="pill-text">${escapeHtml(lbl)}</span></span>`;
             }).join('');
             const meetingItems = (meetingsBySlot[timeKey] || []).map(m => {
                 const tooltip = `${m.title} — ${formatTime12(m.start)} – ${formatTime12(m.end)} (Outlook)`;
-                return `<span class="meeting-item" tabindex="0" title="${escapeHtml(tooltip)}"><span class="meeting-icon" aria-hidden="true"></span>${escapeHtml(formatTime12Short(m.start) + ' ' + m.title)}</span>`;
+                return `<span class="meeting-item" tabindex="0" title="${escapeHtml(tooltip)}"><span class="meeting-icon" aria-hidden="true"></span><span class="pill-text">${escapeHtml(formatTime12Short(m.start) + ' ' + m.title)}</span></span>`;
             }).join('');
             rowsHtml += `<div class="hour-row ${cls}" data-day="${dayKey}" data-time="${timeKey}" title="${rowTitle}">
               <div class="hour-label">${label}</div>
@@ -7303,8 +7533,7 @@ function attachHourGridHandlers() {
 
     document.querySelectorAll('.hour-row').forEach(row => {
         row.addEventListener('dblclick', e => {
-            // Read-only guests (histology) can't add procedures.
-            if (isReadOnlyGuest()) return;
+            if (!canEditProcedures()) return;
             // Dblclick on a pill → its own edit handler; conference pills are
             // read-only here (managed from Tracking).
             if (e.target.closest('.proc-item') || e.target.closest('.conf-item')
@@ -7322,12 +7551,12 @@ function attachHourGridHandlers() {
         // Single click → select the pill. Delete key removes the selection.
         item.addEventListener('click', e => {
             e.stopPropagation();
-            selectProcedure(item.dataset.day, item.dataset.key);
+            if (canEditProcedures()) selectProcedure(item.dataset.day, item.dataset.key);
         });
-        // Double click → edit (same modal, prefilled). Disabled for histology.
+        // Double click → edit (same modal, prefilled). Director + gross room.
         item.addEventListener('dblclick', e => {
             e.stopPropagation();
-            if (isReadOnlyGuest()) return;
+            if (!canEditProcedures()) return;
             const dayKey = item.dataset.day;
             const procKey = item.dataset.key;
             if (!dayKey || !procKey) return;
@@ -7338,8 +7567,7 @@ function attachHourGridHandlers() {
 
         // ── Drag-and-drop: move procedure to a different time slot ──
         item.addEventListener('dragstart', e => {
-            // Read-only guests (histology) cannot move procedures.
-            if (isReadOnlyGuest()) { e.preventDefault(); return; }
+            if (!canEditProcedures()) { e.preventDefault(); return; }
             e.stopPropagation();
             // Store the source info in dataTransfer so the drop handler knows
             // which procedure is being moved, even across grid columns.
@@ -7444,7 +7672,7 @@ document.addEventListener('click', e => {
 document.addEventListener('keydown', async e => {
     if (e.key !== 'Delete' && e.key !== 'Backspace') return;
     if (!_selectedProc) return;
-    if (isReadOnlyGuest()) return;
+    if (!canEditProcedures()) return;
     const ae = document.activeElement;
     if (ae && (
         ae.tagName === 'INPUT' ||
@@ -7469,6 +7697,7 @@ document.addEventListener('keydown', async e => {
 let _pendingProc = null;  // { dayKey, timeKey, location, procedureName, editingKey }
 
 function openProcedureModal(dayKey, timeKey, editingKey) {
+    if (!canEditProcedures()) return;
     _pendingProc = {
         dayKey,
         timeKey,
@@ -7638,6 +7867,7 @@ function updateModalProcColors() {
 }
 
 async function saveProcedure() {
+    if (!canEditProcedures()) return;
     if (!_pendingProc || !_pendingProc.location || !_pendingProc.procedureName) return;
     // Read the latest time value from the input — the user may have edited
     // it after the modal opened. Fall back to the slot's time on parse fail.
@@ -7681,6 +7911,7 @@ async function saveProcedure() {
 
 // Delete the edited procedure (edit mode only); confirm first.
 async function deleteProcedure() {
+    if (!canEditProcedures()) return;
     if (!_pendingProc || !_pendingProc.editingKey) return;
     if (!confirm('Delete this procedure? This cannot be undone.')) return;
     const { dayKey, editingKey } = _pendingProc;
@@ -8434,20 +8665,27 @@ function openDayDetail(date) {
 // several pathologists can be changed and locked in one save. The rows use
 // the modal's data-* hooks, so saveServiceFromModal / resetServiceDay work
 // on them unchanged. PTO rows stay clickable for the edit/remove-PTO panel.
+// The day editor's "PTO" dropdown choice.
+const DAY_EDIT_PTO = '__pto__';
+
 function _dayEditRowsHtml(date, dayAssign) {
     const dayKey = fmt(date);
     const allOptions = [...SERVICES, COMBO_SVC, ...OFF_SERVICES];
     return pathologists.map(p => {
         const a = dayAssign[p.id];
         if (!a || a.type === 'blank') return '';
-        const currentId = (a.type === 'service' || a.type === 'off_site') && a.service ? a.service.id : '';
+        const isPto = a.type === 'pto';
+        // PTO is a choice like any service ('__pto__'); a leave day shows
+        // the leave's name.
+        const currentId = isPto ? DAY_EDIT_PTO
+            : (a.type === 'service' || a.type === 'off_site') && a.service ? a.service.id : '';
         const currentIsFt = isFreetextServiceId(currentId);
         const lockId = getServiceLock(dayKey, p.id);
-        const isPto = a.type === 'pto';
         const opts = allOptions.map(sv =>
             `<option value="${sv.id}" ${!currentIsFt && sv.id === currentId ? 'selected' : ''}>${sv.name}</option>`
         ).join('');
-        const noneOpt = `<option value="" ${currentId === '' ? 'selected' : ''}>${isPto ? '— PTO —' : '— No service —'}</option>`;
+        const noneOpt = `<option value="" ${currentId === '' ? 'selected' : ''}>— No service —</option>`
+            + `<option value="${DAY_EDIT_PTO}" ${isPto ? 'selected' : ''}>${escapeHtml(isPto ? timeOffName(timeOffOn(p.id, date)) : 'PTO')}</option>`;
         const customOpt = `<option value="__ft__" ${currentIsFt ? 'selected' : ''}>Custom service…</option>`;
         const cbg = pathBgColor(p.color);
         const cls = ['day-detail-row', 'day-edit-row'];
@@ -9620,13 +9858,12 @@ function openPtoDayModal(date, opts) {
     });
     pendWrap.hidden = pend.length === 0;
     document.getElementById('ptoDayPending').innerHTML = pend.map(([key, r]) => {
-        const waiting = r.status === 'awaiting_call';
         const trade = _callTrade(r);
         return `
         <div class="pto-list-item pto-pending" style="--c:var(--ink-3)">
           <div class="pdot"></div>
           <div class="prange">
-            <div class="pname">${r.type === 'pto_add' ? 'PTO request' : 'Removal request'} <span class="pto-pending-tag">${waiting ? 'waiting on colleague' : 'with the director'}</span></div>
+            <div class="pname">${r.type === 'pto_add' ? 'PTO request' : 'Removal request'} <span class="pto-pending-tag">${escapeHtml(_requestWaitingText(r))}</span></div>
             <div class="pdates">${_reqRangeLabel(r)}${trade ? ' · ' + escapeHtml(callTradeSentence(r)) : ''}</div>
           </div>
           <div class="pto-day-actions"><button type="button" data-act="withdraw" data-key="${key}">Withdraw</button></div>
@@ -10125,7 +10362,7 @@ function openCallRequestModal(date) {
         return `<div class="pto-list-item pto-pending" style="--c:var(--ink-3)">
           <div class="pdot"></div>
           <div class="prange">
-            <div class="pname">${r.type === 'oncall_swap' ? 'Trade request' : 'Coverage request'} <span class="pto-pending-tag">with the director</span></div>
+            <div class="pname">${r.type === 'oncall_swap' ? 'Trade request' : 'Coverage request'} <span class="pto-pending-tag">${escapeHtml(_requestWaitingText(r))}</span></div>
             <div class="pdates">${escapeHtml(tmp.textContent.trim())}</div>
           </div>
           <div class="pto-day-actions"><button type="button" data-act="withdraw" data-key="${key}">Withdraw</button></div>
@@ -11465,6 +11702,13 @@ function _svcRowSyncLock(sel) {
     const cb = root.querySelector(`.svc-lock-cb[data-lock-pid="${pid}"]`);
     if (!cb) return;
     const v = sel.value;
+    if (v === DAY_EDIT_PTO) {
+        // PTO isn't a lockable service.
+        if (cb.dataset.prevManual === undefined) cb.dataset.prevManual = cb.checked ? '1' : '0';
+        cb.checked = false;
+        cb.disabled = true;
+        return;
+    }
     const forced = v === '__ft__' || (v && isNonStandardServiceId(v));
     if (forced) {
         if (cb.dataset.prevManual === undefined) {
@@ -11522,13 +11766,18 @@ async function saveServiceFromModal(choice) {
     const scope = 'day';
 
     if (isAdmin()) {
+        // PTO chosen / un-chosen in the day editor's dropdowns: add or remove
+        // this one day of PTO, then handle the service rows as usual.
+        const ptoLines = await _dayEditApplyPto(selects);
+
         // Per-row intent: resolved service id ('ft:' for custom) + desired lock.
         // Only rows whose SERVICE or LOCK changed are touched — unchanged prefills
         // must never become recompute pins (overconstrains the optimizer).
         const rows = [];
         for (const s of selects) {
             const pid = s.dataset.pid;
-            const initialSid = s.dataset.initial || '';
+            if (s.value === DAY_EDIT_PTO) continue;            // handled above
+            const initialSid = s.dataset.initial === DAY_EDIT_PTO ? '' : (s.dataset.initial || '');
             let sid;
             if (s.value === '__ft__') {
                 const ftInput = root.querySelector(`.svc-ft-input[data-ft-pid="${pid}"]`);
@@ -11562,6 +11811,14 @@ async function saveServiceFromModal(choice) {
         const touched = rows.filter(r => r.sidChanged || r.lockChanged);
         if (touched.length === 0) {
             _closeServiceEditors();
+            if (ptoLines.length) {
+                setPendingRecomputeChoice(choice);
+                await maybeOfferRecompute({}, {
+                    fromDate: activeSvcDate,
+                    dayBeforeFix: true,
+                    message: 'PTO updated. Recompute the future schedule for everyone using the rotation rules?',
+                });
+            }
             return;
         }
 
@@ -11706,6 +11963,75 @@ async function saveServiceFromModal(choice) {
         if (ok) document.getElementById('svcModalBack').classList.remove('open');
     }
 }
+// Day editor: add or remove one day of PTO for each row whose dropdown moved
+// to or from "PTO". A new PTO day joins an adjacent PTO range; removing a day
+// trims or splits its range. Returns the change-log lines.
+async function _dayEditApplyPto(selects) {
+    const day = activeSvcDate;
+    const dk = fmt(day);
+    const lines = [];
+    for (const sel of selects) {
+        const pid = parseInt(sel.dataset.pid, 10);
+        const toPto = sel.value === DAY_EDIT_PTO && sel.dataset.initial !== DAY_EDIT_PTO;
+        const fromPto = sel.dataset.initial === DAY_EDIT_PTO && sel.value !== DAY_EDIT_PTO;
+        if (toPto) {
+            await _addPtoDay(pid, day);
+            // The PTO takes the day: drop any service (incl. off-site) and lock.
+            await db.ref().update({
+                [`scheduler/serviceOverrides/${dk}/${pid}`]: null,
+                [`scheduler/serviceLocks/${dk}/${pid}`]: null,
+            });
+            logChange(Object.assign({
+                kind: 'pto', type: 'pto_add', forPathId: pid, startDate: dk, endDate: dk,
+            }, _chgSummaryPtoAdd(pid, dk, dk)));
+            lines.push(`${_chgShortName(pid)} → PTO`);
+        } else if (fromPto) {
+            const v = timeOffOn(pid, day);
+            if (v) {
+                await _removeTimeOffDay(v, day);
+                logChange(Object.assign({
+                    kind: 'pto', type: 'pto_remove', forPathId: pid, startDate: dk, endDate: dk,
+                }, _chgSummaryPtoRemove(pid, dk, dk)));
+                lines.push(`${_chgShortName(pid)} → back from ${timeOffName(v)}`);
+            }
+        }
+    }
+    return lines;
+}
+
+// One day of PTO for pid, joined onto a PTO range ending the workday before
+// or starting the workday after (weekends/holidays in between are fine).
+async function _addPtoDay(pid, day) {
+    const dk = fmt(day);
+    const ptoOf = vacations.filter(v => v.pathologistId === pid && v.type !== 'leave');
+    const before = ptoOf.find(v => fmt(nextWorkday(v.end)) === dk || fmt(addDays(v.end, 1)) === dk);
+    const after = ptoOf.find(v => fmt(prevWorkday(v.start)) === dk || fmt(addDays(v.start, -1)) === dk);
+    if (before && after && before.key !== after.key) {
+        await db.ref().update({
+            [`scheduler/vacations/${before.key}/end`]: fmt(after.end),
+            [`scheduler/vacations/${after.key}`]: null,
+        });
+    } else if (before) {
+        await db.ref(`scheduler/vacations/${before.key}`).update({ end: dk });
+    } else if (after) {
+        await db.ref(`scheduler/vacations/${after.key}`).update({ start: dk });
+    } else {
+        await db.ref('scheduler/vacations').push({ pathologistId: pid, start: dk, end: dk });
+    }
+}
+
+// Take one day out of a PTO / leave range (trim an end, or split it).
+async function _removeTimeOffDay(v, day) {
+    const ref = db.ref('scheduler/vacations/' + v.key);
+    if (sameDay(v.start, v.end)) return ref.remove();
+    if (sameDay(day, v.start)) return ref.update({ start: fmt(addDays(day, 1)) });
+    if (sameDay(day, v.end)) return ref.update({ end: fmt(addDays(day, -1)) });
+    await ref.update({ end: fmt(addDays(day, -1)) });
+    await db.ref('scheduler/vacations').push(Object.assign({
+        pathologistId: v.pathologistId, start: fmt(addDays(day, 1)), end: fmt(v.end),
+    }, v.type === 'leave' ? { type: 'leave', label: v.label || 'Leave' } : {}));
+}
+
 function _closeServiceEditors() {
     document.getElementById('svcModalBack').classList.remove('open');
     document.getElementById('dayModalBack').classList.remove('open');
@@ -11827,12 +12153,12 @@ function syncHourlyShowsControls() {
 }
 
 // The toolbar's period label is absolutely centered, so the left group only
-// has the space up to it. Try the roomiest desktop form first — tabs with
-// full labels, then short labels, then the compact select — and keep the
-// first that clears the date; if none does, hide it (Settings still has it).
+// has the space up to it. Try the tabs first, then the compact select, and
+// keep the first that clears the date; if none does, hide it (Settings still
+// has it).
 // Measured rather than media-queried: the sidebar can collapse and gross
 // room's Natalie PTO button shares this group.
-const HOURLY_FITS = ['full', 'short', 'select'];
+const HOURLY_FITS = ['full', 'select'];
 function fitHourlyControl(show) {
     const tabs = document.getElementById('hourlyTabs');
     const selWrap = document.getElementById('hourlySelectWrap');
@@ -11843,8 +12169,7 @@ function fitHourlyControl(show) {
         show = typeof loggedInPathId === 'number' && (view === 'week' || view === 'day');
     }
     const apply = fit => {
-        tabs.style.display = (fit === 'full' || fit === 'short') ? '' : 'none';
-        tabs.classList.toggle('short', fit === 'short');
+        tabs.style.display = fit === 'full' ? '' : 'none';
         selWrap.style.display = fit === 'select' ? '' : 'none';
     };
     // Phones hide .toolbar-left entirely (the mobile select takes over).

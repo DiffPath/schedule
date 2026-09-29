@@ -61,10 +61,11 @@
     --proc-fs:       #b8900a;   /* 4. Free-text starting with FS → golden-yellow */
     --proc-hh:       #7050b0;   /* 5. Other HH procedures → purple */
     --proc-mh:       #3a8ab5;   /* 6. Other MH procedures → blue   */
-    /* Conference pills (your tumor boards): highlighted gold. */
-    --conf-bg:       #fdefb2;
-    --conf-line:     #d4a72c;
-    --conf-ink:      #5c4300;
+    /* Conference pills (your tumor boards): the meetings' blue, filled
+       light, with the locked-rotation glow. */
+    --conf-bg:       #e2eef8;
+    --conf-line:     #8fb3cc;
+    --conf-ink:      #1a5276;
     /* Outlook meeting pills: outlined in the app's navy accent. */
     --meeting-ink:   #1a5276;
     --meeting-line:  #8fb3cc;
@@ -1176,7 +1177,7 @@ main {
 
 /* ── Conference pill ── a conference the signed-in pathologist is assigned
    (Tracking page), merged with its Outlook meeting when there is one. Same
-   pill shape and type as procedures and meetings; HIGHLIGHTED in gold with a
+   pill shape and type as procedures and meetings; filled light blue with a glow and a
    star so "your tumor board" stands out. Read-only here. */
 .conf-item {
     display: inline-flex;
@@ -1195,7 +1196,10 @@ main {
     word-break: break-word;
     max-width: 100%;
     box-sizing: border-box;
-    box-shadow: 0 1px 2px rgba(122, 90, 0, 0.12);
+    /* Same halo as a locked rotation (.wd-row.locked), in the meeting blue. */
+    box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--conf-ink) 22%, transparent),
+        0 0 8px 1px color-mix(in srgb, var(--conf-ink) 34%, transparent);
 }
 /* Star glyph (mask, so it follows the text color). */
 .conf-item .conf-item-icon {
@@ -7605,32 +7609,122 @@ table.tracking-summary tbody td.t-sum-empty {
 }
 .proc-freetext-wrap.active.proc-cat-custom { background: color-mix(in srgb, var(--pc) 22%, transparent); border-color: var(--pc); }
 
-/* ── Settings → Procedure options editor ── */
-.po-list { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-.po-item {
+/* ── Settings → Procedure options editor ── the Add procedure panel's tile
+   grid (same .proc-type-btn colors), draggable to reorder; the option
+   clicked opens in the box under the grid. */
+#procOptList { margin-top: 12px; }
+.po-grid { user-select: none; -webkit-user-select: none; }
+.po-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 1px;
+    min-height: 40px;
+    padding-right: 30px;          /* room for the grip */
+    cursor: grab;
+    -webkit-touch-callout: none;
+}
+.po-tile-name { font-size: 12px; }
+.po-tile-meta {
+    font-size: 10.5px;
+    font-weight: 400;
+    opacity: 0.75;
+}
+.po-grip {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    color: currentColor;
+    opacity: 0.35;
+    transition: opacity 0.15s ease;
+}
+.po-grip svg { fill: currentColor; }
+.po-tile:hover .po-grip, .po-sub-grip:hover .po-grip { opacity: 0.8; }
+.po-tile.is-hidden { opacity: 0.5; border-style: dashed; }
+.po-tile.is-hidden.selected { opacity: 0.8; }
+.po-tile:focus { outline: none; }
+.po-tile:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 2px; }
+
+/* While dragging: the ghost follows the pointer; the faded placeholder
+   sits where the tile will land, the others moving aside. */
+.po-dragging { opacity: 0.3 !important; }
+.po-ghost {
+    position: fixed !important;
+    z-index: 100000;
+    pointer-events: none;
+    margin: 0;
+    box-shadow: 0 10px 28px rgba(24, 23, 26, 0.22);
+    transform: rotate(-1.2deg);
+    cursor: grabbing;
+}
+body.po-drag-active, body.po-drag-active * { cursor: grabbing !important; }
+/* "+ Add option" — like the panel's free-text tile. */
+.po-add-tile {
+    min-height: 40px;
+    border: 1.5px dashed var(--rule);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink-3);
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+.po-add-tile:hover { border-color: var(--ink-3); color: var(--ink); background: var(--bg); }
+
+/* The open option. */
+.po-editor {
+    margin-top: 12px;
+    padding: 12px;
     border: 1px solid var(--rule-soft);
     border-radius: 8px;
     background: var(--paper);
 }
-.po-item.is-hidden .po-row:not(.po-sub) .po-name,
-.po-item.is-hidden .po-row:not(.po-sub) .po-prev { opacity: 0.45; }
-.po-row {
+.po-ed-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.po-ed-label {
+    margin: 14px 0 6px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+.po-ed-empty { font-size: 12px; color: var(--ink-3); margin-bottom: 4px; }
+.po-sub-list { display: flex; flex-direction: column; gap: 6px; }
+.po-sub { display: flex; align-items: center; gap: 8px; border-radius: 4px; }
+.po-sub-grip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 28px;
+    color: var(--ink-3);
+    cursor: grab;
+    touch-action: none;
+    flex-shrink: 0;
+}
+.po-sub-grip .po-grip { position: static; transform: none; }
+.po-confirm {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 7px 8px;
     flex-wrap: wrap;
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 1px solid rgba(185, 78, 42, 0.3);
+    border-radius: 6px;
+    background: rgba(185, 78, 42, 0.05);
+    font-size: 12.5px;
+    color: var(--ink-2);
 }
-.po-move { display: flex; flex-direction: column; gap: 1px; }
-.po-move button {
-    width: 20px; height: 14px; padding: 0;
-    font-size: 10px; line-height: 1;
-    border: 1px solid var(--rule); border-radius: 3px;
-    background: var(--bg); color: var(--ink-2); cursor: pointer;
-}
-.po-move button:disabled { opacity: 0.3; cursor: default; }
+.po-confirm span { flex: 1 1 220px; }
+
 .po-color {
-    width: 28px; height: 28px; padding: 0;
+    width: 30px; height: 30px; padding: 0;
     display: inline-flex; align-items: center; justify-content: center;
     border: 1px solid var(--rule); border-radius: 6px;
     background: var(--bg); cursor: pointer; flex-shrink: 0;
@@ -7642,36 +7736,24 @@ table.tracking-summary tbody td.t-sum-empty {
 }
 .po-sw-loc { background: linear-gradient(135deg, var(--proc-hh) 50%, var(--proc-mh) 50%); }
 .po-name {
-    flex: 1 1 160px; min-width: 120px;
+    flex: 1 1 160px; min-width: 0;
     padding: 6px 9px;
     border: 1px solid var(--rule); border-radius: 5px;
     font: inherit; font-size: 13px;
     background: var(--bg); color: var(--ink);
 }
 .po-name:focus { outline: 1px solid var(--ink-2); border-color: var(--ink-2); }
-/* Fixed preview column so the name fields line up. */
-.po-prev { flex: 0 0 200px; min-width: 0; display: flex; }
-.po-prev .proc-item { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.po-prev .proc-item { cursor: default; }
-.po-prev .proc-item:hover { transform: none; }
-.po-subs-toggle, .po-icon, .po-btn, .po-add-sub {
-    padding: 5px 9px;
+.po-icon, .po-btn, .po-add-sub {
+    padding: 6px 10px;
     border: 1px solid var(--rule); border-radius: 5px;
     background: var(--bg); color: var(--ink-2);
-    font-size: 11.5px; cursor: pointer; white-space: nowrap;
+    font: inherit; font-size: 11.5px; cursor: pointer; white-space: nowrap;
 }
-.po-subs-toggle:hover, .po-icon:hover, .po-btn:hover, .po-add-sub:hover { border-color: var(--ink-3); color: var(--ink); }
-.po-subs-toggle.open { background: var(--paper); border-color: var(--ink-3); }
+.po-icon:hover, .po-btn:hover, .po-add-sub:hover { border-color: var(--ink-3); color: var(--ink); }
 .po-del, .po-btn-danger { color: #b94e2a; border-color: rgba(185, 78, 42, 0.3); }
-.po-del { width: 28px; padding: 5px 0; font-size: 15px; line-height: 1; }
-.po-subs {
-    border-top: 1px solid var(--rule-soft);
-    padding: 4px 8px 8px 36px;
-    display: flex; flex-direction: column; gap: 2px;
-}
-.po-sub { padding: 4px 0; }
-.po-add-sub { align-self: flex-start; margin-top: 4px; }
-.po-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.po-del { width: 30px; padding: 5px 0; font-size: 15px; line-height: 1; }
+.po-add-sub { margin-top: 8px; }
+.po-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .po-color-pop {
     position: fixed; z-index: 100000;
     background: var(--paper);
@@ -7691,30 +7773,8 @@ table.tracking-summary tbody td.t-sum-empty {
 .po-pop-custom input[type="color"] {
     width: 18px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer;
 }
-/* Phones: two lines per row —
-     option:    arrows · color · name · subs   /   preview · Hide · ×
-     suboption: arrows · color · name · ×      /   preview            */
 @media (max-width: 600px) {
-    .po-row {
-        display: grid;
-        grid-template-columns: 22px 28px minmax(0, 1fr) auto auto;
-        grid-template-areas: "mv co nm sb sb" ". . pv hd dl";
-        column-gap: 8px;
-        row-gap: 6px;
-        align-items: center;
-    }
-    .po-row.po-sub {
-        grid-template-columns: 22px 28px minmax(0, 1fr) auto;
-        grid-template-areas: "mv co nm dl" ". . pv .";
-    }
-    .po-row .po-move { grid-area: mv; }
-    .po-row .po-color { grid-area: co; }
-    .po-row .po-name { grid-area: nm; min-width: 0; width: 100%; }
-    .po-row .po-subs-toggle { grid-area: sb; justify-self: end; }
-    .po-row .po-prev { grid-area: pv; flex: none; }
-    .po-row [data-act="hide"] { grid-area: hd; }
-    .po-row .po-del { grid-area: dl; }
-    .po-subs { padding-left: 12px; }
+    .po-ed-row .po-name { flex-basis: calc(100% - 38px); }
 }
 
 /* ── Undo: Outlook-style popup + Recent changes (undo.js) ── */
@@ -7908,9 +7968,6 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
 
 /* Toolbar hourly tabs: full labels, or short ones when space is tight
    (fitHourlyControl() toggles .short). */
-.hourly-tabs .ht-short { display: none; }
-.hourly-tabs.short .ht-full { display: none; }
-.hourly-tabs.short .ht-short { display: inline; }
 .hourly-tabs.short .path-tab { padding-left: 11px; padding-right: 11px; }
 
 /* ─────────────────── MINI CALENDAR (period label popover) ─────────────────── */
@@ -8391,4 +8448,178 @@ body:has(#mockModeBanner) .undo-toast { bottom: 76px; }
 .pto-form-row .oc-scope-toggle { height: 36px; min-height: 0; box-sizing: border-box; }
 @media (max-width: 560px) {
     .pto-form-row .pto-range-toggle { height: auto; min-height: 36px; }
+}
+
+
+/* Days-by-assignment table fits the left column: tighter cells. */
+.tracking-days-table th,
+.tracking-days-table td { padding-left: 6px; padding-right: 6px; }
+.tracking-days-table th { letter-spacing: 0.06em; }
+
+/* Week view (seven narrow columns): pill labels stop at two lines so long
+   titles don't stretch the hour grid past the screen on a laptop; the full
+   title is in the tooltip. Day view keeps full labels. */
+.week-view .pill-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    min-width: 0;
+}
+/* Short laptop screens: one line per pill so the whole week fits without scrolling. */
+@media (max-height: 820px) {
+    .week-view .pill-text { -webkit-line-clamp: 1; }
+}
+@media (min-width: 801px) and (max-height: 820px) {
+    /* Rows may get a little shorter so a day with an all-day item still fits. */
+    .week-view .hour-slot { min-height: 18px; padding-top: 1px; padding-bottom: 1px; }
+    .week-view .proc-item,
+    .week-view .meeting-item,
+    .week-view .conf-item { padding-top: 1px; padding-bottom: 1px; }
+}
+@media (min-width: 801px) and (max-height: 820px) {
+    .week-view .meeting-allday { margin: 2px 4px 1px; padding-top: 0; padding-bottom: 0; }
+}
+
+/* Tracking header: the Count switch beside Period, styled like the dropdown
+   (same frame, fill, corners, font and height). */
+.tracking-page-controls { display: flex; align-items: flex-end; gap: 12px; }
+.tracking-control-caption {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+.tracking-count-toggle {
+    margin: 0;
+    background: var(--paper);
+    min-height: 0;
+    height: 34px;
+}
+.tracking-count-toggle .oc-scope-opt { padding: 0 14px; font-size: 12.5px; white-space: nowrap; }
+#trackingYearSelect { height: 34px; }
+
+/* ── Tracking page: even spacing and tables that fit narrower windows ──
+   One 24px gap between every left-column section (instead of per-section
+   margins, which one section lacked). The left column, which holds the
+   tables, gets a little more of the width; table headers may wrap onto two
+   lines and name cells drop the initials, so the tables fit without a
+   sideways scroll down to a 1280px-wide window (1920×1080 at 150%). */
+.tracking-grid { grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr); }
+.tracking-col-left { gap: 24px; }
+.tracking-col-left > section { margin-top: 0; margin-bottom: 0; }
+table.tracking-summary thead th {
+    white-space: normal;
+    letter-spacing: 0.06em;
+    line-height: 1.3;
+    vertical-align: bottom;
+}
+table.tracking-summary .t-sum-initials { display: none; }
+@media (max-width: 1400px) {
+    table.tracking-summary th,
+    table.tracking-summary td { padding-left: 4px; padding-right: 4px; }
+    table.tracking-summary .t-sum-name-col { min-width: 0; }
+}
+
+/* Consult queue boxes: count beside the initials; clickable for loggers. */
+.consult-rot-count {
+    margin-left: 5px;
+    font-weight: 500;
+    opacity: 0.75;
+}
+button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mono); font-size: 10px; font-weight: 600; }
+.consult-rot-chip.is-clickable:hover { border-color: var(--c, var(--ink-3)); }
+.consult-rot-chip.is-clickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Requests: plain buttons like the day editor's bottom bar — one quiet
+   frame for all; Approve (and the other go-ahead buttons) bolder, Deny /
+   Revoke in the soft red; the per-card LF ask a text link. */
+.req-card-actions { gap: 8px; align-items: center; flex-wrap: wrap; }
+.req-card-actions .req-actions-spacer { flex: 1; }
+.req-card-actions button {
+    padding: 7px 12px;
+    border-radius: 5px;
+    font-size: 11.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    border: 1px solid var(--rule);
+    background: var(--bg);
+    color: var(--ink-2);
+}
+.req-card-actions button:hover { background: var(--paper); border-color: var(--ink-3); color: var(--ink); }
+.req-card-actions button.approve,
+.req-trade-offer button.approve {
+    background: var(--bg);
+    color: var(--ink);
+    border-color: var(--ink-3);
+    font-weight: 600;
+}
+.req-card-actions button.approve:hover,
+.req-trade-offer button.approve:hover { background: var(--paper); border-color: var(--ink-2); color: var(--ink); }
+.req-card-actions button.approve:disabled { opacity: 0.5; cursor: default; }
+.req-card-actions button.deny,
+.req-card-actions button.revoke {
+    background: var(--bg);
+    color: #b94e2a;
+    border-color: rgba(185, 78, 42, 0.3);
+}
+.req-card-actions button.deny:hover,
+.req-card-actions button.revoke:hover { background: rgba(185, 78, 42, 0.06); border-color: #b94e2a; color: #b94e2a; }
+.req-card-actions button.link {
+    border: none;
+    background: none;
+    padding: 7px 0;
+    color: var(--ink-3);
+    text-decoration: underline;
+    text-decoration-color: var(--rule);
+    text-underline-offset: 3px;
+}
+.req-card-actions button.link:hover { background: none; color: var(--ink); text-decoration-color: var(--ink-3); }
+
+/* Tab row with the page's one button at its right end. */
+.requests-page-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 0 0 18px;
+}
+.requests-page-bar .requests-page-tabs { margin: 0; }
+.requests-page-bar .req-new-btn {
+    padding: 8px 14px;
+    border-radius: 5px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    color: var(--ink-2);
+    transition: all 0.15s ease;
+}
+.requests-page-bar .req-new-btn:hover { border-color: var(--ink-3); color: var(--ink); }
+@media (max-width: 720px) {
+    .requests-page-bar .req-new-btn { width: 100%; text-align: center; }
+}
+
+/* "Waiting on Dr. X": a name, so normal text rather than the caps label. */
+.req-card .req-status-pill.is-waiting {
+    font-family: var(--sans);
+    font-size: 11.5px;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: normal;
+    padding: 2px 8px;
+}
+/* Same "Waiting on Dr. X" wording in the PTO / call panels: normal text. */
+.pto-pending-tag {
+    font-family: var(--sans);
+    font-size: 10.5px;
+    letter-spacing: normal;
+    text-transform: none;
+    padding: 1px 6px;
 }

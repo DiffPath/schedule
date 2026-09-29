@@ -49,7 +49,10 @@ function defaultProcOptions() {
     });
 }
 
+// Only the director and gross room add procedures, so only they have a
+// list of their own; everyone else sees the standard names and colors.
 function currentProcOptions() {
+    if (typeof canEditProcedures === 'function' && !canEditProcedures()) return defaultProcOptions();
     return procOptions || defaultProcOptions();
 }
 
@@ -186,12 +189,17 @@ function _procOptionsChanged(fromEditor) {
 }
 
 // ── Settings editor ─────────────────────────────────────────────────────
+// Laid out like the Add procedure panel: the options as the panel's tiles
+// (same colors), in panel order. Drag a tile to reorder (press and hold on
+// a phone); click one to edit its name, color, suboptions, or hide/delete
+// it in the box under the grid. Changes save automatically.
 let _poDraft = null;          // the list being edited
-const _poOpen = new Set();    // indices of options with suboptions expanded
+let _poSel = null;            // index of the option open in the editor
+let _poConfirm = null;        // 'del' | 'reset' | null — inline confirmation
 
 function _poColorSwatch(color, parentColor) {
-    const eff = color === 'parent' ? parentColor : color;
-    if (eff === 'loc') return `<span class="po-sw po-sw-loc" aria-hidden="true"></span>`;
+    const eff = color === 'parent' ? (parentColor || 'loc') : color;
+    if (eff === 'loc' || !eff) return '<span class="po-sw po-sw-loc" aria-hidden="true"></span>';
     if (eff && eff[0] === '#') return `<span class="po-sw" style="background:${eff}" aria-hidden="true"></span>`;
     return `<span class="po-sw" style="background:var(--proc-${eff})" aria-hidden="true"></span>`;
 }
@@ -201,58 +209,93 @@ function _poColorLabel(color) {
     const c = PROC_COLOR_CHOICES.find(x => x.key === color);
     return c ? c.label : color;
 }
-function _poPreviewPill(name, color) {
-    const st = _procResolve(color, 'HH');
-    const a = procStyleAttrs(st);
-    const label = name.trim() ? 'HH - ' + name.trim() : 'HH - (unnamed)';
-    return `<span class="proc-item po-preview ${a.cls}"${a.style}>${escapeHtml(label)}</span>`;
-}
 
 function renderProcOptionsSettings() {
     const section = document.getElementById('procOptionsSection');
     const list = document.getElementById('procOptList');
     if (!section || !list) return;
-    const allowed = loggedInPathId !== null && !isReadOnlyGuest() && !isLakeForest();
+    const allowed = loggedInPathId !== null && canEditProcedures();
     section.style.display = allowed ? '' : 'none';
     if (!allowed) return;
-    _poDraft = JSON.parse(JSON.stringify(currentProcOptions()));
+    // applySettings() calls this on every schedule redraw: leave the editor
+    // alone when the list hasn't changed, and while a drag or typing is in
+    // progress (it catches up on the next call).
+    const cur = currentProcOptions();
+    if (_poDraft && list.querySelector('.po-grid')) {
+        if (JSON.stringify(_normalizeProcOptions(cur)) === JSON.stringify(_normalizeProcOptions(_poDraft))) return;
+        const ae = document.activeElement;
+        if (_poDrag.st || (ae && list.contains(ae) && ae.tagName === 'INPUT')) return;
+    }
+    _poDraft = JSON.parse(JSON.stringify(cur));
+    if (_poSel !== null && _poSel >= _poDraft.length) _poSel = null;
     _poRender();
+}
+
+const _PO_GRIP = '<span class="po-grip" aria-hidden="true"><svg viewBox="0 0 8 12" width="8" height="12"><circle cx="2" cy="2" r="1.1"/><circle cx="6" cy="2" r="1.1"/><circle cx="2" cy="6" r="1.1"/><circle cx="6" cy="6" r="1.1"/><circle cx="2" cy="10" r="1.1"/><circle cx="6" cy="10" r="1.1"/></svg></span>';
+
+function _poTileHtml(o, i) {
+    const pa = procStyleAttrs(_procResolve(o.color, null));
+    const sel = i === _poSel;
+    const meta = [];
+    if (o.subs.length) meta.push(o.subs.length + (o.subs.length === 1 ? ' suboption' : ' suboptions'));
+    if (o.hidden) meta.push('Hidden');
+    return `<button type="button" class="proc-type-btn po-tile ${pa.cls}${sel ? ' selected' : ''}${o.hidden ? ' is-hidden' : ''}"${pa.style}
+                data-i="${i}" aria-pressed="${sel}" title="Drag to reorder · click to edit">
+              <span class="po-tile-name">${o.name.trim() ? escapeHtml(o.name) : '<i>Unnamed</i>'}</span>
+              ${meta.length ? `<span class="po-tile-meta">${meta.join(' · ')}</span>` : ''}
+              ${_PO_GRIP}
+            </button>`;
+}
+
+function _poEditorHtml(i) {
+    const o = _poDraft[i];
+    if (!o) return '';
+    const subs = o.subs.map((s, j) => `
+        <div class="po-sub" data-i="${i}" data-j="${j}">
+          <span class="po-sub-grip" title="Drag to reorder">${_PO_GRIP}</span>
+          <button type="button" class="po-color" data-act="color" title="Color: ${escapeHtml(_poColorLabel(s.color))}">${_poColorSwatch(s.color, o.color)}</button>
+          <input type="text" class="po-name" data-field="name" maxlength="60" value="${escapeHtml(s.name)}" placeholder="Suboption name" aria-label="Suboption name">
+          <button type="button" class="po-icon po-del" data-act="del" aria-label="Delete suboption" title="Delete suboption">&times;</button>
+        </div>`).join('');
+    const what = o.name.trim() ? '“' + escapeHtml(o.name.trim()) + '”' : 'this option';
+    const subNote = o.subs.length ? ` and its ${o.subs.length} suboption${o.subs.length === 1 ? '' : 's'}` : '';
+    const confirmHtml = _poConfirm === 'del' ? `
+        <div class="po-confirm">
+          <span>Delete ${what}${subNote}? Procedures already on the schedule keep their names.</span>
+          <button type="button" class="po-btn po-btn-danger" data-act="delyes">Delete</button>
+          <button type="button" class="po-btn" data-act="delno">Keep</button>
+        </div>` : '';
+    return `
+      <div class="po-editor" data-i="${i}">
+        <div class="po-ed-row" data-i="${i}">
+          <button type="button" class="po-color" data-act="color" title="Color: ${escapeHtml(_poColorLabel(o.color))}">${_poColorSwatch(o.color)}</button>
+          <input type="text" class="po-name" data-field="name" maxlength="60" value="${escapeHtml(o.name)}" placeholder="Option name" aria-label="Option name">
+          <button type="button" class="po-btn" data-act="hide">${o.hidden ? 'Show in panel' : 'Hide from panel'}</button>
+          <button type="button" class="po-btn po-btn-danger" data-act="del">Delete</button>
+        </div>
+        ${confirmHtml}
+        <div class="po-ed-label">Suboptions</div>
+        ${o.subs.length ? `<div class="po-sub-list">${subs}</div>` : '<div class="po-ed-empty">None — the panel shows this option on its own.</div>'}
+        <button type="button" class="po-add-sub" data-act="addsub" data-i="${i}">+ Add suboption</button>
+      </div>`;
 }
 
 function _poRender() {
     const list = document.getElementById('procOptList');
     if (!list) return;
-    const last = _poDraft.length - 1;
-    list.innerHTML = _poDraft.map((o, i) => {
-        const open = _poOpen.has(i);
-        const subs = o.subs.map((s, j) => `
-            <div class="po-row po-sub" data-i="${i}" data-j="${j}">
-              <div class="po-move">
-                <button type="button" data-act="up" ${j === 0 ? 'disabled' : ''} aria-label="Move up" title="Move up">↑</button>
-                <button type="button" data-act="down" ${j === o.subs.length - 1 ? 'disabled' : ''} aria-label="Move down" title="Move down">↓</button>
-              </div>
-              <button type="button" class="po-color" data-act="color" title="Color: ${escapeHtml(_poColorLabel(s.color))}">${_poColorSwatch(s.color, o.color)}</button>
-              <input type="text" class="po-name" data-field="name" maxlength="60" value="${escapeHtml(s.name)}" placeholder="Suboption name" aria-label="Suboption name">
-              <span class="po-prev">${_poPreviewPill(s.name, s.color === 'parent' ? o.color : s.color)}</span>
-              <button type="button" class="po-icon po-del" data-act="del" aria-label="Delete suboption" title="Delete suboption">&times;</button>
-            </div>`).join('');
-        return `
-          <div class="po-item${o.hidden ? ' is-hidden' : ''}">
-            <div class="po-row" data-i="${i}">
-              <div class="po-move">
-                <button type="button" data-act="up" ${i === 0 ? 'disabled' : ''} aria-label="Move up" title="Move up">↑</button>
-                <button type="button" data-act="down" ${i === last ? 'disabled' : ''} aria-label="Move down" title="Move down">↓</button>
-              </div>
-              <button type="button" class="po-color" data-act="color" title="Color: ${escapeHtml(_poColorLabel(o.color))}">${_poColorSwatch(o.color)}</button>
-              <input type="text" class="po-name" data-field="name" maxlength="60" value="${escapeHtml(o.name)}" placeholder="Option name" aria-label="Option name">
-              <span class="po-prev">${_poPreviewPill(o.name, o.color)}</span>
-              <button type="button" class="po-subs-toggle${open ? ' open' : ''}" data-act="subs" aria-expanded="${open}">${o.subs.length ? o.subs.length + ' sub' : '+ sub'}</button>
-              <button type="button" class="po-icon" data-act="hide" title="${o.hidden ? 'Hidden from the Add procedure panel — click to show' : 'Hide from the Add procedure panel'}">${o.hidden ? 'Show' : 'Hide'}</button>
-              <button type="button" class="po-icon po-del" data-act="del" aria-label="Delete option" title="Delete option">&times;</button>
-            </div>
-            ${open ? `<div class="po-subs">${subs}<button type="button" class="po-add-sub" data-act="addsub" data-i="${i}">+ Add suboption</button></div>` : ''}
-          </div>`;
-    }).join('');
+    const resetHtml = _poConfirm === 'reset' ? `
+        <div class="po-confirm">
+          <span>Restore the built-in list? Your custom options, colors and order will be removed.</span>
+          <button type="button" class="po-btn po-btn-danger" data-act="resetyes">Restore defaults</button>
+          <button type="button" class="po-btn" data-act="resetno">Keep my list</button>
+        </div>` : '';
+    list.innerHTML = `
+        <div class="proc-type-grid po-grid">
+          ${_poDraft.map(_poTileHtml).join('')}
+          <button type="button" class="po-add-tile" data-act="add">+ Add option</button>
+        </div>
+        ${_poSel !== null ? _poEditorHtml(_poSel) : ''}
+        ${resetHtml}`;
 }
 
 // Which option/suboption a control belongs to.
@@ -262,6 +305,7 @@ function _poTarget(el) {
     const i = parseInt(row.dataset.i, 10);
     const j = row.dataset.j !== undefined ? parseInt(row.dataset.j, 10) : null;
     const opt = _poDraft[i];
+    if (!opt) return null;
     return { i, j, opt, item: j === null ? opt : opt.subs[j], row };
 }
 
@@ -270,27 +314,196 @@ function _poCommit(rerender) {
     saveProcOptions(_poDraft);
 }
 
+// Move an option (sub === null) or a suboption from one index to another;
+// the open editor follows the option it was showing.
+function _poMove(i, sub, from, to) {
+    const arr = sub === null ? _poDraft : _poDraft[i].subs;
+    if (from === to || to < 0 || to >= arr.length) return;
+    const [x] = arr.splice(from, 1);
+    arr.splice(to, 0, x);
+    if (sub === null && _poSel !== null) {
+        if (_poSel === from) _poSel = to;
+        else if (from < _poSel && to >= _poSel) _poSel--;
+        else if (from > _poSel && to <= _poSel) _poSel++;
+    }
+    _poCommit(true);
+}
+
+// ── Drag to reorder ── pointer events, so it works with a mouse (drag
+// right away) and on touch (press and hold, then drag; a quick swipe still
+// scrolls the page). Tiles drag anywhere; suboption rows by their grip.
+const _poDrag = { st: null };
+function _poDragCleanup() {
+    const d = _poDrag.st;
+    if (!d) return;
+    clearTimeout(d.timer);
+    if (d.ghost) d.ghost.remove();
+    if (d.el) d.el.classList.remove('po-dragging');
+    document.body.classList.remove('po-drag-active');
+    _poDrag.st = null;
+    // The placeholder may have moved in the page: redraw from the list
+    // (a completed drop has already updated the list).
+    if (d.active) _poRender();
+}
+function _poDragActivate() {
+    const d = _poDrag.st;
+    if (!d || d.active) return;
+    d.active = true;
+    const r = d.el.getBoundingClientRect();
+    d.dx = d.x - r.left; d.dy = d.y - r.top;
+    const g = d.el.cloneNode(true);
+    g.classList.add('po-ghost');
+    g.classList.remove('po-dragging');
+    g.style.width = r.width + 'px';
+    g.style.height = r.height + 'px';
+    // Tile tints are see-through; lay the tint over solid paper so the
+    // lifted tile doesn't look faded over the page.
+    const bg = getComputedStyle(d.el).backgroundColor;
+    g.style.background = `linear-gradient(${bg}, ${bg}), var(--paper)`;
+    document.body.appendChild(g);
+    d.ghost = g;
+    d.el.classList.add('po-dragging');
+    document.body.classList.add('po-drag-active');
+    _poDragMove(d.x, d.y);
+}
+function _poDragMove(x, y) {
+    const d = _poDrag.st;
+    d.ghost.style.left = (x - d.dx) + 'px';
+    d.ghost.style.top = (y - d.dy) + 'px';
+    const list = document.getElementById('procOptList');
+    const items = d.sub === null
+        ? [...list.querySelectorAll('.po-tile')]
+        : [...list.querySelectorAll(`.po-sub[data-i="${d.i}"]`)];
+    // Nearest item to the pointer; before/after by which half it's in
+    // (left/right in the two-column grid, top/bottom in the sub list). The
+    // dragged item's faded placeholder moves there, so the others make room
+    // and show where it will land.
+    let best = null, bestDist = Infinity;
+    items.forEach(el => {
+        const r = el.getBoundingClientRect();
+        const cx = Math.max(r.left, Math.min(x, r.right)), cy = Math.max(r.top, Math.min(y, r.bottom));
+        const dist = Math.hypot(x - cx, y - cy);
+        if (dist < bestDist) { bestDist = dist; best = el; }
+    });
+    if (best && best !== d.el) {
+        const r = best.getBoundingClientRect();
+        const after = d.sub === null ? x > r.left + r.width / 2 : y > r.top + r.height / 2;
+        const ref = after ? best.nextSibling : best;
+        if (ref !== d.el) best.parentNode.insertBefore(d.el, ref);
+    }
+    d.drop = items.slice().sort((p, q) => (p.compareDocumentPosition(q) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1).indexOf(d.el);
+}
+
 (function wireProcOptionsEditor() {
     const list = document.getElementById('procOptList');
     if (!list) return;
 
-    // Typing: update the name and that row's preview, no re-render.
+    list.addEventListener('pointerdown', e => {
+        if (e.button !== 0 || _poDrag.st) return;
+        const tile = e.target.closest('.po-tile');
+        const grip = e.target.closest('.po-sub-grip');
+        const el = tile || (grip && grip.closest('.po-sub'));
+        if (!el) return;
+        const d = {
+            el, x: e.clientX, y: e.clientY, touch: e.pointerType !== 'mouse',
+            i: parseInt(el.dataset.i, 10),
+            sub: tile ? null : parseInt(el.dataset.j, 10),
+            active: false, timer: null, ghost: null, drop: null,
+        };
+        d.from = d.sub === null ? d.i : d.sub;
+        _poDrag.st = d;
+        if (d.touch) d.timer = setTimeout(_poDragActivate, 280);
+    });
+    document.addEventListener('pointermove', e => {
+        const d = _poDrag.st;
+        if (!d) return;
+        const moved = Math.hypot(e.clientX - d.x, e.clientY - d.y);
+        if (!d.active) {
+            // Touch: moving before the hold completes = scrolling.
+            if (d.touch) { if (moved > 8) _poDragCleanup(); return; }
+            if (moved < 5) return;
+            _poDragActivate();
+        }
+        _poDragMove(e.clientX, e.clientY);
+    });
+    document.addEventListener('pointerup', () => {
+        const d = _poDrag.st;
+        if (!d) return;
+        const was = d.active, drop = d.drop;
+        _poDragCleanup();
+        if (!was) return;
+        _poDrag.suppressClick = true;
+        setTimeout(() => { _poDrag.suppressClick = false; }, 0);
+        if (drop !== null) _poMove(d.i, d.sub, d.from, drop);
+    });
+    document.addEventListener('pointercancel', _poDragCleanup);
+    // Once a touch drag is going, the finger moves the tile, not the page.
+    list.addEventListener('touchmove', e => { if (_poDrag.st && _poDrag.st.active) e.preventDefault(); }, { passive: false });
+    list.addEventListener('contextmenu', e => { if (_poDrag.st) e.preventDefault(); });
+
+    // Keyboard: Alt + arrow keys move the focused tile.
+    list.addEventListener('keydown', e => {
+        const tile = e.target.closest('.po-tile');
+        if (!tile || !e.altKey) return;
+        const step = { ArrowLeft: -1, ArrowUp: -2, ArrowRight: 1, ArrowDown: 2 }[e.key];
+        if (!step) return;
+        e.preventDefault();
+        const from = parseInt(tile.dataset.i, 10);
+        const to = Math.max(0, Math.min(_poDraft.length - 1, from + step));
+        _poMove(from, null, from, to);
+        const t = list.querySelector(`.po-tile[data-i="${to}"]`);
+        if (t) t.focus();
+    });
+
+    // Typing: update the name (and its tile), no re-render.
     list.addEventListener('input', e => {
         const input = e.target.closest('.po-name');
         if (!input) return;
         const t = _poTarget(input);
-        if (!t) return;
+        if (!t || !t.item) return;
         t.item.name = input.value;
-        const color = t.j === null ? t.opt.color : (t.item.color === 'parent' ? t.opt.color : t.item.color);
-        const prev = t.row.querySelector('.po-prev');
-        if (prev) prev.innerHTML = _poPreviewPill(t.item.name, color);
+        if (t.j === null) {
+            const nm = list.querySelector(`.po-tile[data-i="${t.i}"] .po-tile-name`);
+            if (nm) nm.innerHTML = input.value.trim() ? escapeHtml(input.value) : '<i>Unnamed</i>';
+        }
         _poCommit(false);
     });
 
     list.addEventListener('click', e => {
+        if (_poDrag.suppressClick) return;
+        const tile = e.target.closest('.po-tile');
+        if (tile) {
+            const i = parseInt(tile.dataset.i, 10);
+            _poSel = _poSel === i ? null : i;
+            _poConfirm = null;
+            _poRender();
+            // Keyboard (Enter/Space, detail 0): keep focus on the redrawn tile.
+            const again = list.querySelector(`.po-tile[data-i="${i}"]`);
+            if (again && e.detail === 0) again.focus();
+            const ed = list.querySelector('.po-editor');
+            if (ed && ed.scrollIntoView) ed.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            return;
+        }
         const btn = e.target.closest('button[data-act]');
         if (!btn) return;
         const act = btn.dataset.act;
+        if (act === 'add') {
+            _poDraft.push({ name: '', color: 'loc', hidden: false, subs: [] });
+            _poSel = _poDraft.length - 1;
+            _poConfirm = null;
+            _poCommit(true);
+            const inp = list.querySelector('.po-ed-row .po-name');
+            if (inp) inp.focus();
+            return;
+        }
+        if (act === 'resetyes') {
+            _poDraft = defaultProcOptions();
+            _poSel = null; _poConfirm = null;
+            saveProcOptions(_poDraft, true);
+            _poRender();
+            return;
+        }
+        if (act === 'resetno' || act === 'delno') { _poConfirm = null; _poRender(); return; }
         if (act === 'addsub') {
             const i = parseInt(btn.dataset.i, 10);
             _poDraft[i].subs.push({ name: '', color: 'parent' });
@@ -301,57 +514,30 @@ function _poCommit(rerender) {
         }
         const t = _poTarget(btn);
         if (!t) return;
-        const arr = t.j === null ? _poDraft : t.opt.subs;
-        const k = t.j === null ? t.i : t.j;
-        if (act === 'up' || act === 'down') {
-            const to = act === 'up' ? k - 1 : k + 1;
-            if (to < 0 || to >= arr.length) return;
-            [arr[k], arr[to]] = [arr[to], arr[k]];
-            if (t.j === null) {
-                // Keep expanded state with the moved options.
-                const a = _poOpen.has(k), b = _poOpen.has(to);
-                _poOpen.delete(k); _poOpen.delete(to);
-                if (a) _poOpen.add(to);
-                if (b) _poOpen.add(k);
-            }
+        if (act === 'del' && t.j !== null) {
+            t.opt.subs.splice(t.j, 1);
             _poCommit(true);
         } else if (act === 'del') {
-            const what = t.item.name.trim() || (t.j === null ? 'this option' : 'this suboption');
-            const subNote = t.j === null && t.opt.subs.length ? ` and its ${t.opt.subs.length} suboption${t.opt.subs.length === 1 ? '' : 's'}` : '';
-            if (!confirm(`Delete "${what}"${subNote}? Procedures already on the schedule keep their names.`)) return;
-            arr.splice(k, 1);
-            if (t.j === null) {
-                // Shift expanded-state indices past the removed option.
-                const next = [..._poOpen].filter(x => x !== k).map(x => (x > k ? x - 1 : x));
-                _poOpen.clear();
-                next.forEach(x => _poOpen.add(x));
-            }
+            _poConfirm = 'del';
+            _poRender();
+        } else if (act === 'delyes') {
+            _poDraft.splice(t.i, 1);
+            _poSel = null; _poConfirm = null;
             _poCommit(true);
         } else if (act === 'hide') {
             t.opt.hidden = !t.opt.hidden;
             _poCommit(true);
-        } else if (act === 'subs') {
-            if (_poOpen.has(t.i)) _poOpen.delete(t.i); else _poOpen.add(t.i);
-            _poRender();
         } else if (act === 'color') {
             _poOpenColorPop(btn, t);
         }
     });
 
-    const addBtn = document.getElementById('procOptAdd');
-    if (addBtn) addBtn.addEventListener('click', () => {
-        _poDraft.push({ name: '', color: 'loc', hidden: false, subs: [] });
-        _poCommit(true);
-        const inputs = list.querySelectorAll('.po-row:not(.po-sub) .po-name');
-        if (inputs.length) inputs[inputs.length - 1].focus();
-    });
     const resetBtn = document.getElementById('procOptReset');
     if (resetBtn) resetBtn.addEventListener('click', () => {
-        if (!confirm('Restore the built-in procedure options? Your custom options, colors and order will be removed.')) return;
-        _poDraft = defaultProcOptions();
-        _poOpen.clear();
-        saveProcOptions(_poDraft, true);
+        _poConfirm = 'reset';
         _poRender();
+        const c = list.querySelector('.po-confirm');
+        if (c && c.scrollIntoView) c.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     });
 })();
 

@@ -180,17 +180,17 @@
 
                 <div class="toolbar-left">
                     <!-- Hourly grid content (pathologists, Day/Week only), mirroring Settings → Hourly schedule.
-                         fitHourlyControl() picks tabs (full or short labels) or the compact select, whichever fits beside the centered date. -->
+                         fitHourlyControl() picks the tabs or the compact select, whichever fits beside the centered date. -->
                     <div class="path-tabs hourly-tabs" id="hourlyTabs" role="radiogroup" aria-label="Hourly schedule shows" style="display:none;">
                         <button class="path-tab" type="button" role="radio" data-show="both">Both</button>
-                        <button class="path-tab" type="button" role="radio" data-show="procedures"><span class="ht-full">Procedures</span><span class="ht-short">Proc</span></button>
-                        <button class="path-tab" type="button" role="radio" data-show="meetings"><span class="ht-full">Meetings</span><span class="ht-short">Mtg</span></button>
+                        <button class="path-tab" type="button" role="radio" data-show="procedures">Procedures</button>
+                        <button class="path-tab" type="button" role="radio" data-show="meetings">Meetings</button>
                     </div>
                     <div class="mobile-select-wrap" id="hourlySelectWrap" style="display:none;" title="Hourly schedule: procedures, Outlook meetings, or both">
                         <select id="hourlySelect" class="mobile-toolbar-select" aria-label="Hourly schedule shows">
                             <option value="both">Both</option>
-                            <option value="procedures">Proc</option>
-                            <option value="meetings">Mtg</option>
+                            <option value="procedures">Procedures</option>
+                            <option value="meetings">Meetings</option>
                         </select>
                     </div>
                     <button class="toolbar-np-btn" id="toolbarNataliePtoBtn" type="button" style="display:none;" title="Add Natalie PTO to the procedure schedule">
@@ -221,8 +221,8 @@
                     <div class="mobile-select-wrap" id="mobileHourlySelectWrap" style="display:none;">
                         <select id="mobileHourlySelect" class="mobile-toolbar-select" aria-label="Hourly schedule shows">
                             <option value="both">Both</option>
-                            <option value="procedures">Proc</option>
-                            <option value="meetings">Mtg</option>
+                            <option value="procedures">Procedures</option>
+                            <option value="meetings">Meetings</option>
                         </select>
                     </div>
                     <div class="mobile-select-wrap">
@@ -367,6 +367,15 @@
                             <p class="tracking-page-subtitle">Track conference presentations and cycle consult cases through the pathologists.</p>
                         </div>
                         <div class="tracking-page-controls">
+                            <!-- Count: through today, or the whole year incl. what's
+                                 scheduled. Every section on this page follows it. -->
+                            <div class="tracking-year-wrap">
+                                <span class="tracking-control-caption" id="trackingCountCaption">Count</span>
+                                <div class="oc-scope-toggle tracking-count-toggle" role="radiogroup" aria-labelledby="trackingCountCaption">
+                                    <label class="oc-scope-opt"><input type="radio" name="trackingDaysMode" value="sofar" checked> So far</label>
+                                    <label class="oc-scope-opt"><input type="radio" name="trackingDaysMode" value="full"> Full year</label>
+                                </div>
+                            </div>
                             <div class="tracking-year-wrap">
                                 <label for="trackingYearSelect">Period</label>
                                 <select id="trackingYearSelect"></select>
@@ -397,50 +406,6 @@
                         <!-- ── LEFT COLUMN ─────────────────────────────────────── -->
                         <div class="tracking-col tracking-col-left">
 
-                            <!-- Consult rotation — next incoming consult; cycle = pathologist list, next recipient highlighted. "Log a consult" only for Kathleen/admin (renderConsultNext()). -->
-                            <section class="tracking-consult-section" id="trackingConsultSection">
-                                <div class="tracking-section-label">Consult rotation</div>
-                                <div class="consult-next-card" id="consultNextCard"></div>
-                                <button class="tracking-conf-btn consult-add-btn" id="consultAddBtn" type="button" style="display:none;">
-                                    <span class="tcb-dot" aria-hidden="true"></span>
-                                    <span class="tcb-label">Log a consult</span>
-                                    <span class="tcb-plus" aria-hidden="true">+</span>
-                                </button>
-                            </section>
-
-                            <!-- Per-conference quick-add buttons (admin only; visibility
-                                 mirrors the hidden #trackingAddBtn proxy in .hidden-actions). -->
-                            <section class="tracking-conf-add" id="trackingConfAdd" style="display:none;">
-                                <div class="tracking-section-label">Log a conference</div>
-                                <div class="tracking-conf-btn-stack">
-                                    <button class="tracking-conf-btn" data-conf="breast" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Breast Conference</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                    <button class="tracking-conf-btn" data-conf="lung" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Lung Conference</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                    <button class="tracking-conf-btn" data-conf="thoracic" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Thoracic Conference</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                    <button class="tracking-conf-btn" data-conf="cdh" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Morning / CDH</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                    <button class="tracking-conf-btn" data-conf="other" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Other Tumor Board</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                </div>
-                            </section>
-
                             <!-- PTO tracker — working days used vs allotted in the selected fiscal year; follows the period selector. -->
                             <section class="tracking-pto-section">
                                 <div class="tracking-section-label">
@@ -448,6 +413,27 @@
                                     <span class="tracking-pto-period" id="trackingPtoPeriod" aria-hidden="true"></span>
                                 </div>
                                 <div class="tracking-pto-list" id="trackingPtoList"></div>
+                            </section>
+
+                            <!-- Days by assignment — per pathologist, working days on each
+                                 service, off service, PTO and leave in the selected fiscal
+                                 year; "So far" counts through today, "Full year" adds what's
+                                 scheduled. Follows the period selector. -->
+                            <section class="tracking-days-section">
+                                <div class="tracking-section-label">
+                                    <span>Days by assignment</span>
+                                    <span class="tracking-holiday-period" id="trackingDaysPeriod" aria-hidden="true"></span>
+                                </div>
+                                <div class="tracking-summary-wrap">
+                                    <div class="tracking-summary-scroll">
+                                        <table class="tracking-summary tracking-days-table">
+                                            <thead>
+                                                <tr id="trackingDaysHead"></tr>
+                                            </thead>
+                                            <tbody id="trackingDaysBody"></tbody>
+                                        </table>
+                                    </div>
+                                </div>
                             </section>
 
                             <!-- Holiday call tracker — on-call for the six federal holidays from Sept 1, 2025 (FY26 start, fixed) through 12 months from today (ignores the Period selector); derived from onCallIdForDay so swaps credit the actual coverer. -->
@@ -497,6 +483,51 @@
 
                         <!-- ── RIGHT COLUMN ────────────────────────────────────── -->
                         <div class="tracking-col tracking-col-right">
+
+                            <!-- Consult rotation — next incoming consult; cycle = pathologist list, next recipient highlighted. "Log a consult" only for Kathleen/admin (renderConsultNext()). -->
+                            <section class="tracking-consult-section" id="trackingConsultSection">
+                                <div class="tracking-section-label">Consult rotation</div>
+                                <div class="consult-next-card" id="consultNextCard"></div>
+                                <button class="tracking-conf-btn consult-add-btn" id="consultAddBtn" type="button" style="display:none;">
+                                    <span class="tcb-dot" aria-hidden="true"></span>
+                                    <span class="tcb-label">Log a consult</span>
+                                    <span class="tcb-plus" aria-hidden="true">+</span>
+                                </button>
+                            </section>
+
+                            <!-- Per-conference quick-add buttons (admin only; visibility
+                                 mirrors the hidden #trackingAddBtn proxy in .hidden-actions). -->
+                            <section class="tracking-conf-add" id="trackingConfAdd" style="display:none;">
+                                <div class="tracking-section-label">Log a conference</div>
+                                <div class="tracking-conf-btn-stack">
+                                    <button class="tracking-conf-btn" data-conf="breast" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Breast Conference</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="lung" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Lung Conference</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="thoracic" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Thoracic Conference</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="cdh" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Morning / CDH</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                    <button class="tracking-conf-btn" data-conf="other" type="button">
+                                        <span class="tcb-dot" aria-hidden="true"></span>
+                                        <span class="tcb-label">Add Other Tumor Board</span>
+                                        <span class="tcb-plus" aria-hidden="true">+</span>
+                                    </button>
+                                </div>
+                            </section>
+
 
                             <div class="tracking-section-label">History</div>
 
@@ -628,10 +659,9 @@
                          procedure panel (procedure-options.js). -->
                     <section class="settings-section" id="procOptionsSection" style="display:none;">
                         <h3 class="settings-section-title">Procedure options</h3>
-                        <p class="settings-section-desc">Your own list for the Add procedure panel. Rename, recolor, reorder, add suboptions, hide options you don't use, or add new ones. Only you see these changes. Your colors also apply to the procedure pills you see on the schedule. Changes save automatically.</p>
+                        <p class="settings-section-desc">Your list for the Add procedure panel, laid out the way the panel shows it. Drag a tile to move it (press and hold on a phone). Click a tile to rename it, change its color, add suboptions, or hide it. Your colors also apply to the procedure pills you see on the schedule. Changes save automatically.</p>
                         <div class="po-list" id="procOptList"></div>
                         <div class="po-actions">
-                            <button type="button" class="po-btn" id="procOptAdd">+ Add option</button>
                             <button type="button" class="po-btn po-btn-danger" id="procOptReset">Restore defaults</button>
                         </div>
                     </section>

@@ -3197,6 +3197,14 @@ function describeRequest(req) {
                 body: `Requesting service for <strong>${dateLabel}</strong> changed to <strong>${svc}</strong>.`,
             };
         }
+        case 'service_lock': {
+            const d = parseDate(req.payload.date);
+            const dateLabel = `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+            return {
+                title: `${who} → Service lock`,
+                body: `Requesting <strong>${escapeHtml(_chgServiceName(req.payload.serviceId))}</strong> be locked on <strong>${dateLabel}</strong>, so a recompute won't move it.`,
+            };
+        }
         case 'lf_sendout': {
             const d = parseDate(req.payload.date);
             const isRemove = req.payload.action === 'remove';
@@ -3303,10 +3311,11 @@ function _lockClearWrite(writes, dayKey, pid) {
     writes['scheduler/serviceLocks/' + dayKey + '/' + pid] = null;
 }
 
-// True while an approved service_change's lock still holds on ≥1 affected
-// day (drives the "locked on the schedule" note).
+// True while an approved service_change's (or service_lock's) lock still
+// holds on ≥1 affected day (drives the "locked on the schedule" note).
 function _requestLockActive(req) {
-    if (!req || req.type !== 'service_change' || req.status !== 'approved') return false;
+    if (!req || (req.type !== 'service_change' && req.type !== 'service_lock')
+        || req.status !== 'approved') return false;
     if (!req.payload || !req.payload.serviceId || !req.payload.date) return false;
     const scope = req.payload.scope || 'day';
     let dayKeys;
@@ -3402,6 +3411,14 @@ async function approveRequest(reqKey, choice) {
         }
         if (!confirmOnCallDuringPto(pb, a, getCallCycleEnd(a), 'Approve the trade')) return;
         if (!confirmOnCallDuringPto(pa, b, getCallCycleEnd(b), 'Approve the trade')) return;
+    } else if (req.type === 'service_lock') {
+        // Locking writes an override, and an override beats PTO — so don't
+        // pull someone back on duty who has since gone on PTO.
+        const a = getDayAssignments(parseDate(req.payload.date))[req.requesterId];
+        if (!a || a.type === 'pto' || a.type === 'blank') {
+            showToast(`${_shortPathName(req.requesterId)} is off that day now — deny the request instead.`, { type: 'error' });
+            return;
+        }
     }
 
     try {
@@ -3496,6 +3513,27 @@ async function approveRequest(reqKey, choice) {
                 rcFromDate = parseDate(sortedKeys[0]);
                 rcDayBeforeFix = true;
                 rcMessage = 'Service request approved. Recompute the future schedule for everyone using the rotation rules?';
+            }
+        } else if (req.type === 'service_lock') {
+            // Lock in the requested service, backed by an override so the
+            // schedule can't drift under the lock (same as the director's
+            // Lock checkbox on an unchanged row).
+            const k = req.payload.date;
+            const pid = req.requesterId;
+            const sid = req.payload.serviceId;
+            const a = getDayAssignments(parseDate(k))[pid];
+            const moved = !(a && a.service && a.service.id === sid);
+            await db.ref().update({
+                ['scheduler/serviceOverrides/' + k + '/' + pid]: sid,
+                ['scheduler/serviceLocks/' + k + '/' + pid]: sid,
+            });
+            // Only when the schedule moved since the request does locking
+            // change anything worth a recompute.
+            if (moved) {
+                rcPinnedByDay[k] = { [pid]: sid };
+                rcFromDate = parseDate(k);
+                rcDayBeforeFix = true;
+                rcMessage = 'Service lock approved — this put them back on the locked service. Recompute the future schedule for everyone using the rotation rules?';
             }
         } else if (req.type === 'lf_sendout') {
             // Mirror the admin LF modal writes. Sendout flags don't touch
@@ -3593,6 +3631,15 @@ async function approveRequest(reqKey, choice) {
                         reqPid, req.payload.date, null, scope
                     )));
                 }
+            } else if (req.type === 'service_lock') {
+                logChange(Object.assign({
+                    kind: 'service', type: 'service_lock',
+                    source: 'request_approved', requestKey: reqKey,
+                    forPathId: reqPid,
+                    date: req.payload.date,
+                    serviceId: req.payload.serviceId,
+                    scope: 'day',
+                }, _chgSummaryServiceLock(reqPid, req.payload.date, req.payload.serviceId)));
             } else if (req.type === 'lf_sendout') {
                 const scope = req.payload.scope || 'day';
                 const isRemove = req.payload.action === 'remove';
@@ -3805,6 +3852,11 @@ async function revokeApproval(reqKey) {
                 rcMessage     = 'Approval revoked and service override removed. Recompute the future schedule?';
             }
 
+        } else if (req.type === 'service_lock') {
+            // Release the lock only. The override behind it holds the service
+            // that was showing anyway, so the day stays as it is.
+            await db.ref('scheduler/serviceLocks/' + req.payload.date + '/' + req.requesterId).remove();
+
         } else if (req.type === 'lf_sendout') {
             // Reverse the flag change that was applied on approval.
             const dKey  = req.payload.date;
@@ -3880,6 +3932,15 @@ async function revokeApproval(reqKey) {
                     date: req.payload.date,
                     scope: scope,
                 }, _chgSummaryServiceReset(req.payload.date, scope)));
+            } else if (req.type === 'service_lock') {
+                logChange(Object.assign({
+                    kind: 'service', type: 'service_unlock',
+                    source: 'request_revoked', requestKey: reqKey,
+                    forPathId: reqPid,
+                    date: req.payload.date,
+                    serviceId: req.payload.serviceId,
+                    scope: 'day',
+                }, _chgSummaryServiceUnlock(reqPid, req.payload.date)));
             } else if (req.type === 'lf_sendout') {
                 // Revocation applied the OPPOSITE of the original request.
                 const scope = req.payload.scope || 'day';
@@ -3969,8 +4030,9 @@ function openRequestsModal() {
     markRequestsPageSeen();
 }
 
-// The Requests page's tab row, with room at its right end for the page's
-// button (New PTO request / Request LF sendout dates). Made once.
+// The Requests page's tab row, with a group at its right end for the page's
+// buttons (New PTO request, call / service / lock requests, Request LF
+// sendout dates). Made once.
 function _requestsPageBar() {
     let bar = document.getElementById('requestsPageBar');
     if (bar) return bar;
@@ -3980,7 +4042,31 @@ function _requestsPageBar() {
     bar.className = 'requests-page-bar';
     tabsEl.parentNode.insertBefore(bar, tabsEl);
     bar.appendChild(tabsEl);
+    const group = document.createElement('div');
+    group.id = 'requestsPageBtns';
+    group.className = 'req-new-group';
+    bar.appendChild(group);
     return bar;
+}
+
+// One button in the Requests page's button group.
+function _requestsPageButton(id, label, onClick) {
+    _requestsPageBar();
+    const btn = document.createElement('button');
+    btn.id = id;
+    btn.type = 'button';
+    btn.className = 'req-new-btn';
+    btn.textContent = label;
+    btn.addEventListener('click', onClick);
+    document.getElementById('requestsPageBtns').appendChild(btn);
+    return btn;
+}
+
+// Today if it's a workday, else the next one — where the service request
+// panels open from the Requests page.
+function _requestDefaultWorkday() {
+    const d = new Date(today);
+    return (isWeekend(d) || getFederalHoliday(d)) ? nextWorkday(d) : d;
 }
 
 function renderRequestsList(targetEl, tabState) {
@@ -4108,6 +4194,7 @@ function renderRequestsList(targetEl, tabState) {
             'oncall_change': 'ON-CALL',
             'oncall_swap': 'CALL TRADE',
             'service_change': 'SERVICE',
+            'service_lock': 'SERVICE LOCK',
             'lf_sendout': 'LF SENDOUT',
             'lf_dates_request': 'LF DATES',
         })[req.type] || req.type;
@@ -4314,39 +4401,40 @@ function renderRequestsPage() {
             : 'Track the status of changes you have requested.';
     }
 
-    // Inject (once) a "New Request" button for non-admins: opens the same PTO
-    // modal flow, which renders as "Request PTO". Hidden for admins.
+    // Inject (once) the non-admin "new request" buttons: PTO opens the same
+    // PTO panel flow; call, service and lock open their request panels on
+    // today (or the next workday), each with its own date picker.
     let newBtn = document.getElementById('requestsPageNewBtn');
     if (!newBtn) {
-        newBtn = document.createElement('button');
-        newBtn.id = 'requestsPageNewBtn';
-        newBtn.type = 'button';
-        newBtn.className = 'req-new-btn';
-        newBtn.textContent = 'New PTO request';
-        newBtn.addEventListener('click', () => {
+        newBtn = _requestsPageButton('requestsPageNewBtn', 'New PTO request', () => {
             // Lake Forest requests sendout days; everyone else requests PTO.
             if (isLakeForest()) { openLfRequestModal(today); return; }
             const addBtn = document.getElementById('addPtoBtn');
             if (addBtn) addBtn.click();
         });
-        _requestsPageBar().appendChild(newBtn);
+        _requestsPageButton('requestsPageCallBtn', 'Request call change',
+            () => openCallRequestModal(new Date(today)));
+        _requestsPageButton('requestsPageSvcBtn', 'Request service change',
+            () => openServiceModal(_requestDefaultWorkday()));
+        _requestsPageButton('requestsPageLockBtn', 'Request service lock',
+            () => openServiceModal(_requestDefaultWorkday(), 'lock'));
     }
-    // Pathologists request PTO here; Lake Forest requests sendouts. Nobody
-    // else (Kathleen, gross room, histology) gets the button.
+    // Pathologists request PTO, call, service and lock changes here; Lake
+    // Forest requests sendouts. Nobody else (Kathleen, gross room,
+    // histology) gets the buttons.
     newBtn.style.display = (!admin && (canUsePto() || isLakeForest())) ? 'inline-flex' : 'none';
     newBtn.textContent = isLakeForest() ? 'New sendout request' : 'New PTO request';
+    const showSchedReq = !admin && canRequestScheduleChange();
+    ['requestsPageCallBtn', 'requestsPageSvcBtn', 'requestsPageLockBtn'].forEach(id => {
+        document.getElementById(id).style.display = showSchedReq ? 'inline-flex' : 'none';
+    });
 
     // Inject (once) an admin-only button that asks the Lake Forest account
     // for their sendout dates (files an lf_dates_request aimed at LF).
     let askLfBtn = document.getElementById('requestsPageAskLfBtn');
     if (!askLfBtn) {
-        askLfBtn = document.createElement('button');
-        askLfBtn.id = 'requestsPageAskLfBtn';
-        askLfBtn.type = 'button';
-        askLfBtn.className = 'req-new-btn';
-        askLfBtn.textContent = 'Request LF sendout dates';
-        askLfBtn.addEventListener('click', () => openLfAskModal());
-        _requestsPageBar().appendChild(askLfBtn);
+        askLfBtn = _requestsPageButton('requestsPageAskLfBtn', 'Request LF sendout dates',
+            () => openLfAskModal());
     }
     askLfBtn.style.display = admin ? 'inline-flex' : 'none';
 
@@ -4422,7 +4510,7 @@ document.querySelectorAll('.nav-item[data-page="requests"]').forEach(btn => {
 // logged — only actions that mutate scheduler state. Entry shape:
 // { kind:'pto'|'oncall'|'service'|'recompute', type:'pto_add'|'pto_remove'|
 // 'pto_edit'|'oncall_set'|'oncall_clear'|'service_set'|'service_reset'|
-// 'recompute', byPathId, byName, at, summary, details,
+// 'service_lock'|'service_unlock'|'recompute', byPathId, byName, at, summary, details,
 // source:'direct'|'request_approved'|'request_revoked'|'recompute',
 // requestKey|null, forPathId|null, + type-specific fields (date, scope, …) }
 
@@ -4555,6 +4643,16 @@ function _chgSummaryServiceBulk(dateKey, scope, lines) {
     return {
         summary: `Service overrides updated for ${where}`,
         details: lines.join('\n'),
+    };
+}
+function _chgSummaryServiceLock(forPid, dateKey, serviceId) {
+    return {
+        summary: `${_chgShortName(forPid)} — ${_chgServiceName(serviceId)} locked on ${_chgFmtDate(dateKey)}`,
+    };
+}
+function _chgSummaryServiceUnlock(forPid, dateKey) {
+    return {
+        summary: `${_chgShortName(forPid)} — service lock released on ${_chgFmtDate(dateKey)}`,
     };
 }
 function _chgSummaryServiceReset(dateKey, scope) {
@@ -4705,6 +4803,12 @@ function _chgDescribeForUser(c, pid) {
         }
         if (c.type === 'service_reset' && c.forPathId === pid) {
             return { summary: `Your service override was cleared for ${when}${sourceTail}.`, details: '' };
+        }
+        if (c.type === 'service_lock' && c.forPathId === pid) {
+            return { summary: `Your ${_chgServiceName(c.serviceId)} service was locked for ${when}${sourceTail}.`, details: '' };
+        }
+        if (c.type === 'service_unlock' && c.forPathId === pid) {
+            return { summary: `Your service lock was released for ${when}${sourceTail}.`, details: '' };
         }
     }
 
@@ -8635,6 +8739,16 @@ function openDayDetail(date) {
             svcBtn.textContent = admin ? 'Override services this day' : 'Request service change';
         }
     }
+    // Pathologists can ask to lock the service they have this day (not past
+    // days, and not when it's already locked).
+    const lockBtn = document.getElementById('dayLockService');
+    if (lockBtn) {
+        const mine = dayAssign[loggedInPathId];
+        lockBtn.style.display = (canRequest && !admin && !isWk && !holiday
+            && date.getTime() >= today.getTime()
+            && mine && mine.type === 'service' && mine.service
+            && !isLockActiveForRender(fmt(date), loggedInPathId, mine)) ? '' : 'none';
+    }
 
     // Put-back button (admin-only) — only when this day carries a conflict
     // that was accepted, so an accidental accept is one click to undo.
@@ -9239,6 +9353,10 @@ document.getElementById('dayChangeOnCall').addEventListener('click', () => {
 document.getElementById('dayChangeService').addEventListener('click', () => {
     document.getElementById('dayModalBack').classList.remove('open');
     openServiceModal(activeDayDate);
+});
+document.getElementById('dayLockService').addEventListener('click', () => {
+    document.getElementById('dayModalBack').classList.remove('open');
+    openServiceModal(activeDayDate, 'lock');
 });
 document.getElementById('dayAddLfSendout').addEventListener('click', () => {
     if (!_dayEditOkToLeave()) return;
@@ -10331,6 +10449,7 @@ function openCallRequestModal(date) {
         + `  •  ${holder === me ? 'Your call week' : _shortPathName(holder) + ' is on call'}`
         + (hol ? `  •  ⭐ ${hol}` : '')
         + (past ? '  •  In the past — view only' : '');
+    document.getElementById('callReqDate').value = fmt(date);
 
     // Day strip, same as the admin's.
     const days = [];
@@ -10487,6 +10606,10 @@ async function _callReqSwap() {
 document.getElementById('callReqDays').addEventListener('click', e => {
     const b = e.target.closest('.call-day');
     if (b) openCallRequestModal(parseDate(b.dataset.date));
+});
+document.getElementById('callReqDate').addEventListener('change', e => {
+    if (e.target.value) openCallRequestModal(parseDate(e.target.value));
+    else if (activeCallReqDate) e.target.value = fmt(activeCallReqDate);
 });
 document.getElementById('callReqPending').addEventListener('click', async e => {
     const b = e.target.closest('button[data-act="withdraw"]');
@@ -11595,11 +11718,19 @@ function updateSvcSubLabel() {
     const d = activeSvcDate;
     if (!d) return;
     const subEl = document.getElementById('svcModalSub');
-    subEl.textContent =
-        `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}. Assigning a service to a PTO or Off Service pathologist overrides their absence for that day.`;
+    const dayText = `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+    subEl.textContent = _svcReqMode === 'lock'
+        ? `${dayText}. Ask the director to keep your service in place this day.`
+        : `${dayText}. Assigning a service to a PTO or Off Service pathologist overrides their absence for that day.`;
 }
 
-function openServiceModal(date) {
+// What a pathologist is filing from the service panel: 'change' (a new
+// service) or 'lock' (keep the service they have that day).
+let _svcReqMode = 'change';
+
+// mode: 'lock' turns the pathologist's panel into a service-lock request.
+// keepNote: true when only the date changed, so a typed note survives.
+function openServiceModal(date, mode, keepNote) {
     if (isWeekend(date)) return;   // no service rotation on weekends
     if (getFederalHoliday(date)) return;  // no service rotation on federal holidays
     activeSvcDayKey = fmt(date);
@@ -11607,13 +11738,21 @@ function openServiceModal(date) {
     _svcRootId = 'svcAssignments';
 
     const admin = isAdmin();
+    _svcReqMode = !admin && mode === 'lock' ? 'lock' : 'change';
+    const lockMode = _svcReqMode === 'lock';
     document.querySelector('#svcModalBack .modal h3').textContent =
-        admin ? 'Override services' : 'Request service change';
+        admin ? 'Override services' : (lockMode ? 'Request service lock' : 'Request service change');
     document.getElementById('svcNoteWrap').style.display = admin ? 'none' : '';
     const svcNote = document.getElementById('svcNote');
-    if (svcNote) svcNote.value = '';
+    if (svcNote && !keepNote) svcNote.value = '';
+    if (svcNote) svcNote.placeholder = lockMode ? 'Why you need this service this day…' : 'Reason for change…';
+    document.getElementById('svcReqDateWrap').style.display = admin ? 'none' : '';
+    document.getElementById('svcReqDate').value = activeSvcDayKey;
     document.getElementById('svcReset').style.display = admin ? '' : 'none';
-    document.getElementById('svcSave').textContent = admin ? 'Save' : 'Submit Request';
+    const saveBtn = document.getElementById('svcSave');
+    saveBtn.textContent = admin ? 'Save' : (lockMode ? 'Request lock' : 'Submit Request');
+    saveBtn.disabled = false;
+    document.getElementById('svcReqNotes').innerHTML = '';
     _showRecomputeControls('svcHorizon', 'svcSaveRecompute', admin);
 
     // Default to "this day only" (preserves existing behaviour)
@@ -11658,7 +11797,7 @@ function openServiceModal(date) {
         // data-initial = displayed value at open, so only selects the admin
         // actually changed become recompute pins (pinning every prefilled dropdown
         // would overconstrain the optimizer).
-        const selectHtml = `<select data-pid="${p.id}" data-initial="${escapeHtml(currentId)}">${noneOpt}${opts}${customOpt}</select>`;
+        const selectHtml = `<select data-pid="${p.id}" data-initial="${escapeHtml(currentId)}"${lockMode ? ' disabled' : ''}>${noneOpt}${opts}${customOpt}</select>`;
         const lockToggleHtml = admin
             ? `<label class="svc-lock-toggle" title="Lock this assignment in place — recompute won't move it. Custom & off-site services are always locked.">
                    <input type="checkbox" class="svc-lock-cb" data-lock-pid="${p.id}"
@@ -11684,8 +11823,41 @@ function openServiceModal(date) {
             _svcRowSyncLock(sel);
         });
     }
+    if (lockMode) _svcLockNotes(date, dayAssign[loggedInPathId]);
     document.getElementById('svcModalBack').classList.add('open');
 }
+
+// Lock mode: say what the director would lock, or why it can't be asked
+// for this day (Request lock is disabled then).
+function _svcLockNotes(date, a) {
+    const dk = fmt(date);
+    const pending = _myPendingRequests(['service_lock']).some(([, r]) => r.payload && r.payload.date === dk);
+    let note;
+    if (date.getTime() < today.getTime()) {
+        note = ['warn', 'This day is in the past.'];
+    } else if (!a || (a.type !== 'service' && a.type !== 'off_site') || !a.service) {
+        note = ['warn', "You don't have a service this day, so there's nothing to lock."];
+    } else if (isLockActiveForRender(dk, loggedInPathId, a)) {
+        note = ['info', `${a.service.name} is already locked for you this day.`];
+    } else if (pending) {
+        note = ['info', "You've already asked to lock this day — it's waiting on the director."];
+    }
+    document.getElementById('svcSave').disabled = !!note;
+    if (!note) note = ['info', `The director will lock ${a.service.name} for you this day, so a recompute won't move it.`];
+    document.getElementById('svcReqNotes').innerHTML =
+        `<div class="pto-note pto-note-${note[0]}">${escapeHtml(note[1])}</div>`;
+}
+
+// Pathologist's date picker: reopen the panel on the chosen workday.
+document.getElementById('svcReqDate').addEventListener('change', e => {
+    const d = e.target.value ? parseDate(e.target.value) : null;
+    if (!d || isWeekend(d) || getFederalHoliday(d)) {
+        showToast('There are no services on weekends or holidays — pick a workday.', { type: 'error' });
+        e.target.value = activeSvcDayKey;
+        return;
+    }
+    openServiceModal(d, _svcReqMode, true);
+});
 
 // Which container holds the editable service rows the save/reset code
 // reads: the Override services modal (#svcAssignments) or, for admins on a
@@ -11955,6 +12127,17 @@ async function saveServiceFromModal(choice) {
             return;
         }
         const note = (document.getElementById('svcNote').value || '').trim();
+        if (_svcReqMode === 'lock') {
+            // Lock what's showing this day (the select is read-only here).
+            const a = getDayAssignments(activeSvcDate)[loggedInPathId];
+            if (!a || !a.service) return;
+            const ok = await submitRequest('service_lock', {
+                date: activeSvcDayKey,
+                serviceId: a.service.id,
+            }, note);
+            if (ok) document.getElementById('svcModalBack').classList.remove('open');
+            return;
+        }
         const ok = await submitRequest('service_change', {
             date: activeSvcDayKey,
             serviceId: ownSelect.value || null,

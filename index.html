@@ -790,6 +790,8 @@
                 <button id="dayAddPto">Add PTO for this date</button>
                 <button id="dayChangeOnCall">Change who's on call</button>
                 <button id="dayChangeService">Override services this day</button>
+                <!-- Pathologists: ask the director to lock their service this day. -->
+                <button id="dayLockService" style="display:none;">Request service lock</button>
                 <button id="dayAddLfSendout">Add Lake Forest</button>
                 <!-- Only shown when this day carries a conflict the admin accepted. -->
                 <button id="dayRestoreConflict" style="display:none;">Put conflict back on the list</button>
@@ -957,6 +959,9 @@
             <div class="sub" id="callReqSub">—</div>
             <div class="modal-scroll">
 
+                <!-- Any date jumps the panel to that call week. -->
+                <label class="pto-day-date req-date-pick">Date <input type="date" id="callReqDate"></label>
+
                 <div class="call-days" id="callReqDays"></div>
 
                 <div class="call-section" id="callReqPendingWrap" hidden>
@@ -1040,7 +1045,11 @@
             <h3>Override services for this day</h3>
             <div class="sub" id="svcModalSub">—</div>
 
+            <!-- Pathologists filing a change or lock request can pick the day. -->
+            <label class="pto-day-date req-date-pick" id="svcReqDateWrap" style="display:none;">Date <input type="date" id="svcReqDate"></label>
+
             <div id="svcAssignments"></div>
+            <div class="pto-notes" id="svcReqNotes"></div>
 
             <div id="svcNoteWrap" style="display:none;">
                 <label style="margin-top:14px;">Note for the director (optional)</label>

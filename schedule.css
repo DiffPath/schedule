@@ -8602,9 +8602,26 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
     transition: all 0.15s ease;
 }
 .requests-page-bar .req-new-btn:hover { border-color: var(--ink-3); color: var(--ink); }
-@media (max-width: 720px) {
-    .requests-page-bar .req-new-btn { width: 100%; text-align: center; }
+.requests-page-bar .req-new-group {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
 }
+@media (max-width: 720px) {
+    /* Two buttons a row on phones, so four requests don't stack four deep;
+       a lone button still fills the row. */
+    .requests-page-bar .req-new-group {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+    .requests-page-bar .req-new-btn { width: 100%; justify-content: center; text-align: center; white-space: normal; }
+}
+
+/* Date picker atop the call and service request panels. */
+.modal .req-date-pick { margin: 0 0 12px; max-width: 260px; }
+#svcReqNotes:not(:empty) { margin-top: 12px; }
 
 /* "Waiting on Dr. X": a name, so normal text rather than the caps label. */
 .req-card .req-status-pill.is-waiting {

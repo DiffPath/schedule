@@ -23,8 +23,8 @@
 // "Reset demo data" button that wipes the mock store and reloads.
 //
 // Sign-in: pick any name, password is "demo" for every account.
-// (Histology stays passwordless — the app signs it in behind the scenes
-// with its fixed credential, which the mock also accepts.)
+// (Histology and Guest stay passwordless — the app signs them in behind the
+// scenes with their fixed credentials, which the mock also accepts.)
 //
 // Fidelity notes (matching real RTDB behavior the app relies on):
 //   • Local writes raise value events SYNCHRONOUSLY, so module globals
@@ -45,6 +45,7 @@
     var AUTH_KEY = 'mockScheduler.auth.v1';
     var DEMO_PASSWORD = 'demo';
     var HISTOLOGY_FIXED_PW = 'histology-guest'; // the app auto-submits this
+    var GUEST_FIXED_PW = 'guest-viewer'; // ditto for the guest viewer
     var LAKE_FOREST_FIXED_PW = 'lakeforest-guest'; // ditto for the LF guest
 
     // ── localStorage with in-memory fallback (private mode, odd file:// setups) ──
@@ -337,7 +338,7 @@
         });
     }
     function knownLocalPart(local) {
-        if (local === 'grossroom' || local === 'kathleen' || local === 'histology' || local === 'lakeforest') return true;
+        if (local === 'grossroom' || local === 'kathleen' || local === 'histology' || local === 'guest' || local === 'lakeforest') return true;
         return /^p\d{1,4}$/.test(local); // p<id>; the app validates the id itself
     }
     function authError(code, message) {
@@ -369,6 +370,7 @@
             }
             var ok = (password === DEMO_PASSWORD)
                 || (local === 'histology' && password === HISTOLOGY_FIXED_PW)
+                || (local === 'guest' && password === GUEST_FIXED_PW)
                 || (local === 'lakeforest' && password === LAKE_FOREST_FIXED_PW);
             if (!ok) {
                 return Promise.reject(authError('auth/wrong-password',

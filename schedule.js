@@ -17,13 +17,16 @@ const analytics = firebase.analytics();
 
 // ────────────── AUTH MAPPING ──────────────
 // Firebase Auth accounts use fake emails <local>@scheduler.local, created by
-// hand in the console: pathologists → 'p<id>', plus grossroom / kathleen / histology / lakeforest.
+// hand in the console: pathologists → 'p<id>', plus grossroom / kathleen / histology / guest / lakeforest.
 const AUTH_EMAIL_DOMAIN = '@scheduler.local';
 
 // Histology is the read-only guest: a fixed credential signs in behind the
 // scenes to satisfy '.read: auth != null'. Not a secret — it ships in client
 // code — acceptable because histology cannot write.
 const HISTOLOGY_PW = 'histology-guest';
+// Guest is a second read-only viewer with histology's access, for anyone
+// outside the department who needs to see the schedule.
+const GUEST_PW = 'guest-viewer';
 // Lake Forest is the same kind of passwordless read-only guest as histology.
 const LAKE_FOREST_PW = 'lakeforest-guest';
 
@@ -33,6 +36,7 @@ function authEmailForId(id) {
     if (id === GROSS_ROOM_ID) return 'grossroom' + AUTH_EMAIL_DOMAIN;
     if (id === MANAGER_ID)    return 'kathleen' + AUTH_EMAIL_DOMAIN;
     if (id === HISTOLOGY_ID)  return 'histology' + AUTH_EMAIL_DOMAIN;
+    if (id === GUEST_ID)      return 'guest' + AUTH_EMAIL_DOMAIN;
     if (id === LAKE_FOREST_ID) return 'lakeforest' + AUTH_EMAIL_DOMAIN;
     return 'p' + id + AUTH_EMAIL_DOMAIN; // pathologist
 }
@@ -45,6 +49,7 @@ function idForAuthEmail(email) {
     if (local === 'grossroom') return GROSS_ROOM_ID;
     if (local === 'kathleen')  return MANAGER_ID;
     if (local === 'histology') return HISTOLOGY_ID;
+    if (local === 'guest') return GUEST_ID;
     if (local === 'lakeforest') return LAKE_FOREST_ID;
     const m = local.match(/^p(\d+)$/);
     if (m) return parseInt(m[1], 10);
@@ -305,6 +310,8 @@ const GROSS_ROOM_ID = 'gross_room';
 const MANAGER_ID = 'kathleen';
 // Read-only histology guest: full view, zero edit privileges, no password.
 const HISTOLOGY_ID = 'histology';
+// Read-only guest: the same access as histology under its own name.
+const GUEST_ID = 'guest';
 // Read-only Lake Forest guest: sees only LF sendout days, no password.
 const LAKE_FOREST_ID = 'lakeforest';
 let requests = {};            // { reqKey: { ...request fields } } from Firebase
@@ -334,21 +341,24 @@ function isManager() {
     return loggedInPathId === MANAGER_ID;
 }
 
-// True when histology is signed in — every editing affordance must be
-// hidden or short-circuited.
+// True when histology or the guest is signed in — the full-view, read-only
+// accounts. Every editing affordance must be hidden or short-circuited.
 function isHistology() {
-    return loggedInPathId === HISTOLOGY_ID;
+    return loggedInPathId === HISTOLOGY_ID || loggedInPathId === GUEST_ID;
 }
 
 function isLakeForest() {
     return loggedInPathId === LAKE_FOREST_ID;
 }
 
-// Read-only guest accounts: full UI lockdown (histology sees everything,
-// Lake Forest additionally sees only LF sendout days via body.lf-guest CSS).
+// Read-only guest accounts: full UI lockdown (histology and the guest see
+// everything, Lake Forest only LF sendout days via body.lf-guest CSS).
 function isReadOnlyGuest() {
     return isHistology() || isLakeForest();
 }
+
+// The passwordless accounts the app signs in behind the scenes.
+const GUEST_LOGIN_PW = { [HISTOLOGY_ID]: HISTOLOGY_PW, [GUEST_ID]: GUEST_PW, [LAKE_FOREST_ID]: LAKE_FOREST_PW };
 
 // Only the director and the gross room add, edit, move or delete procedures;
 // everyone else sees the procedure schedule read-only.
@@ -1587,7 +1597,7 @@ function checkReady() {
         hideLoading();
         // Listeners only start after sign-in, so loggedInPathId is already
         // resolved. Guard: an account mapping to a missing pathologist forces re-login.
-        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && loggedInPathId !== HISTOLOGY_ID && loggedInPathId !== LAKE_FOREST_ID && !pathologists.find(p => p.id === loggedInPathId)) {
+        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && loggedInPathId !== HISTOLOGY_ID && loggedInPathId !== GUEST_ID && loggedInPathId !== LAKE_FOREST_ID && !pathologists.find(p => p.id === loggedInPathId)) {
             auth.signOut();
             return;
         }
@@ -1645,6 +1655,7 @@ function showLoginOverlay() {
         `<option value="${GROSS_ROOM_ID}">Gross Room</option>` +
         `<option value="${MANAGER_ID}">Kathleen</option>` +
         `<option value="${HISTOLOGY_ID}">Histology</option>` +
+        `<option value="${GUEST_ID}">Guest</option>` +
         `<option value="${LAKE_FOREST_ID}">Lake Forest</option>`;
     pwInput.value = '';
     errEl.textContent = '';
@@ -1657,13 +1668,14 @@ function showLoginOverlay() {
 }
 
 // Show or hide the login password input based on the currently-selected
-// account. Histology has no password; every other account requires one.
+// account. Histology, Guest and Lake Forest have no password; every other
+// account requires one.
 function updateLoginPasswordVisibility() {
     const sel = document.getElementById('loginPath');
     const pwInput = document.getElementById('loginPassword');
     if (!sel || !pwInput) return;
     const pwLabel = pwInput.previousElementSibling; // the <label>Password</label>
-    const isHisto = sel.value === HISTOLOGY_ID || sel.value === LAKE_FOREST_ID;
+    const isHisto = !!GUEST_LOGIN_PW[sel.value];
     pwInput.style.display = isHisto ? 'none' : '';
     if (pwLabel && pwLabel.tagName === 'LABEL') {
         pwLabel.style.display = isHisto ? 'none' : '';
@@ -1690,28 +1702,23 @@ async function attemptLogin() {
 
     const isGrossRoomLogin = pidRaw === GROSS_ROOM_ID;
     const isManagerLogin = pidRaw === MANAGER_ID;
-    const isHistologyLogin = pidRaw === HISTOLOGY_ID;
-    const isLakeForestLogin = pidRaw === LAKE_FOREST_ID;
-
-    // Histology is a passwordless guest account. Every other account
-    // requires a password.
-    if (!isHistologyLogin && !isLakeForestLogin && !pwAttempt) {
+    // Histology, Guest and Lake Forest are passwordless guest accounts.
+    // Every other account requires a password.
+    const guestPw = GUEST_LOGIN_PW[pidRaw];
+    if (!guestPw && !pwAttempt) {
         errEl.textContent = 'Please enter your password.';
         return;
     }
 
     const pid = isGrossRoomLogin ? GROSS_ROOM_ID
         : isManagerLogin ? MANAGER_ID
-        : isHistologyLogin ? HISTOLOGY_ID
-        : isLakeForestLogin ? LAKE_FOREST_ID
+        : guestPw ? pidRaw
         : parseInt(pidRaw, 10);
 
-    // Histology signs in behind the scenes with a fixed credential the app
-    // holds; every other account uses the password the user typed.
+    // The guest accounts sign in behind the scenes with a fixed credential
+    // the app holds; every other account uses the password the user typed.
     const email = authEmailForId(pid);
-    const password = isHistologyLogin ? HISTOLOGY_PW
-        : isLakeForestLogin ? LAKE_FOREST_PW
-        : pwAttempt;
+    const password = guestPw || pwAttempt;
 
     btn.disabled = true;
     btn.textContent = 'Signing in…';
@@ -1724,7 +1731,11 @@ async function attemptLogin() {
     } catch (err) {
         // Map the common Firebase Auth error codes to friendly messages.
         const code = err && err.code ? err.code : '';
-        if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        if (guestPw && (code === 'auth/wrong-password' || code === 'auth/invalid-credential'
+            || code === 'auth/user-not-found')) {
+            // Nothing was typed, so the account itself isn't set up.
+            errEl.textContent = 'This account isn’t set up yet. Contact the director.';
+        } else if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
             errEl.textContent = 'Incorrect password.';
             pwInput.select();
         } else if (code === 'auth/user-not-found') {
@@ -2099,7 +2110,7 @@ function renderSidebar() {
             sWho.textContent = 'Signed in · Lake Forest (read-only)';
             sInfo.style.display = 'flex';
         } else if (isHistology()) {
-            sWho.textContent = 'Signed in · Histology (read-only)';
+            sWho.textContent = `Signed in · ${_pathName(loggedInPathId)} (read-only)`;
             sInfo.style.display = 'flex';
         } else if (loggedInPathId !== null) {
             const me = pathologists.find(p => p.id === loggedInPathId);
@@ -3288,6 +3299,7 @@ function _pathName(id) {
     if (id === MANAGER_ID) return 'Kathleen';
     if (id === GROSS_ROOM_ID) return 'Gross Room';
     if (id === HISTOLOGY_ID) return 'Histology';
+    if (id === GUEST_ID) return 'Guest';
     if (id === LAKE_FOREST_ID) return 'Lake Forest';
     return `(unknown #${id})`;
 }
@@ -5375,7 +5387,7 @@ function canEditConferences(pathId) {
     const id = (pathId !== undefined && pathId !== null) ? pathId : loggedInPathId;
     if (id === null || id === undefined) return false;
     if (id === GROSS_ROOM_ID) return false;
-    if (id === HISTOLOGY_ID) return false;
+    if (id === HISTOLOGY_ID || id === GUEST_ID) return false;
     if (id === LAKE_FOREST_ID) return false;
     if (id === MANAGER_ID) return true;
     if (isAdmin(id)) return true;

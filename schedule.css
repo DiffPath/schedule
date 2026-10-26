@@ -70,9 +70,11 @@
     --meeting-ink:   #1a5276;
     --meeting-line:  #8fb3cc;
 
-    --serif: 'Instrument Serif', Georgia, serif;
-    --sans: 'Geist', system-ui, sans-serif;
-    --mono: 'JetBrains Mono', monospace;
+    /* Newsreader headings over IBM Plex. Newsreader loads at weight 500
+       only, so headings set to 400 render at 500 (the nearest weight). */
+    --serif: 'Newsreader', Georgia, serif;
+    --sans: 'IBM Plex Sans', system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, monospace;
 }
 
 * {
@@ -4219,57 +4221,6 @@ main {
     max-width: 56ch;
 }
 
-.requests-page-summary {
-    display: flex;
-    align-items: stretch;
-    gap: 18px;
-    padding: 12px 18px;
-    background: var(--paper);
-    border: 1px solid var(--rule-soft);
-    border-radius: 8px;
-    flex-shrink: 0;
-}
-
-.requests-summary-stat {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-width: 56px;
-    line-height: 1;
-}
-
-.requests-summary-num {
-    font-family: var(--serif);
-    font-size: 30px;
-    font-weight: 400;
-    color: var(--ink);
-    letter-spacing: -0.02em;
-    margin-bottom: 6px;
-}
-
-.requests-summary-stat[data-tone="pending"] .requests-summary-num {
-    color: #8a6614;
-}
-
-.requests-summary-stat[data-tone="pending"][data-empty="true"] .requests-summary-num {
-    color: var(--ink-3);
-}
-
-.requests-summary-label {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    font-weight: 500;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-}
-
-.requests-summary-divider {
-    width: 1px;
-    background: var(--rule-soft);
-}
-
 /* Tabs on the page: same DNA as modal tabs, slightly larger, with a count chip */
 .requests-page-tabs {
     margin: 0 0 18px;
@@ -4305,42 +4256,6 @@ main {
     color: var(--accent);
 }
 
-/* The page list scrolls within itself (header/tabs stay static); natural
-   page scroll below 1100px. */
-.requests-page-list {
-    max-height: calc(100vh - 300px);
-    overflow-y: auto;
-    padding-right: 6px;
-    gap: 12px;
-}
-
-/* Empty state on the page: more generous than the modal */
-.requests-page-list.req-list .empty {
-    background: var(--paper);
-    border: 1px dashed var(--rule);
-    border-radius: 10px;
-    padding: 56px 24px;
-    font-size: 13.5px;
-    font-style: normal;
-    color: var(--ink-3);
-    line-height: 1.6;
-}
-
-.requests-page-list.req-list .empty .empty-headline {
-    display: block;
-    font-family: var(--serif);
-    font-style: italic;
-    font-size: 22px;
-    color: var(--ink-2);
-    margin-bottom: 6px;
-    letter-spacing: -0.01em;
-}
-
-/* Slightly more breathable cards on the full page */
-.requests-page-list .req-card {
-    padding: 14px 16px;
-}
-
 /* ── Mobile: stack the header, downsize type, full-width summary ─────── */
 @media (max-width: 720px) {
     .requests-page-content {
@@ -4359,16 +4274,6 @@ main {
         font-size: 30px;
     }
 
-    .requests-page-summary {
-        align-self: stretch;
-        justify-content: space-around;
-        padding: 14px 12px;
-    }
-
-    .requests-summary-num {
-        font-size: 26px;
-    }
-
     .requests-page-tabs .req-tab {
         flex: 1;
         justify-content: center;
@@ -4376,14 +4281,6 @@ main {
 
     .requests-page-tabs {
         width: 100%;
-    }
-
-    .requests-page-list.req-list .empty {
-        padding: 40px 18px;
-    }
-
-    .requests-page-list.req-list .empty .empty-headline {
-        font-size: 19px;
     }
 }
 
@@ -4428,44 +4325,6 @@ main {
     max-width: 56ch;
 }
 
-.changes-page-summary {
-    display: flex;
-    align-items: stretch;
-    gap: 18px;
-    padding: 12px 18px;
-    background: var(--paper);
-    border: 1px solid var(--rule-soft);
-    border-radius: 8px;
-    flex-shrink: 0;
-}
-
-.changes-summary-stat {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-width: 56px;
-    line-height: 1;
-}
-
-.changes-summary-num {
-    font-family: var(--serif);
-    font-size: 30px;
-    font-weight: 400;
-    color: var(--ink);
-    letter-spacing: -0.02em;
-    margin-bottom: 6px;
-}
-
-.changes-summary-label {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    font-weight: 500;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-}
-
 /* Tabs with a count chip; "Affecting me" is the default so the log isn't
    drowned in unrelated updates. */
 .changes-page-tabs {
@@ -4485,113 +4344,6 @@ main {
     color: var(--accent);
 }
 
-/* List container: stacked cards, separated by a subtle gap */
-.chg-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-/* The log scrolls within itself like the requests list; natural page
-   scroll below 1100px. */
-.changes-page-content .chg-list {
-    max-height: calc(100vh - 300px);
-    overflow-y: auto;
-    padding-right: 6px;
-}
-
-/* Change card: narrower padding than request cards, left-edge accent
-   tinted by change type for scannability. */
-.chg-card {
-    border: 1px solid var(--rule-soft);
-    border-radius: 7px;
-    padding: 12px 14px;
-    background: var(--paper);
-    position: relative;
-    border-left: 3px solid var(--rule);
-}
-
-.chg-card.kind-pto      { border-left-color: var(--pto-ink); }
-.chg-card.kind-oncall   { border-left-color: #2a8c46; }
-.chg-card.kind-service  { border-left-color: #3d6fa8; }
-.chg-card.kind-recompute { border-left-color: var(--ink-3); }
-.chg-card.kind-conference { border-left-color: #7e22ce; }
-
-.chg-card-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 10px;
-    margin-bottom: 4px;
-}
-
-.chg-card .chg-summary {
-    font-weight: 600;
-    font-size: 13px;
-    color: var(--ink);
-    line-height: 1.45;
-    flex: 1;
-    min-width: 0;
-}
-
-.chg-card .chg-kind {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--ink-3);
-    background: var(--bg);
-    padding: 2px 6px;
-    border-radius: 3px;
-    white-space: nowrap;
-    flex-shrink: 0;
-}
-
-.chg-card .chg-details {
-    font-size: 12.5px;
-    color: var(--ink-2);
-    line-height: 1.5;
-    margin: 4px 0 0;
-    white-space: pre-wrap;
-}
-
-.chg-card .chg-meta {
-    font-family: var(--mono);
-    font-size: 10px;
-    color: var(--ink-3);
-    margin-top: 8px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-
-.chg-card .chg-meta .chg-source {
-    margin-left: 8px;
-    padding-left: 8px;
-    border-left: 1px solid var(--rule-soft);
-}
-
-/* Empty state — same friendly tone as the requests page */
-.chg-list .empty {
-    background: var(--paper);
-    border: 1px dashed var(--rule);
-    border-radius: 10px;
-    padding: 56px 24px;
-    font-size: 13.5px;
-    color: var(--ink-3);
-    line-height: 1.6;
-    text-align: center;
-}
-
-.chg-list .empty .empty-headline {
-    display: block;
-    font-family: var(--serif);
-    font-style: italic;
-    font-size: 22px;
-    color: var(--ink-2);
-    margin-bottom: 6px;
-    letter-spacing: -0.01em;
-}
-
 /* Mobile: stack the header, downsize type */
 @media (max-width: 720px) {
     .changes-page-content {
@@ -4608,24 +4360,6 @@ main {
 
     .changes-page-title {
         font-size: 30px;
-    }
-
-    .changes-page-summary {
-        align-self: stretch;
-        justify-content: space-around;
-        padding: 14px 12px;
-    }
-
-    .changes-summary-num {
-        font-size: 26px;
-    }
-
-    .chg-list .empty {
-        padding: 40px 18px;
-    }
-
-    .chg-list .empty .empty-headline {
-        font-size: 19px;
     }
 
     /* Let the scope tabs span full width and split evenly on narrow screens */
@@ -5946,8 +5680,8 @@ body.sidebar-scroll-locked {
         column-gap: 6px;
     }
     .schedule-toolbar .current-period {
-        font-size: 15px;
-        padding: 3px 4px;
+        font-size: 13.5px;   /* fits "October 25–31 2026" beside the selects */
+        padding: 3px 2px;
     }
     .aside-toggle-btn {
         width: 38px;
@@ -7160,15 +6894,6 @@ table.tracking-summary tbody td.t-sum-empty {
         overflow-y: visible;
         padding-bottom: 0;
     }
-
-    /* Match the History list: on narrow/stacked layouts let the page
-       scroll naturally instead of confining scroll to the list. */
-    .requests-page-list,
-    .changes-page-content .chg-list {
-        max-height: none;
-        overflow-y: visible;
-        padding-right: 0;
-    }
 }
 /* ════ STICKY PAGE-HEADER FIX (Requests / Changes / Tracking) ════
    These headers inherit the global sticky rule and pin inside their
@@ -7276,60 +7001,13 @@ table.tracking-summary tbody td.t-sum-empty {
     max-width: 56ch;
 }
 
-.conflicts-page-summary {
-    display: flex;
-    align-items: stretch;
-    gap: 18px;
-    padding: 12px 18px;
-    background: var(--paper);
-    border: 1px solid var(--rule-soft);
-    border-radius: 8px;
-    flex-shrink: 0;
-}
-
-.conflicts-summary-stat {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-width: 56px;
-    line-height: 1;
-}
-
-.conflicts-summary-num {
-    font-family: var(--serif);
-    font-size: 30px;
-    font-weight: 400;
-    color: var(--ink);
-    letter-spacing: -0.02em;
-    margin-bottom: 6px;
-}
-
-/* The open count is the one that matters — tint it when it isn't zero. */
-.conflicts-summary-stat[data-tone="open"] .conflicts-summary-num { color: #a41b12; }
-
-.conflicts-summary-label {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    font-weight: 500;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--ink-3);
-}
-
-.conflicts-summary-divider {
-    width: 1px;
-    background: var(--rule-soft);
-}
-
-/* Tabs on the left, horizon picker on the right. */
+/* Horizon picker beside the tabs, at the header's right end. */
 .conflicts-page-controls {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 16px;
     flex-wrap: wrap;
-    margin: 0 0 18px;
 }
 
 .conflicts-page-tabs { margin: 0; }
@@ -7368,132 +7046,6 @@ table.tracking-summary tbody td.t-sum-empty {
 /* Inside a request card it sits inline with the action buttons instead. */
 .rc-horizon-inline { margin-right: 0; }
 
-.cfl-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.cfl-card {
-    padding: 12px 14px;
-    border: 1px solid var(--rule-soft);
-    border-left: 3px solid var(--ink-4);
-    border-radius: 7px;
-    background: var(--paper);
-}
-
-.cfl-card.tone-high { border-left-color: #d92d20; }
-.cfl-card.tone-low { border-left-color: #c49620; }
-.cfl-card.cfl-accepted {
-    border-left-color: var(--ink-4);
-    background: var(--paper-2);
-}
-
-.cfl-card-head {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    flex-wrap: wrap;
-    margin-bottom: 6px;
-}
-
-.cfl-when {
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--ink-2);
-}
-
-.cfl-kind {
-    font-family: var(--mono);
-    font-size: 8.5px;
-    font-weight: 600;
-    letter-spacing: 0.11em;
-    padding: 2px 6px;
-    border-radius: 3px;
-    background: var(--bg-2);
-    color: var(--ink-2);
-}
-
-/* Red badge for the two that mean the day is actually broken. */
-.cfl-kind-callpto,
-.cfl-kind-hard {
-    background: rgba(217, 45, 32, 0.12);
-    color: #a41b12;
-}
-
-.cfl-kind-soft {
-    background: rgba(202, 138, 4, 0.14);
-    color: #92620a;
-}
-
-/* Marks rows that weren't on the list the last time this admin looked. */
-.cfl-new {
-    font-family: var(--mono);
-    font-size: 8.5px;
-    font-weight: 700;
-    letter-spacing: 0.11em;
-    padding: 2px 6px;
-    border-radius: 3px;
-    background: #d92d20;
-    color: #fff;
-}
-
-.cfl-detail {
-    font-size: 13.5px;
-    color: var(--ink);
-    line-height: 1.45;
-}
-
-.cfl-ack {
-    margin-top: 5px;
-    font-size: 11.5px;
-    color: var(--ink-3);
-}
-
-.cfl-actions {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
-    flex-wrap: wrap;
-}
-
-.cfl-actions button {
-    font-family: var(--sans);
-    font-size: 12px;
-    font-weight: 500;
-    padding: 5px 11px;
-    border-radius: 4px;
-    border: 1px solid var(--rule);
-    background: var(--paper-2);
-    color: var(--ink-2);
-    cursor: pointer;
-}
-
-.cfl-actions button:hover {
-    background: var(--bg-2);
-    color: var(--ink);
-}
-
-.cfl-actions button.cfl-accept {
-    border-color: rgba(217, 45, 32, 0.4);
-    color: #a41b12;
-}
-
-.cfl-actions button.cfl-accept:hover {
-    background: rgba(217, 45, 32, 0.1);
-}
-
-.cfl-empty {
-    padding: 28px 18px;
-    text-align: center;
-    font-size: 13.5px;
-    color: var(--ink-3);
-    line-height: 1.6;
-    border: 1px dashed var(--rule-soft);
-    border-radius: 8px;
-}
-
 @media (max-width: 800px) {
     .conflicts-page-header {
         flex-direction: column;
@@ -7501,6 +7053,7 @@ table.tracking-summary tbody td.t-sum-empty {
         gap: 16px;
     }
     .conflicts-page-title { font-size: 28px; }
+    .conflicts-page-controls { justify-content: flex-start; }
     /* Modal footers get crowded on a phone — let the horizon wrap. */
     .rc-horizon { margin-right: 0; }
 }
@@ -8578,16 +8131,15 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 }
 .req-card-actions button.link:hover { background: none; color: var(--ink); text-decoration-color: var(--ink-3); }
 
-/* Tab row with the page's one button at its right end. */
+/* The page's new-request buttons, right-aligned above the list. */
 .requests-page-bar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 12px;
     flex-wrap: wrap;
-    margin: 0 0 18px;
+    margin: 0 0 14px;
 }
-.requests-page-bar .requests-page-tabs { margin: 0; }
 .requests-page-bar .req-new-btn {
     padding: 8px 14px;
     border-radius: 5px;
@@ -8622,6 +8174,312 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 /* Date picker atop the call and service request panels. */
 .modal .req-date-pick { margin: 0 0 12px; max-width: 260px; }
 #svcReqNotes:not(:empty) { margin-top: 12px; }
+
+/* ════ LIST + DETAIL LAYOUT (Conflicts / Requests / Changes pages) ════
+   Compact rows on the left, the selected item on the right. At phone
+   width the list shows alone; picking a row swaps to its detail, which has
+   a Back button (renderSplit / wireSplit in schedule.js). */
+.requests-page-content,
+.changes-page-content,
+.conflicts-page-content { max-width: 1040px; }
+
+.requests-page-header .req-tabs,
+.changes-page-header .req-tabs,
+.conflicts-page-header .req-tabs { margin: 0; }
+
+.requests-page-bar[hidden] { display: none; }
+
+.split {
+    display: grid;
+    grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+}
+.split.is-empty { grid-template-columns: minmax(0, 1fr); }
+.split.is-empty .split-detail { display: none; }
+
+/* Each column scrolls on its own so the header stays put. */
+.split-list,
+.split-detail {
+    max-height: calc(100vh - 240px);
+    overflow-y: auto;
+}
+
+.split-list {
+    display: flex;
+    flex-direction: column;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 10px;
+}
+.split.is-empty .split-list { background: none; border: 0; }
+
+.split-group {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 10px 14px 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-2);
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule-soft);
+}
+
+.split-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    width: 100%;
+    padding: 12px 14px;
+    border: 0;
+    border-bottom: 1px solid var(--rule-soft);
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.split-row:last-child { border-bottom: 0; }
+.split-row:hover { background: var(--paper-2); }
+.split-row.is-selected { background: #fff; box-shadow: inset 3px 0 0 var(--accent); }
+.split-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.split-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.split-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.split-row-title {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--ink);
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.split-row-time { flex: none; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.split-row-text { font-size: 13px; color: var(--ink-2); line-height: 1.35; }
+.split-row-sub { font-size: 12px; color: var(--ink-2); }
+.split-row-sub.tone-warn { color: #8a5a00; }
+.split-row-sub.tone-ok { color: #2f6b3a; }
+.split-row-sub.tone-bad { color: #9b3b22; }
+
+.split-avatar {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--c);
+}
+.split-dot {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    margin-top: 4px;
+    border-radius: 50%;
+    background: var(--ink-3);
+}
+.split-dot.tone-high { background: #c0392b; }
+.split-dot.tone-low { background: #c98a12; }
+.split-dot.kind-pto { background: var(--pto-ink); }
+.split-dot.kind-oncall { background: #2a8c46; }
+.split-dot.kind-service { background: #3d6fa8; }
+.split-dot.kind-lf_sendout { background: var(--svc-freetext); }
+.split-dot.kind-conference { background: #7e22ce; }
+.split-new {
+    flex: none;
+    align-self: center;
+    font-size: 11px;
+    font-weight: 500;
+    color: #9b3b22;
+    background: #f8e4dc;
+    border-radius: 999px;
+    padding: 1px 7px;
+}
+
+.split-empty {
+    padding: 56px 24px;
+    text-align: center;
+    font-size: 13.5px;
+    color: var(--ink-2);
+    line-height: 1.6;
+    background: var(--paper);
+    border: 1px dashed var(--rule);
+    border-radius: 10px;
+}
+.split-empty-headline {
+    display: block;
+    margin-bottom: 6px;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 22px;
+    color: var(--ink-2);
+    letter-spacing: -0.01em;
+}
+
+/* ── The detail pane ── */
+.split-detail {
+    background: #fff;
+    border: 1px solid var(--rule-soft);
+    border-radius: 10px;
+    padding: 22px 24px;
+}
+.split-back { display: none; }
+.split-detail-body { display: flex; flex-direction: column; gap: 18px; }
+.split-detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.split-detail-heading { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.split-eyebrow { font-size: 12px; color: var(--ink-2); }
+.split-detail-title {
+    margin: 0;
+    font-family: var(--serif);
+    font-size: 26px;
+    font-weight: 400;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+}
+.split-detail-title.is-long {
+    font-family: var(--sans);
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 1.45;
+    letter-spacing: 0;
+}
+.split-pill {
+    flex: none;
+    font-size: 12px;
+    font-weight: 500;
+    border-radius: 999px;
+    padding: 4px 10px;
+    background: var(--bg);
+    color: var(--ink-2);
+}
+.split-pill.tone-high { background: #f8e4dc; color: #9b3b22; }
+.split-pill.tone-low { background: #fdf1d6; color: #8a5a00; }
+
+.split-section { display: flex; flex-direction: column; gap: 8px; }
+.split-section-label { font-size: 12px; font-weight: 500; color: var(--ink-2); }
+.split-note { margin: 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+.split-lines { margin: 0; padding-left: 18px; font-size: 13.5px; color: var(--ink); line-height: 1.6; }
+
+/* The day as scheduled: one cell per pathologist. */
+.split-day-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.split-day-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 10px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+    font-size: 13px;
+}
+.split-day-cell.is-me { background: var(--accent-soft); border-color: var(--rule); }
+.split-day-dot { flex: none; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.split-day-name { flex: 1; min-width: 0; color: var(--ink); }
+.split-day-svc { color: var(--ink-2); text-align: right; }
+
+/* A call week: one cell per day, the conflicting days marked. */
+.split-week { display: grid; grid-template-columns: repeat(auto-fit, minmax(48px, 1fr)); gap: 6px; }
+.split-week-day {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 8px 4px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--ink-2);
+}
+.split-week-num { font-size: 15px; font-weight: 500; color: var(--ink); }
+.split-week-day.is-bad { background: #fbefea; border-color: #e3b7a6; }
+.split-week-day.is-bad .split-week-who { color: #9b3b22; }
+
+/* A recompute's was/now table. */
+.split-moves-wrap { overflow-x: auto; border: 1px solid var(--rule-soft); border-radius: 8px; }
+.split-moves { width: 100%; border-collapse: collapse; font-size: 13px; }
+.split-moves th {
+    padding: 8px 12px;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ink-2);
+    background: var(--paper);
+}
+.split-moves td { padding: 9px 12px; border-top: 1px solid var(--rule-soft); white-space: nowrap; }
+.split-moves td .split-day-dot { margin-right: 6px; }
+.split-moves td.was { color: var(--ink-2); text-decoration: line-through; }
+
+.split-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule-soft);
+}
+.split-actions button {
+    min-height: 38px;
+    padding: 8px 16px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--ink);
+    background: #fff;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.split-actions button:hover { border-color: var(--ink-3); }
+.split-actions button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+.split-actions button.primary:hover { background: #154463; }
+
+/* Request cards sit in the pane without their own frame. */
+.split-detail .req-card,
+.split-detail .req-card[class*="status-"] {
+    padding: 0;
+    border: 0;
+    background: none;
+}
+.split-detail .req-card .req-who {
+    font-family: var(--serif);
+    font-size: 24px;
+    font-weight: 400;
+    letter-spacing: -0.01em;
+}
+.split-detail .req-card .req-detail { font-size: 14px; }
+.split-detail .req-context { margin: 14px 0 4px; }
+.split-detail .req-card-actions { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--rule-soft); }
+
+@media (max-width: 800px) {
+    .split { display: block; }
+    .split-list,
+    .split-detail { max-height: none; overflow: visible; }
+    .split:not([data-view="detail"]) .split-detail { display: none; }
+    .split[data-view="detail"] .split-list { display: none; }
+    .split-detail { padding: 16px; }
+    .split-back {
+        display: inline-flex;
+        margin: -4px 0 12px;
+        padding: 8px 0;
+        border: 0;
+        background: none;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--accent);
+        cursor: pointer;
+    }
+    .split-day-grid { grid-template-columns: minmax(0, 1fr); }
+    .split-detail-title { font-size: 22px; }
+}
 
 /* "Waiting on Dr. X": a name, so normal text rather than the caps label. */
 .req-card .req-status-pill.is-waiting {

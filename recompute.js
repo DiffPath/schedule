@@ -108,7 +108,9 @@
 //                  toward the day after the window (tools/tuning replays
 //                  the pre-tuning behavior with these)
 //
-// Returns { processed, dayBeforeProcessed, firstChangedKey, lastChangedKey }.
+// Returns { processed, dayBeforeProcessed, firstChangedKey, lastChangedKey,
+// moves: [{ d: dayKey, p: pathId, f: oldServiceId, t: newServiceId }],
+// movesMore: moves left out past RC_MOVES_LOGGED }.
 
 const ROTATION_CYCLE = ['cyto', 'bigs', 'huntley', 'wfh'];
 
@@ -293,6 +295,10 @@ const RC_LEAD_IN_WORKDAYS = 5;
 // the plan simply keeps everyone cycling from wherever the change left
 // them, instead of being pulled back onto the old schedule.
 const RC_STABLE_WORKDAYS = 10;
+
+// Most moves a recompute's change-log entry keeps for the was/now table;
+// the rest are only counted (keeps a 365-day recompute's entry small).
+const RC_MOVES_LOGGED = 200;
 
 // Per-workday decay of the fairness tallies (rule 7): an imbalance fades
 // with a half-life of ~13 workdays (λ^13 ≈ ½). Debts still get repaid
@@ -1159,6 +1165,8 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
     let dayBeforeProcessed = false;
     let firstChangedKey = null;
     let lastChangedKey = null;
+    // Who moved from what to what — the Changes page's was/now table.
+    const moves = [];
     const fromKey = fmt(fromDate);
     for (const k in snapshot) {
         if (_sameServiceMap(snapshot[k], baseline[k])) continue;
@@ -1167,7 +1175,15 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
         if (k < fromKey) dayBeforeProcessed = true;
         if (firstChangedKey === null || k < firstChangedKey) firstChangedKey = k;
         if (lastChangedKey === null || k > lastChangedKey) lastChangedKey = k;
+        const was = baseline[k] || {};
+        const now = snapshot[k];
+        new Set([...Object.keys(was), ...Object.keys(now)]).forEach(pid => {
+            if (was[pid] !== now[pid]) {
+                moves.push({ d: k, p: Number(pid), f: was[pid] || null, t: now[pid] || null });
+            }
+        });
     }
+    moves.sort((a, b) => a.d.localeCompare(b.d) || a.p - b.p);
 
     // ── Materialize the adjacency ring ──────────────────────────────────
     // An unwritten day next to a written day re-renders against its NEW
@@ -1204,6 +1220,8 @@ async function recomputeFutureSchedule(pinnedByDay, opts) {
         dayBeforeProcessed: dayBeforeProcessed,
         firstChangedKey: firstChangedKey,
         lastChangedKey: lastChangedKey,
+        moves: moves.slice(0, RC_MOVES_LOGGED),
+        movesMore: Math.max(0, moves.length - RC_MOVES_LOGGED),
     };
 }
 
@@ -1713,6 +1731,8 @@ async function _runManualRecompute(fromDate, horizonDays) {
                 dayBeforeProcessed: !!res.dayBeforeProcessed,
                 startDate: res.firstChangedKey || null,
                 endDate: res.lastChangedKey || null,
+                moves: res.moves && res.moves.length ? res.moves : null,
+                movesMore: res.movesMore || null,
             }, _chgSummaryRecompute(res.processed, fromKey, !!res.dayBeforeProcessed,
                 res.firstChangedKey, res.lastChangedKey)));
         }
@@ -1880,6 +1900,8 @@ async function maybeOfferRecompute(pinnedByDay, opts) {
                 dayBeforeProcessed: !!res.dayBeforeProcessed,
                 startDate: res.firstChangedKey || null,
                 endDate: res.lastChangedKey || null,
+                moves: res.moves && res.moves.length ? res.moves : null,
+                movesMore: res.movesMore || null,
             }, _chgSummaryRecompute(res.processed, fromKey, !!res.dayBeforeProcessed,
                 res.firstChangedKey, res.lastChangedKey)));
         }

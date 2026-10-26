@@ -2925,44 +2925,167 @@ async function unacceptConflict(key) {
     }
 }
 
-// Jump the calendar to a conflict and open that day for editing.
-function goToConflict(key) {
-    const c = getConflicts().find(x => x.key === key);
-    if (!c) return;
-    cursor = new Date(c.date);
+// Jump the calendar to a day and open it for editing.
+function goToDay(date) {
+    cursor = new Date(date);
     if (typeof window.__setPage === 'function') window.__setPage('schedule');
     renderMain();
-    openDayDetail(new Date(c.date));
+    openDayDetail(new Date(date));
+}
+
+function goToConflict(key) {
+    const c = getConflicts().find(x => x.key === key);
+    if (c) goToDay(c.date);
+}
+
+// ────────────── LIST + DETAIL LAYOUT (Conflicts / Requests / Changes) ──────────────
+// Each page lists compact rows in .split-list and shows the selected one in
+// .split-detail. Wide screens show both side by side; at phone width the
+// list shows alone, and picking a row swaps to its detail (with a Back
+// button). The selection is kept by key across live re-renders.
+const _splitSel = {};   // split element id → selected key
+
+// items: [{ key, group?, html }] in display order; renderDetail(key, el)
+// fills the detail pane for the selected key.
+function renderSplit(splitId, items, renderDetail, emptyHtml) {
+    const split = document.getElementById(splitId);
+    if (!split) return;
+    const listEl = split.querySelector('.split-list');
+    const detailEl = split.querySelector('.split-detail');
+    if (items.length === 0) {
+        split.classList.add('is-empty');
+        split.dataset.view = 'list';
+        listEl.innerHTML = `<div class="split-empty">${emptyHtml}</div>`;
+        detailEl.innerHTML = '';
+        return;
+    }
+    split.classList.remove('is-empty');
+    let sel = _splitSel[splitId];
+    if (!items.some(it => it.key === sel)) {
+        sel = items[0].key;
+        _splitSel[splitId] = sel;
+        // The open item went away (decided, accepted…) — back to the list on a phone.
+        split.dataset.view = 'list';
+    }
+    let group = null;
+    listEl.innerHTML = items.map(it => {
+        let head = '';
+        if (it.group && it.group !== group) {
+            group = it.group;
+            head = `<div class="split-group">${escapeHtml(group)}</div>`;
+        }
+        const on = it.key === sel;
+        return head + `<button type="button" class="split-row${on ? ' is-selected' : ''}" data-key="${escapeHtml(it.key)}"${on ? ' aria-current="true"' : ''}>${it.html}</button>`;
+    }).join('');
+    detailEl.innerHTML = '<button type="button" class="split-back">‹ Back to the list</button><div class="split-detail-body"></div>';
+    renderDetail(sel, detailEl.querySelector('.split-detail-body'));
+}
+
+// Row clicks select; Back returns to the list (phone). rerender redraws the page.
+function wireSplit(splitId, rerender) {
+    const split = document.getElementById(splitId);
+    if (!split) return;
+    split.addEventListener('click', e => {
+        const row = e.target.closest('.split-row');
+        if (row) {
+            _splitSel[splitId] = row.dataset.key;
+            split.dataset.view = 'detail';
+            rerender();
+            if (window.matchMedia('(max-width: 800px)').matches) split.scrollIntoView({ block: 'start' });
+            return;
+        }
+        if (e.target.closest('.split-back')) {
+            split.dataset.view = 'list';
+            const selRow = split.querySelector('.split-row.is-selected');
+            if (selRow) selRow.scrollIntoView({ block: 'center' });
+        }
+    });
+}
+
+// Pathologist initials in their color (initials of the display name for
+// the other accounts).
+function splitAvatar(pid) {
+    const p = pathologists.find(x => x.id === pid);
+    const initials = p ? p.initials
+        : _shortPathName(pid).split(/\s+/).map(w => w.charAt(0)).join('').slice(0, 2);
+    return `<span class="split-avatar" style="--c:${p ? p.color : 'var(--ink-3)'}" aria-hidden="true">${escapeHtml(initials)}</span>`;
+}
+
+// Long titles (an auto-adjust summary runs to a paragraph) drop to a
+// smaller size so the serif heading doesn't swamp the pane.
+function splitTitleCls(text) {
+    return String(text || '').length > 90 ? ' is-long' : '';
+}
+
+// "12:14 PM" today, "Oct 24" before that.
+function splitShortTime(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    return sameDay(d, new Date())
+        ? d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`;
+}
+
+// The day as scheduled: each pathologist and what they're on, highlightPid
+// picked out.
+function splitDayGrid(date, highlightPid) {
+    const dk = fmt(date);
+    const assign = getDayAssignments(date);
+    return '<div class="split-day-grid">' + pathologists.map(p => {
+        const a = assign[p.id];
+        if (!a || a.type === 'blank') return '';
+        const what = a.type === 'pto' ? timeOffName(timeOffOn(p.id, date))
+            : a.type === 'off' ? 'Off'
+            : (a.service ? a.service.name : '—');
+        const extra = (isLockActiveForRender(dk, p.id, a) ? ' · locked' : '') + (a.onCall ? ' · on call' : '');
+        return `<div class="split-day-cell${p.id === highlightPid ? ' is-me' : ''}" style="--c:${p.color}">
+            <span class="split-day-dot" aria-hidden="true"></span>
+            <span class="split-day-name">${escapeHtml(_shortPathName(p.id))}</span>
+            <span class="split-day-svc">${escapeHtml(what + extra)}</span>
+          </div>`;
+    }).join('') + '</div>';
 }
 
 // ── Conflicts page ──────────────────────────────────────────────────────
 let activeConflictsTab = 'open';
 
 const CONFLICT_KIND_META = {
-    callpto: { short: 'ON CALL / PTO', tone: 'high' },
-    hard: { short: 'COVERAGE', tone: 'high' },
-    soft: { short: 'SOFT RULE', tone: 'low' },
+    callpto: { label: 'On call / PTO', tone: 'high' },
+    hard: { label: 'Coverage', tone: 'high' },
+    soft: { label: 'Soft rule', tone: 'low' },
 };
 
+function _conflictWhen(c) {
+    return c.dateStr === c.endStr ? _conflictDayLabel(c.date) : _reqDateRange(c.dateStr, c.endStr);
+}
+
 function renderConflictsPage() {
-    const listEl = document.getElementById('conflictsList');
-    if (!listEl) return;
-    if (!isAdmin()) { listEl.innerHTML = ''; return; }
+    const split = document.getElementById('conflictsSplit');
+    if (!split) return;
+    if (!isAdmin()) {
+        split.querySelector('.split-list').innerHTML = '';
+        split.querySelector('.split-detail').innerHTML = '';
+        return;
+    }
 
     const all = getConflicts();
     const open = all.filter(c => !c.accepted);
     const accepted = all.filter(c => c.accepted);
     const seen = _conflictVisitSeen || _conflictSeenKeys();
 
-    // Header counts
     const setText = (id, txt) => {
         const el = document.getElementById(id);
         if (el) el.textContent = txt;
     };
-    setText('conflictsSummaryOpen', String(open.length));
-    setText('conflictsSummaryNew', String(open.filter(c => !seen.has(c.key)).length));
     setText('conflictsTabCountOpen', String(open.length));
     setText('conflictsTabCountAccepted', String(accepted.length));
+    const nHigh = open.filter(c => (CONFLICT_KIND_META[c.kind] || {}).tone === 'high').length;
+    const nSoft = open.length - nHigh;
+    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+    setText('conflictsPageSubtitle', open.length === 0
+        ? `Nothing open in the next ${conflictHorizonDays} days.`
+        : [nHigh && plural(nHigh, 'rule break'), nSoft && plural(nSoft, 'soft-rule break')]
+            .filter(Boolean).join(' · ') + ` in the next ${conflictHorizonDays} days, soonest first.`);
 
     const horizonSel = document.getElementById('conflictsHorizon');
     if (horizonSel) horizonSel.value = String(conflictHorizonDays);
@@ -2971,46 +3094,82 @@ function renderConflictsPage() {
         b.classList.toggle('active', b.dataset.ctab === activeConflictsTab);
     });
 
-    const rows = activeConflictsTab === 'open' ? open : accepted;
-
-    if (rows.length === 0) {
-        listEl.innerHTML = `<div class="cfl-empty">${
-            activeConflictsTab === 'open'
-                ? `No conflicts in the next ${conflictHorizonDays} days. `
-                  + 'Coverage rules, soft rules and on-call/PTO overlaps all check out.'
-                : 'Nothing accepted yet. Accepting a conflict takes it off the open '
-                  + 'list without changing the schedule.'
-        }</div>`;
-        return;
-    }
-
-    listEl.innerHTML = rows.map(c => {
-        const meta = CONFLICT_KIND_META[c.kind] || { short: c.kind, tone: 'low' };
+    const isOpenTab = activeConflictsTab === 'open';
+    const soon = addDays(today, 14);
+    const items = (isOpenTab ? open : accepted).map(c => {
+        const meta = CONFLICT_KIND_META[c.kind] || { label: c.label, tone: 'low' };
         const isNew = !c.accepted && !seen.has(c.key);
-        const when = c.dateStr === c.endStr
-            ? _conflictDayLabel(c.date)
-            : _reqDateRange(c.dateStr, c.endStr);
-        const ackLine = c.accepted && c.ack
-            ? `<div class="cfl-ack">Accepted${c.ack.byName ? ' by ' + escapeHtml(String(c.ack.byName).replace(/^Dr\. /, '')) : ''}${
-                c.ack.at ? ' · ' + _conflictDayLabel(new Date(c.ack.at)) : ''}</div>`
-            : '';
-        return `
-            <div class="cfl-card tone-${meta.tone}${c.accepted ? ' cfl-accepted' : ''}" data-key="${escapeHtml(c.key)}">
-              <div class="cfl-card-head">
-                <span class="cfl-when">${escapeHtml(when)}</span>
-                <span class="cfl-kind cfl-kind-${c.kind}">${meta.short}</span>
-                ${isNew ? '<span class="cfl-new">NEW</span>' : ''}
-              </div>
-              <div class="cfl-detail">${escapeHtml(c.detail)}</div>
-              ${ackLine}
-              <div class="cfl-actions">
-                <button type="button" data-cact="goto">Go to day</button>
-                ${c.accepted
-                    ? '<button type="button" data-cact="unaccept">Put back on the list</button>'
-                    : '<button type="button" class="cfl-accept" data-cact="accept">Accept</button>'}
-              </div>
-            </div>`;
-    }).join('');
+        return {
+            key: c.key,
+            group: isOpenTab ? (c.date.getTime() < soon.getTime() ? 'Next 2 weeks' : 'Later') : null,
+            html: `<span class="split-dot tone-${meta.tone}" aria-hidden="true"></span>
+                <span class="split-row-main">
+                  <span class="split-row-title">${escapeHtml(c.detail)}</span>
+                  <span class="split-row-sub">${escapeHtml(_conflictWhen(c))} · ${escapeHtml(meta.label)}</span>
+                </span>${isNew ? '<span class="split-new">New</span>' : ''}`,
+        };
+    });
+
+    renderSplit('conflictsSplit', items, (key, el) => _renderConflictDetail(key, el, seen), isOpenTab
+        ? `<span class="split-empty-headline">All clear.</span>No conflicts in the next ${conflictHorizonDays} days. Coverage rules, soft rules and on-call/PTO overlaps all check out.`
+        : '<span class="split-empty-headline">Nothing accepted yet.</span>Accepting a conflict takes it off the open list without changing the schedule.');
+}
+
+// On-call/PTO: the call week, who's on call each day, the PTO days marked.
+function _conflictCallWeekHtml(c) {
+    const cs = getCallCycleStart(c.date);
+    const ce = getCallCycleEnd(cs);
+    let html = '';
+    for (let d = new Date(cs); d.getTime() <= ce.getTime(); d = addDays(d, 1)) {
+        const k = fmt(d);
+        const bad = k >= c.dateStr && k <= c.endStr;
+        const p = pathologists.find(x => x.id === onCallIdForDay(d));
+        html += `<div class="split-week-day${bad ? ' is-bad' : ''}">
+            <span class="split-week-dow">${DOW[d.getDay()]}</span>
+            <span class="split-week-num">${d.getDate()}</span>
+            <span class="split-week-who">${p ? escapeHtml(p.initials) : '—'}${bad ? ' · PTO' : ''}</span>
+          </div>`;
+    }
+    return `<div class="split-section">
+        <div class="split-section-label">Call week ${escapeHtml(_callFmtWeek(cs))}</div>
+        <div class="split-week">${html}</div>
+      </div>`;
+}
+
+function _renderConflictDetail(key, el, seen) {
+    const c = getConflicts().find(x => x.key === key);
+    if (!c) { el.innerHTML = ''; return; }
+    const meta = CONFLICT_KIND_META[c.kind] || { label: c.label, tone: 'low' };
+    const isNew = !c.accepted && !seen.has(c.key);
+    const context = c.kind === 'callpto'
+        ? _conflictCallWeekHtml(c)
+        : `<div class="split-section">
+            <div class="split-section-label">${escapeHtml(_conflictDayLabel(c.date))} as scheduled</div>
+            ${splitDayGrid(c.date, null)}
+          </div>`;
+    const note = c.accepted
+        ? `Accepted${c.ack && c.ack.byName ? ' by ' + escapeHtml(String(c.ack.byName).replace(/^Dr\. /, '')) : ''}${
+            c.ack && c.ack.at ? ' on ' + escapeHtml(_conflictDayLabel(new Date(c.ack.at))) : ''}. The schedule wasn't changed; put it back to see it on the open list again.`
+        : 'Accepting takes it off the list without changing the schedule. It comes back if the assignment changes.';
+    const actions = c.accepted
+        ? `<button type="button" data-cact="unaccept">Put back on the list</button>
+           <button type="button" class="primary" data-cact="goto">Go to day</button>`
+        : `<button type="button" data-cact="accept">Accept as is</button>`
+          + (c.kind === 'callpto'
+            ? `<button type="button" data-cact="goto">Go to day</button>
+               <button type="button" class="primary" data-cact="oncall">Change who's on call</button>`
+            : '<button type="button" class="primary" data-cact="goto">Go to day</button>');
+    el.innerHTML = `
+        <div class="split-detail-head">
+          <div class="split-detail-heading">
+            <span class="split-eyebrow">${escapeHtml(_conflictWhen(c))} · ${escapeHtml(c.label)}${isNew ? ' · new since your last visit' : ''}</span>
+            <h3 class="split-detail-title${splitTitleCls(c.detail)}">${escapeHtml(c.detail)}</h3>
+          </div>
+          <span class="split-pill tone-${c.accepted ? 'none' : meta.tone}">${c.accepted ? 'Accepted' : meta.tone === 'high' ? 'Rule break' : 'Soft rule'}</span>
+        </div>
+        ${context}
+        <p class="split-note">${note}</p>
+        <div class="split-actions" data-key="${escapeHtml(c.key)}">${actions}</div>`;
 }
 
 function _conflictDayLabel(d) {
@@ -3020,20 +3179,23 @@ function _conflictDayLabel(d) {
 // Expose for callers that refresh the page after sign-in.
 window.__renderConflictsPage = renderConflictsPage;
 
-// Delegated handlers — the list is rebuilt on every data change.
+// Delegated handlers — the list and detail are rebuilt on every data change.
 (function wireConflictsPage() {
-    const listEl = document.getElementById('conflictsList');
-    if (listEl) {
-        listEl.addEventListener('click', e => {
+    wireSplit('conflictsSplit', renderConflictsPage);
+    const detailEl = document.getElementById('conflictsDetail');
+    if (detailEl) {
+        detailEl.addEventListener('click', e => {
             const btn = e.target.closest('button[data-cact]');
             if (!btn) return;
-            const card = btn.closest('.cfl-card');
-            if (!card) return;
-            const key = card.dataset.key;
+            const key = btn.closest('.split-actions').dataset.key;
             const act = btn.dataset.cact;
             if (act === 'goto') goToConflict(key);
             else if (act === 'accept') acceptConflict(key);
             else if (act === 'unaccept') unacceptConflict(key);
+            else if (act === 'oncall') {
+                const c = getConflicts().find(x => x.key === key);
+                if (c) openCallModal(new Date(c.date));
+            }
         });
     }
 
@@ -4030,18 +4192,16 @@ function openRequestsModal() {
     markRequestsPageSeen();
 }
 
-// The Requests page's tab row, with a group at its right end for the page's
-// buttons (New PTO request, call / service / lock requests, Request LF
-// sendout dates). Made once.
+// The Requests page's button row above the list (New PTO request, call /
+// service / lock requests, Request LF sendout dates). Made once.
 function _requestsPageBar() {
     let bar = document.getElementById('requestsPageBar');
     if (bar) return bar;
-    const tabsEl = document.getElementById('requestsPageTabs');
+    const split = document.getElementById('requestsSplit');
     bar = document.createElement('div');
     bar.id = 'requestsPageBar';
     bar.className = 'requests-page-bar';
-    tabsEl.parentNode.insertBefore(bar, tabsEl);
-    bar.appendChild(tabsEl);
+    split.parentNode.insertBefore(bar, split);
     const group = document.createElement('div');
     group.id = 'requestsPageBtns';
     group.className = 'req-new-group';
@@ -4069,53 +4229,39 @@ function _requestDefaultWorkday() {
     return (isWeekend(d) || getFederalHoliday(d)) ? nextWorkday(d) : d;
 }
 
-function renderRequestsList(targetEl, tabState) {
+// [key, request] pairs the signed-in account can see on a tab ('pending' |
+// 'history'), newest first. Admin sees everyone's; non-admin sees their
+// own plus any requests aimed at them (admin → Lake Forest sendout-dates
+// asks). Everyone also sees call trades that involve them as a colleague;
+// the director doesn't see a trade until a colleague has agreed to it.
+function visibleRequestEntries(tab) {
+    const mineOrAsked = r => r.requesterId === loggedInPathId || r.targetId === loggedInPathId
+        || callTradeInvolvesMe(r);
+    const open = tab === 'pending';
+    return Object.entries(requests || {})
+        .filter(([, r]) => !!r)
+        .filter(([, r]) => isAdmin()
+            ? (r.status !== 'awaiting_call' || mineOrAsked(r))
+            : mineOrAsked(r))
+        .filter(([, r]) => isOpenRequest(r) === open)
+        .sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
+}
+
+function renderRequestsList(targetEl, tabState, onlyKey) {
     // No args → modal list + modal tab state; explicit args → that surface
-    // (Requests page).
+    // (the Requests page's detail pane, with onlyKey = the selected request).
     const listEl = targetEl || document.getElementById('requestsList');
     if (!listEl) return;
     const tab = tabState || activeRequestsTab;
 
-    // Filter: admin sees everyone's; non-admin sees their own plus any
-    // requests aimed at them (admin → Lake Forest sendout-dates asks)
-    // Everyone also sees call trades that involve them as a colleague; the
-    // director doesn't see a trade until a colleague has agreed to it.
-    let entries = Object.entries(requests).filter(([, r]) => !!r);
-    const mineOrAsked = r => r.requesterId === loggedInPathId || r.targetId === loggedInPathId
-        || callTradeInvolvesMe(r);
-    entries = entries.filter(([, r]) => isAdmin()
-        ? (r.status !== 'awaiting_call' || mineOrAsked(r))
-        : mineOrAsked(r));
-
-    // Tab filter
-    if (tab === 'pending') {
-        entries = entries.filter(([, r]) => isOpenRequest(r));
-    } else {
-        entries = entries.filter(([, r]) => !isOpenRequest(r));
-    }
-
-    // Newest first
-    entries.sort((a, b) => (b[1].createdAt || 0) - (a[1].createdAt || 0));
+    let entries = visibleRequestEntries(tab);
+    if (onlyKey) entries = entries.filter(([k]) => k === onlyKey);
 
     if (entries.length === 0) {
-        const isPage = listEl.classList.contains('requests-page-list');
-        if (isPage) {
-            // Friendlier empty state on the full page
-            const headline = tab === 'pending'
-                ? (isAdmin() ? 'All caught up.' : 'Nothing pending.')
-                : 'No history yet.';
-            const sub = tab === 'pending'
-                ? (isAdmin()
-                    ? 'No requests are waiting for your review.'
-                    : 'You have no requests awaiting a decision.')
-                : 'Approved and denied requests will appear here.';
-            listEl.innerHTML = `<div class="empty"><span class="empty-headline">${headline}</span>${sub}</div>`;
-        } else {
-            const msg = tab === 'pending'
-                ? (isAdmin() ? 'No requests waiting for review.' : 'You have no pending requests.')
-                : 'No past requests yet.';
-            listEl.innerHTML = `<div class="empty">${msg}</div>`;
-        }
+        const msg = tab === 'pending'
+            ? (isAdmin() ? 'No requests waiting for review.' : 'You have no pending requests.')
+            : 'No past requests yet.';
+        listEl.innerHTML = `<div class="empty">${msg}</div>`;
         return;
     }
 
@@ -4380,10 +4526,61 @@ document.getElementById('reqTabs').addEventListener('click', e => {
 });
 
 // ────────────── REQUESTS PAGE (sidebar → "Requests") ──────────────
-// Full-area version of the requests UI. Shares card rendering with the
-// modal via renderRequestsList(targetEl, tabState), but has its own tab
-// state and its own header (title/subtitle/summary stats).
+// Requests listed on the left, the selected one on the right. The detail
+// pane reuses the modal's card (renderRequestsList with onlyKey), so every
+// action works the same; the page has its own tab state.
 let activeRequestsPageTab = 'pending';
+
+// One line for a list row: what was asked, without the requester's name.
+function _requestShortWhat(r) {
+    const p = r.payload || {};
+    const day = k => { const d = parseDate(k); return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`; };
+    const week = k => _callFmtWeek(getCallCycleStart(parseDate(k)));
+    switch (r.type) {
+        case 'pto_add':
+            return `PTO ${_reqRangeLabel(r)}${p.callTrade ? ' + call trade' : ''}`;
+        case 'pto_remove':
+            return p.start ? `Remove PTO ${_reqRangeLabel(r)}` : 'Remove PTO';
+        case 'oncall_change':
+            return `${_shortPathName(p.newPathId)} on call · ${p.scope === 'week' ? 'week of ' + week(p.date) : day(p.date)}`;
+        case 'oncall_swap':
+            return `Call trade · ${_callFmtWeek(parseDate(p.aStart))} ↔ ${_callFmtWeek(parseDate(p.bStart))}`;
+        case 'service_change':
+            return `${p.serviceId ? _chgServiceName(p.serviceId) : 'No service'} · ${p.scope === 'week' ? 'week of ' + week(p.date) : day(p.date)}`;
+        case 'service_lock':
+            return `Lock ${_chgServiceName(p.serviceId)} · ${day(p.date)}`;
+        case 'lf_sendout':
+            return `${p.action === 'remove' ? 'Remove' : 'Add'} sendout · ${p.scope === 'week' ? 'week of ' + week(p.date) : day(p.date)}`;
+        case 'lf_dates_request':
+            return p.start && p.end ? `Sendout dates for ${_reqDateRange(p.start, p.end)}` : 'Sendout dates';
+        default:
+            return r.type;
+    }
+}
+
+// Status line for a list row, with its tone.
+function _requestRowStatus(r) {
+    if (isOpenRequest(r)) {
+        return { text: _requestWaitingText(r) || 'Pending',
+            tone: _requestWaitingOn(r).includes(loggedInPathId) ? 'warn' : '' };
+    }
+    const when = r.decisionAt ? ' ' + splitShortTime(r.decisionAt) : '';
+    if (r.status === 'approved') {
+        return { text: (r.type === 'lf_dates_request' ? 'Completed' : 'Approved') + when, tone: 'ok' };
+    }
+    return { text: 'Denied' + when, tone: 'bad' };
+}
+
+// The day as scheduled, under a single-day service request.
+function _requestContextHtml(r) {
+    const p = r.payload || {};
+    if ((r.type !== 'service_change' && r.type !== 'service_lock') || !p.date || p.scope === 'week') return '';
+    const d = parseDate(p.date);
+    return `<div class="split-section req-context">
+        <div class="split-section-label">${escapeHtml(_conflictDayLabel(d))} as scheduled</div>
+        ${splitDayGrid(d, r.requesterId)}
+      </div>`;
+}
 
 function renderRequestsPage() {
     const pg = document.getElementById('requestsPage');
@@ -4392,14 +4589,7 @@ function renderRequestsPage() {
     const titleEl = document.getElementById('requestsPageTitle');
     const subEl = document.getElementById('requestsPageSubtitle');
     const admin = (typeof isAdmin === 'function') ? isAdmin() : false;
-
-    // Title + subtitle adapt to admin vs requester role
     if (titleEl) titleEl.textContent = admin ? 'Requests' : 'My Requests';
-    if (subEl) {
-        subEl.textContent = admin
-            ? 'Review and decide on schedule change requests from the team.'
-            : 'Track the status of changes you have requested.';
-    }
 
     // Inject (once) the non-admin "new request" buttons: PTO opens the same
     // PTO panel flow; call, service and lock open their request panels on
@@ -4437,47 +4627,63 @@ function renderRequestsPage() {
             () => openLfAskModal());
     }
     askLfBtn.style.display = admin ? 'inline-flex' : 'none';
+    _requestsPageBar().hidden = !Array.from(document.querySelectorAll('#requestsPageBtns .req-new-btn'))
+        .some(b => b.style.display !== 'none');
 
-    // Compute counts visible to this user (admin = all, else own +
-    // requests aimed at them)
-    const involved = r => r.requesterId === loggedInPathId || r.targetId === loggedInPathId
-        || callTradeInvolvesMe(r);
-    let visible = Object.entries(requests || {}).filter(([, r]) => !!r)
-        .filter(([, r]) => admin ? (r.status !== 'awaiting_call' || involved(r)) : involved(r));
-    const pendingCount = visible.filter(([, r]) => isOpenRequest(r)).length;
-    const resolvedCount = visible.filter(([, r]) => !isOpenRequest(r)).length;
+    const pending = visibleRequestEntries('pending');
+    const history = visibleRequestEntries('history');
 
-    // Summary stats (top-right of header)
-    const sumPending = document.getElementById('requestsSummaryPending');
-    const sumHist = document.getElementById('requestsSummaryHistory');
-    if (sumPending) {
-        sumPending.textContent = String(pendingCount);
-        const stat = sumPending.closest('.requests-summary-stat');
-        if (stat) stat.setAttribute('data-empty', pendingCount === 0 ? 'true' : 'false');
+    // Subtitle: who the open requests are waiting on.
+    if (subEl) {
+        const onMe = pending.filter(([, r]) => _requestWaitingOn(r).includes(loggedInPathId)).length;
+        const onOthers = pending.length - onMe;
+        subEl.textContent = pending.length === 0
+            ? (admin ? 'Nothing waiting on you.' : 'Nothing open. Your decided requests are under History.')
+            : [onMe && `${onMe} waiting on you`, onOthers && `${onOthers} waiting on ${admin ? 'a colleague' : 'others'}`]
+                .filter(Boolean).join(' · ');
     }
-    if (sumHist) sumHist.textContent = String(resolvedCount);
 
-    // Tab count chips
     const tabPending = document.getElementById('requestsPageTabCountPending');
     const tabHist = document.getElementById('requestsPageTabCountHistory');
-    if (tabPending) tabPending.textContent = String(pendingCount);
-    if (tabHist) tabHist.textContent = String(resolvedCount);
-
-    // Sync active-tab visual state on the page tabs (independent of the
-    // modal's tab state)
+    if (tabPending) tabPending.textContent = String(pending.length);
+    if (tabHist) tabHist.textContent = String(history.length);
     document.querySelectorAll('#requestsPageTabs .req-tab').forEach(b => {
         b.classList.toggle('active', b.dataset.rtab === activeRequestsPageTab);
     });
 
-    // Render the cards into the page list using the shared renderer
-    renderRequestsList(
-        document.getElementById('requestsPageList'),
-        activeRequestsPageTab
-    );
+    const isPending = activeRequestsPageTab === 'pending';
+    const items = (isPending ? pending : history).map(([key, r]) => {
+        const st = _requestRowStatus(r);
+        return {
+            key,
+            html: `${splitAvatar(r.requesterId)}
+                <span class="split-row-main">
+                  <span class="split-row-top">
+                    <span class="split-row-title">${escapeHtml(_shortPathName(r.requesterId))}</span>
+                    <span class="split-row-time">${escapeHtml(splitShortTime(r.createdAt))}</span>
+                  </span>
+                  <span class="split-row-text">${escapeHtml(_requestShortWhat(r))}</span>
+                  <span class="split-row-sub${st.tone ? ' tone-' + st.tone : ''}">${escapeHtml(st.text)}</span>
+                </span>`,
+        };
+    });
+
+    renderSplit('requestsSplit', items, (key, el) => {
+        renderRequestsList(el, activeRequestsPageTab, key);
+        const ctx = _requestContextHtml(requests[key] || {});
+        const anchor = el.querySelector('.req-card > .req-note') || el.querySelector('.req-card > .req-detail');
+        if (ctx && anchor) anchor.insertAdjacentHTML('afterend', ctx);
+    }, isPending
+        ? (admin
+            ? '<span class="split-empty-headline">All caught up.</span>No requests are waiting for your review.'
+            : '<span class="split-empty-headline">Nothing pending.</span>You have no requests awaiting a decision.')
+        : '<span class="split-empty-headline">No history yet.</span>Approved and denied requests will appear here.');
 }
 
 // Expose for any caller that needs to refresh the page (e.g. after sign-in)
 window.__renderRequestsPage = renderRequestsPage;
+
+wireSplit('requestsSplit', renderRequestsPage);
 
 // Page tabs: switch Pending / History
 const _reqPageTabsEl = document.getElementById('requestsPageTabs');
@@ -4840,17 +5046,48 @@ function _chgDescribeForUser(c, pid) {
     return orig;
 }
 
+const CHANGE_KIND_LABEL = {
+    pto:        'PTO',
+    oncall:     'On call',
+    service:    'Service',
+    recompute:  'Recompute',
+    lf_sendout: 'Lake Forest sendout',
+    conference: 'Conference',
+};
+const CHANGE_SOURCE_NOTE = {
+    request_approved: 'Made by approving a request.',
+    request_revoked:  'Made by revoking an approved request.',
+};
+
+// The seen-time when the Changes page was opened, so this visit can still
+// mark which entries are new (the visit itself moves the seen-time on).
+let _changesVisitAck = null;
+
+function _chgIsNew(c) {
+    return _changesVisitAck !== null && (c.at || 0) > _changesVisitAck
+        && c.byPathId !== loggedInPathId;
+}
+
+// List group for a change's time: Today / Yesterday / weekday / date.
+function _chgDayGroup(ts) {
+    if (!ts) return 'Earlier';
+    const d = new Date(ts);
+    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const now = new Date();
+    const ago = daysBetween(day, new Date(now.getFullYear(), now.getMonth(), now.getDate()));
+    if (ago === 0) return 'Today';
+    if (ago === 1) return 'Yesterday';
+    if (ago < 7) return d.toLocaleDateString([], { weekday: 'long' });
+    return `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}${d.getFullYear() !== now.getFullYear() ? ', ' + d.getFullYear() : ''}`;
+}
+
 function renderChangesPage() {
     const pg = document.getElementById('changesPage');
     if (!pg) return;
 
-    const listEl = document.getElementById('changesList');
-    const totalEl = document.getElementById('changesSummaryTotal');
-    const labelEl = document.getElementById('changesSummaryLabel');
     const subEl = document.getElementById('changesPageSubtitle');
     const countMineEl = document.getElementById('changesTabCountMine');
     const countAllEl = document.getElementById('changesTabCountAll');
-    if (!listEl) return;
 
     // Non-pathologist accounts can't be change targets — default them to "all".
     const meIsPath = (typeof loggedInPathId === 'number');
@@ -4878,10 +5115,8 @@ function renderChangesPage() {
     if (countAllEl) countAllEl.textContent = String(allEntries.length);
 
     // Reflect the active scope in the tab UI
-    const tabs = document.querySelectorAll('#changesPageTabs .req-tab');
-    tabs.forEach(btn => {
-        const isActive = btn.getAttribute('data-ctab') === activeChangesScope;
-        btn.classList.toggle('active', isActive);
+    document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-ctab') === activeChangesScope);
     });
 
     // Disable the "Affecting me" tab for non-pathologist accounts
@@ -4896,89 +5131,135 @@ function renderChangesPage() {
     const showMine = (activeChangesScope === 'mine' && meIsPath);
     const entries = showMine ? mineEntries : allEntries;
 
-    // Subtitle + summary stat reflect the active scope
     if (subEl) {
-        subEl.textContent = lfGuest
+        const newCount = entries.filter(([, c]) => _chgIsNew(c)).length;
+        const base = lfGuest
             ? 'Lake Forest sendout updates, newest first.'
             : showMine
-                ? 'Recent updates that affect your schedule, newest first.'
-                : 'Every recent update to the schedule, newest first.';
-    }
-    if (labelEl) labelEl.textContent = showMine ? 'Affecting you' : 'Logged';
-    if (totalEl) totalEl.textContent = String(entries.length);
-
-    if (entries.length === 0) {
-        const emptyHeadline = lfGuest ? 'No sendout updates yet.'
-            : showMine ? 'Nothing for you yet.' : 'Nothing yet.';
-        const emptyBody = lfGuest
-            ? 'Lake Forest sendout changes will appear here as they happen.'
-            : showMine
-                ? 'Changes that affect your schedule will appear here. Switch to <strong>All changes</strong> to see team-wide updates.'
-                : 'Schedule changes will appear here as they happen.';
-        listEl.innerHTML = `
-            <div class="empty">
-                <span class="empty-headline">${emptyHeadline}</span>
-                ${emptyBody}
-            </div>`;
-        return;
+                ? 'Updates that affect your schedule, newest first.'
+                : 'Every update to the schedule, newest first.';
+        subEl.textContent = newCount > 0 ? `${base} ${newCount} new since you last looked.` : base;
     }
 
-    const KIND_LABEL = {
-        pto:        'PTO',
-        oncall:     'ON-CALL',
-        service:    'SERVICE',
-        recompute:  'RECOMPUTE',
-        lf_sendout: 'LF SENDOUT',
-        conference: 'CONFERENCE',
-    };
-    const SOURCE_LABEL = {
-        direct:           '',
-        request_approved: 'via approved request',
-        request_revoked:  'via revoked approval',
-        recompute:        '',
-    };
-
-    listEl.innerHTML = entries.map(([key, c]) => {
-        const when = c.at
-            ? new Date(c.at).toLocaleString([], {
-                month: 'short', day: 'numeric',
-                hour: 'numeric', minute: '2-digit',
-            })
-            : '';
-        const kind = c.kind || 'service';
-        const kindLabel = KIND_LABEL[kind] || kind.toUpperCase();
-        const by = c.byName ? c.byName.replace(/^Dr\. /, '') : '';
-        const sourceLabel = SOURCE_LABEL[c.source || 'direct'] || '';
-
-        // For the "Mine" view we use personalized phrasing; for "All" we
-        // keep the original neutral team-wide summary.
+    const items = entries.map(([key, c]) => {
         const display = showMine
             ? _chgDescribeForUser(c, loggedInPathId)
-            : { summary: c.summary || '', details: c.details || '' };
+            : { summary: c.summary || '' };
+        const kind = c.kind || 'service';
+        const lead = typeof c.forPathId === 'number' && pathologists.some(p => p.id === c.forPathId)
+            ? splitAvatar(c.forPathId)
+            : `<span class="split-dot kind-${escapeHtml(kind)}" aria-hidden="true"></span>`;
+        const time = c.at ? new Date(c.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+        return {
+            key,
+            group: _chgDayGroup(c.at),
+            html: `${lead}
+                <span class="split-row-main">
+                  <span class="split-row-title">${escapeHtml(display.summary)}</span>
+                  <span class="split-row-sub">${escapeHtml([CHANGE_KIND_LABEL[kind] || kind, time].filter(Boolean).join(' · '))}</span>
+                </span>${_chgIsNew(c) ? '<span class="split-new">New</span>' : ''}`,
+        };
+    });
 
-        const detailLine = display.details
-            ? `<div class="chg-details">${escapeHtml(display.details)}</div>`
-            : '';
-
-        const metaParts = [];
-        if (when) metaParts.push(escapeHtml(when));
-        if (by)   metaParts.push('by ' + escapeHtml(by));
-        const metaMain = metaParts.join(' · ');
-        const sourceHtml = sourceLabel
-            ? `<span class="chg-source">${escapeHtml(sourceLabel)}</span>`
-            : '';
-
-        return `
-            <div class="chg-card kind-${escapeHtml(kind)}">
-                <div class="chg-card-head">
-                    <div class="chg-summary">${escapeHtml(display.summary)}</div>
-                    <span class="chg-kind">${escapeHtml(kindLabel)}</span>
-                </div>
-                ${detailLine}
-                <div class="chg-meta">${metaMain}${sourceHtml}</div>
-            </div>`;
-    }).join('');
+    renderSplit('changesSplit', items, (key, el) => _renderChangeDetail(key, el, showMine), lfGuest
+        ? '<span class="split-empty-headline">No sendout updates yet.</span>Lake Forest sendout changes will appear here as they happen.'
+        : showMine
+            ? '<span class="split-empty-headline">Nothing for you yet.</span>Changes that affect your schedule will appear here. Switch to <strong>All changes</strong> to see team-wide updates.'
+            : '<span class="split-empty-headline">Nothing yet.</span>Schedule changes will appear here as they happen.');
 }
+
+// A recompute's moves (who went from what to what, each day) as a table;
+// onlyPid narrows it to one pathologist's moves (the Affecting me tab).
+function _chgMovesHtml(c, onlyPid) {
+    // Firebase can hand an array back as an object keyed "0", "1", …
+    const moves = Object.values(c.moves || {})
+        .filter(m => onlyPid == null || Number(m.p) === onlyPid);
+    if (moves.length === 0) return '';
+    const rows = moves.map(m => {
+        const d = parseDate(m.d);
+        const p = pathologists.find(x => x.id === Number(m.p));
+        return `<tr>
+            <td>${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}</td>
+            <td><span class="split-day-dot" style="--c:${p ? p.color : 'var(--ink-3)'}" aria-hidden="true"></span>${escapeHtml(_shortPathName(Number(m.p)))}</td>
+            <td class="was">${escapeHtml(_chgServiceName(m.f))}</td>
+            <td>${escapeHtml(_chgServiceName(m.t))}</td>
+          </tr>`;
+    }).join('');
+    return `<div class="split-section">
+        <div class="split-section-label">${onlyPid == null ? 'What moved' : 'What moved for you'}</div>
+        <div class="split-moves-wrap">
+          <table class="split-moves">
+            <thead><tr><th>Day</th><th>Who</th><th>Was</th><th>Now</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${c.movesMore ? `<p class="split-note">A long recompute: ${c.movesMore} later moves weren't recorded.</p>` : ''}
+      </div>`;
+}
+
+// The request behind a change, if this account can open it.
+function _chgRequestFor(c) {
+    const r = c.requestKey ? requests[c.requestKey] : null;
+    if (!r) return null;
+    return (isAdmin() || r.requesterId === loggedInPathId || r.targetId === loggedInPathId) ? r : null;
+}
+
+function _renderChangeDetail(key, el, showMine) {
+    const c = changes[key];
+    if (!c) { el.innerHTML = ''; return; }
+    const display = showMine
+        ? _chgDescribeForUser(c, loggedInPathId)
+        : { summary: c.summary || '', details: c.details || '' };
+    const kind = c.kind || 'service';
+    const when = c.at
+        ? new Date(c.at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+        : '';
+    const by = c.byName ? 'by ' + c.byName.replace(/^Dr\. /, '') : '';
+    const eyebrow = [CHANGE_KIND_LABEL[kind] || kind, by, when].filter(Boolean).join(' · ');
+    const lines = (display.details || '').split('\n').map(s => s.trim()).filter(Boolean);
+    const detailsHtml = lines.length
+        ? `<ul class="split-lines">${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
+        : '';
+    const sourceNote = CHANGE_SOURCE_NOTE[c.source] || '';
+    const day = c.date || c.startDate;
+    const actions = (_chgRequestFor(c) ? '<button type="button" data-chact="request">Open the request</button>' : '')
+        + (day && !isLakeForest() ? '<button type="button" class="primary" data-chact="goto">Show on the calendar</button>' : '');
+    el.innerHTML = `
+        <div class="split-detail-head">
+          <div class="split-detail-heading">
+            <span class="split-eyebrow">${escapeHtml(eyebrow)}${_chgIsNew(c) ? ' · new since your last visit' : ''}</span>
+            <h3 class="split-detail-title${splitTitleCls(display.summary)}">${escapeHtml(display.summary)}</h3>
+          </div>
+        </div>
+        ${detailsHtml}
+        ${_chgMovesHtml(c, showMine ? loggedInPathId : null)}
+        ${sourceNote ? `<p class="split-note">${escapeHtml(sourceNote)}</p>` : ''}
+        ${actions ? `<div class="split-actions" data-key="${escapeHtml(key)}">${actions}</div>` : ''}`;
+}
+
+(function wireChangesDetail() {
+    wireSplit('changesSplit', renderChangesPage);
+    const detailEl = document.getElementById('changesDetail');
+    if (!detailEl) return;
+    detailEl.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-chact]');
+        if (!btn) return;
+        const c = changes[btn.closest('.split-actions').dataset.key];
+        if (!c) return;
+        if (btn.dataset.chact === 'goto') {
+            goToDay(parseDate(c.date || c.startDate));
+        } else if (btn.dataset.chact === 'request') {
+            const r = _chgRequestFor(c);
+            if (!r) return;
+            activeRequestsPageTab = isOpenRequest(r) ? 'pending' : 'history';
+            _splitSel.requestsSplit = c.requestKey;
+            if (typeof window.__setPage === 'function') window.__setPage('requests');
+            document.getElementById('requestsSplit').dataset.view = 'detail';
+            markRequestsPageSeen();
+            renderRequestsPage();
+        }
+    });
+})();
 
 // Expose so other code (e.g. login flow) can refresh the page on demand
 window.__renderChangesPage = renderChangesPage;
@@ -5000,7 +5281,9 @@ document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
 document.querySelectorAll('.nav-item[data-page="changes"]').forEach(btn => {
     btn.addEventListener('click', () => {
         // Mark changes seen before re-rendering so the nav dot clears at
-        // the same moment the content appears (no flash of old dot).
+        // the same moment the content appears (no flash of old dot) — but
+        // keep the old seen-time so this visit can still mark the new rows.
+        _changesVisitAck = _getChangesAckTs();
         markChangesPageSeen();
         setTimeout(renderChangesPage, 0);
     });
@@ -13419,6 +13702,8 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         if (page === 'requests' && loggedInPathId !== null && !canSeeRequestsPage()) page = 'schedule';
         if (!VALID_PAGES.includes(page)) page = 'schedule';
         currentPage = page;
+        // Phones open the list + detail pages on their list.
+        document.querySelectorAll('.split').forEach(s => { s.dataset.view = 'list'; });
 
         // Update app data-attribute (CSS hides toolbar/main on non-schedule pages)
         if (app) app.setAttribute('data-page', page);

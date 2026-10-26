@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link
-        href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,500;1,6..72,500&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="schedule.css">
 </head>
@@ -244,7 +244,8 @@
             <!-- Default page: schedule renders here -->
             <main id="main"></main>
 
-            <!-- Requests page — admin reviews team requests; non-admin tracks own. -->
+            <!-- Requests page — admin reviews team requests; non-admin tracks own.
+                 Requests listed on the left, the selected one on the right. -->
             <div class="page-shell" id="requestsPage" hidden>
                 <div class="requests-page-content">
                     <header class="requests-page-header">
@@ -252,82 +253,66 @@
                             <h2 class="requests-page-title" id="requestsPageTitle">Requests</h2>
                             <p class="requests-page-subtitle" id="requestsPageSubtitle">Review and decide on schedule change requests from the team.</p>
                         </div>
-                        <div class="requests-page-summary" id="requestsPageSummary">
-                            <div class="requests-summary-stat" data-tone="pending">
-                                <span class="requests-summary-num" id="requestsSummaryPending">0</span>
-                                <span class="requests-summary-label">Pending</span>
-                            </div>
-                            <div class="requests-summary-divider" aria-hidden="true"></div>
-                            <div class="requests-summary-stat">
-                                <span class="requests-summary-num" id="requestsSummaryHistory">0</span>
-                                <span class="requests-summary-label">Resolved</span>
-                            </div>
+                        <div class="req-tabs requests-page-tabs" id="requestsPageTabs">
+                            <button class="req-tab active" data-rtab="pending">
+                                <span>Pending</span>
+                                <span class="req-tab-count" id="requestsPageTabCountPending">0</span>
+                            </button>
+                            <button class="req-tab" data-rtab="history">
+                                <span>History</span>
+                                <span class="req-tab-count" id="requestsPageTabCountHistory">0</span>
+                            </button>
                         </div>
                     </header>
 
-                    <div class="req-tabs requests-page-tabs" id="requestsPageTabs">
-                        <button class="req-tab active" data-rtab="pending">
-                            <span>Pending</span>
-                            <span class="req-tab-count" id="requestsPageTabCountPending">0</span>
-                        </button>
-                        <button class="req-tab" data-rtab="history">
-                            <span>History</span>
-                            <span class="req-tab-count" id="requestsPageTabCountHistory">0</span>
-                        </button>
+                    <div class="split" id="requestsSplit">
+                        <nav class="split-list" id="requestsPageList" aria-label="Requests"></nav>
+                        <section class="split-detail" id="requestsPageDetail" aria-label="Selected request"></section>
                     </div>
-
-                    <div class="req-list requests-page-list" id="requestsPageList"></div>
                 </div>
             </div>
 
             <!-- Conflicts page — admin-only list of everything wrong with the
-                 schedule: on-call/PTO overlaps, hard rule breaks, soft rule breaks. -->
+                 schedule: on-call/PTO overlaps, hard rule breaks, soft rule breaks.
+                 Conflicts listed on the left, the selected one on the right. -->
             <div class="page-shell" id="conflictsPage" hidden>
                 <div class="conflicts-page-content">
                     <header class="conflicts-page-header">
                         <div class="conflicts-page-heading">
                             <h2 class="conflicts-page-title">Conflicts</h2>
-                            <p class="conflicts-page-subtitle">On-call/PTO overlaps, coverage rule breaks and soft rule breaks, soonest first.</p>
+                            <p class="conflicts-page-subtitle" id="conflictsPageSubtitle">On-call/PTO overlaps, coverage rule breaks and soft rule breaks, soonest first.</p>
                         </div>
-                        <div class="conflicts-page-summary">
-                            <div class="conflicts-summary-stat" data-tone="open">
-                                <span class="conflicts-summary-num" id="conflictsSummaryOpen">0</span>
-                                <span class="conflicts-summary-label">Open</span>
-                            </div>
-                            <div class="conflicts-summary-divider" aria-hidden="true"></div>
-                            <div class="conflicts-summary-stat">
-                                <span class="conflicts-summary-num" id="conflictsSummaryNew">0</span>
-                                <span class="conflicts-summary-label">New</span>
+                        <div class="conflicts-page-controls">
+                            <label class="cfl-horizon">Looking ahead
+                                <select id="conflictsHorizon">
+                                    <option value="30">30 days</option>
+                                    <option value="90">90 days</option>
+                                    <option value="180">180 days</option>
+                                    <option value="365">365 days</option>
+                                </select>
+                            </label>
+                            <div class="req-tabs conflicts-page-tabs" id="conflictsPageTabs">
+                                <button class="req-tab active" data-ctab="open">
+                                    <span>Open</span>
+                                    <span class="req-tab-count" id="conflictsTabCountOpen">0</span>
+                                </button>
+                                <button class="req-tab" data-ctab="accepted">
+                                    <span>Accepted</span>
+                                    <span class="req-tab-count" id="conflictsTabCountAccepted">0</span>
+                                </button>
                             </div>
                         </div>
                     </header>
 
-                    <div class="conflicts-page-controls">
-                        <div class="req-tabs conflicts-page-tabs" id="conflictsPageTabs">
-                            <button class="req-tab active" data-ctab="open">
-                                <span>Open</span>
-                                <span class="req-tab-count" id="conflictsTabCountOpen">0</span>
-                            </button>
-                            <button class="req-tab" data-ctab="accepted">
-                                <span>Accepted</span>
-                                <span class="req-tab-count" id="conflictsTabCountAccepted">0</span>
-                            </button>
-                        </div>
-                        <label class="cfl-horizon">Looking ahead
-                            <select id="conflictsHorizon">
-                                <option value="30">30 days</option>
-                                <option value="90">90 days</option>
-                                <option value="180">180 days</option>
-                                <option value="365">365 days</option>
-                            </select>
-                        </label>
+                    <div class="split" id="conflictsSplit">
+                        <nav class="split-list" id="conflictsList" aria-label="Conflicts"></nav>
+                        <section class="split-detail" id="conflictsDetail" aria-label="Selected conflict"></section>
                     </div>
-
-                    <div class="cfl-list" id="conflictsList"></div>
                 </div>
             </div>
 
-            <!-- Changes page — log of every applied schedule change. -->
+            <!-- Changes page — log of every applied schedule change. Changes
+                 listed on the left, the selected one on the right. -->
             <div class="page-shell" id="changesPage" hidden>
                 <div class="changes-page-content">
                     <header class="changes-page-header">
@@ -335,26 +320,22 @@
                             <h2 class="changes-page-title">Changes</h2>
                             <p class="changes-page-subtitle" id="changesPageSubtitle">Recent updates that affect your schedule, newest first.</p>
                         </div>
-                        <div class="changes-page-summary" id="changesPageSummary">
-                            <div class="changes-summary-stat">
-                                <span class="changes-summary-num" id="changesSummaryTotal">0</span>
-                                <span class="changes-summary-label" id="changesSummaryLabel">Affecting you</span>
-                            </div>
+                        <div class="req-tabs changes-page-tabs" id="changesPageTabs">
+                            <button class="req-tab active" data-ctab="mine">
+                                <span>Affecting me</span>
+                                <span class="req-tab-count" id="changesTabCountMine">0</span>
+                            </button>
+                            <button class="req-tab" data-ctab="all">
+                                <span>All changes</span>
+                                <span class="req-tab-count" id="changesTabCountAll">0</span>
+                            </button>
                         </div>
                     </header>
 
-                    <div class="req-tabs changes-page-tabs" id="changesPageTabs">
-                        <button class="req-tab active" data-ctab="mine">
-                            <span>Affecting me</span>
-                            <span class="req-tab-count" id="changesTabCountMine">0</span>
-                        </button>
-                        <button class="req-tab" data-ctab="all">
-                            <span>All changes</span>
-                            <span class="req-tab-count" id="changesTabCountAll">0</span>
-                        </button>
+                    <div class="split" id="changesSplit">
+                        <nav class="split-list" id="changesList" aria-label="Changes"></nav>
+                        <section class="split-detail" id="changesDetail" aria-label="Selected change"></section>
                     </div>
-
-                    <div class="chg-list" id="changesList"></div>
                 </div>
             </div>
 

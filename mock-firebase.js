@@ -608,7 +608,7 @@
                 'display:flex', 'align-items:center', 'gap:10px',
                 'background:rgba(17,24,39,0.94)', 'color:#fff',
                 'padding:8px 12px 8px 14px', 'border-radius:999px',
-                'font:500 12px/1.3 "Geist", system-ui, sans-serif',
+                'font:500 12px/1.3 "IBM Plex Sans", system-ui, sans-serif',
                 'box-shadow:0 8px 24px rgba(0,0,0,0.28)',
                 'max-width:calc(100vw - 24px)',
                 'pointer-events:auto',
@@ -627,7 +627,7 @@
             btn.type = 'button';
             btn.textContent = 'Reset demo data';
             btn.style.cssText = [
-                'font:600 11px/1 "Geist", system-ui, sans-serif',
+                'font:600 11px/1 "IBM Plex Sans", system-ui, sans-serif',
                 'color:#111827', 'background:#f5b544',
                 'border:0', 'border-radius:999px',
                 'padding:6px 11px', 'cursor:pointer', 'flex-shrink:0',

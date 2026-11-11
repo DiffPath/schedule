@@ -8441,6 +8441,124 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .split-actions button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
 .split-actions button.primary:hover { background: #154463; }
 
+/* ════ CONFLICTS PAGE: month view + list by time until the conflict ════
+   The month cells are the schedule's own (.month-view, monthCellRowsHtml),
+   weekdays only, marked with each day's open conflicts. */
+#conflictsPage .conflicts-page-content { max-width: 1440px; }
+#conflictsPage .conflicts-page-header { align-items: center; padding-bottom: 16px; margin-bottom: 16px; }
+#conflictsPage .conflicts-page-title { margin: 0; }
+
+.cf-body { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.cf-cal { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.cf-nav { display: flex; align-items: center; justify-content: center; gap: 8px; }
+.cf-nav .current-period { cursor: pointer; }
+.cf-nav .current-period:hover { background: var(--paper); }
+
+.month-view.cf-month { grid-template-columns: repeat(5, minmax(0, 1fr)); height: auto; }
+.cf-month .day { width: 100%; font: inherit; color: inherit; text-align: left; }
+.cf-month .day:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cf-month .day.cf-past { opacity: 0.55; }
+.cf-month .day.cf-selected,
+.cf-month .day.cf-selected.today { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+/* The person breaking a soft rule. */
+.month-view .day .wd-row.cf-soft { border-color: #ca8a04; box-shadow: 0 0 0 1px #ca8a04; }
+/* On call while on PTO. */
+.wd-row .oc-mark.cf-oc-bad { background: #b92a2a; }
+/* A service nobody is on. */
+.month-view .day .wd-row.cf-miss { justify-content: center; background: #fff; border: 1px dashed #b92a2a; }
+.wd-row.cf-miss .svc { flex: none; color: #9b2c22; font-weight: 600; }
+
+.cf-list {
+    flex: 1 1 360px;
+    min-width: 0;
+    max-height: calc(100vh - 170px);
+    overflow-y: auto;
+    background: #fff;
+    border: 1px solid var(--rule-soft);
+    border-radius: 10px;
+}
+.cf-sec-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    margin: 0;
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule-soft);
+}
+.cf-sec-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 11px 16px 9px;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+}
+.cf-sec-toggle:hover { background: var(--paper-2); }
+.cf-sec-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cf-chev { flex: none; color: var(--ink-2); transform: rotate(90deg); transition: transform 0.15s ease; }
+.cf-sec.is-closed .cf-chev { transform: none; }
+.cf-sec-label { flex: 1; }
+.cf-sec-count { font-size: 12px; font-weight: 400; color: var(--ink-2); }
+.cf-sec-body[hidden] { display: none; }
+.cf-sec-empty { margin: 0; padding: 12px 16px; font-size: 13px; color: var(--ink-2); border-bottom: 1px solid var(--rule-soft-2); }
+
+.cf-item { border-bottom: 1px solid var(--rule-soft-2); }
+.cf-item.is-selected { background: var(--paper-2); box-shadow: inset 3px 0 0 var(--accent); }
+.cf-item-main {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+    padding: 12px 16px;
+    border: 0;
+    background: none;
+    text-align: left;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+}
+.cf-item:not(.is-selected) .cf-item-main:hover { background: var(--paper); }
+.cf-item-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cf-item-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+.cf-countdown { padding: 1px 7px; border-radius: 999px; background: #e2eef8; color: var(--accent); font-weight: 600; }
+.cf-item-title { display: flex; align-items: flex-start; gap: 8px; font-size: 14.5px; font-weight: 600; color: var(--ink); }
+.cf-item-title .split-dot { width: 8px; height: 8px; margin-top: 6px; }
+.cf-item-body,
+.cf-item-note { padding-left: 16px; font-size: 13px; color: var(--ink-2); line-height: 1.45; }
+.split-actions.cf-item-actions { justify-content: flex-start; padding: 0 16px 12px 32px; border-top: 0; }
+.cf-item-actions button { min-height: 34px; padding: 6px 12px; font-size: 12.5px; }
+.cf-empty { padding: 56px 24px; text-align: center; font-size: 13.5px; color: var(--ink-2); line-height: 1.6; }
+
+/* Conflict days in the date picker (opened from the Conflicts month label). */
+.mc-day { position: relative; }
+.mc-day.mc-cf-high::after,
+.mc-day.mc-cf-low::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 3px;
+    width: 4px;
+    height: 4px;
+    margin-left: -2px;
+    border-radius: 50%;
+    background: #b92a2a;
+}
+.mc-day.mc-cf-low::after { background: #ca8a04; }
+.mc-day.mc-today::after { background: #fff; }
+
+@media (max-width: 800px) {
+    .cf-list { flex-basis: 100%; max-height: none; overflow: visible; }
+    .cf-sec-head { position: static; }
+    .cf-nav .current-period { min-width: 0; font-size: 19px; }
+}
+
 /* Request cards sit in the pane without their own frame. */
 .split-detail .req-card,
 .split-detail .req-card[class*="status-"] {

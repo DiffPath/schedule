@@ -2622,27 +2622,11 @@ function markChangesPageSeen() {
 // yellow = all seen but still not corrected, hidden = nothing open.
 // "Seen" is per-device (localStorage); acceptance is shared (Firebase).
 
-const CONFLICT_HORIZONS = [30, 90, 180, 365];
-const CONFLICT_HORIZON_DEFAULT = 180;
+const CONFLICT_HORIZON_DEFAULT = 180;   // the recompute panel's default window
 
-// How far ahead the Conflicts page and its dot look. Admin-changeable on the
-// page itself; remembered per browser.
-let conflictHorizonDays = (() => {
-    try {
-        const v = parseInt(localStorage.getItem('conflictHorizonDays'), 10);
-        return CONFLICT_HORIZONS.includes(v) ? v : CONFLICT_HORIZON_DEFAULT;
-    } catch (_) { return CONFLICT_HORIZON_DEFAULT; }
-})();
-
-function setConflictHorizon(days) {
-    const v = CONFLICT_HORIZONS.includes(days) ? days : CONFLICT_HORIZON_DEFAULT;
-    if (v === conflictHorizonDays) return;
-    conflictHorizonDays = v;
-    try { localStorage.setItem('conflictHorizonDays', String(v)); } catch (_) {}
-    _conflicts = null;
-    renderConflictsPage();
-    updateNavConflictsIndicator();
-}
+// How far ahead the Conflicts page and its dot look: a year, which the page
+// splits into within a week / month / 3 months / year.
+const conflictHorizonDays = 365;
 
 // Firebase keys can't hold . # $ [ ] / — slug the message down to a safe,
 // stable token so the same issue always produces the same key.
@@ -2778,6 +2762,12 @@ function conflictsForDate(date) {
     // Rule checks are weekday-only and never look before EARLIEST_DATE.
     if (!isWeekend(date) && !getFederalHoliday(date) && !isBeforeEarliest(date)) {
         const dayKey = fmt(date);
+        // Soft-rule messages start "Name: …" — recover whose it is so the
+        // Conflicts page can mark that person's row.
+        const whose = msg => {
+            const p = pathologists.find(x => msg.startsWith(x.name.replace(/^Dr\. /, '') + ':'));
+            return p ? p.id : null;
+        };
         const add = (kind, label, msg) => out.push(_decorateConflict({
             key: _ruleConflictKey(kind, dayKey, msg),
             kind,
@@ -2785,7 +2775,7 @@ function conflictsForDate(date) {
             dateStr: dayKey,
             endStr: dayKey,
             days: 1,
-            pathId: null,
+            pathId: kind === 'soft' ? whose(msg) : null,
             label,
             detail: msg,
         }));
@@ -3058,7 +3048,14 @@ function splitDayGrid(date, highlightPid) {
 }
 
 // ── Conflicts page ──────────────────────────────────────────────────────
+// The month view (the schedule's month cells, marked with each day's
+// conflicts) beside a list ordered by time until the conflict, in
+// collapsible sections: within a week / month / 3 months / year. Picking a
+// list item shows its day in the month; picking a day selects its conflict.
 let activeConflictsTab = 'open';
+let _cfMonth = null;   // first of the month the calendar shows
+let _cfSel = null;     // selected conflict key
+let _cfDay = null;     // selected day (yyyy-mm-dd), with or without a conflict
 
 const CONFLICT_KIND_META = {
     callpto: { label: 'On call / PTO', tone: 'high' },
@@ -3066,139 +3063,346 @@ const CONFLICT_KIND_META = {
     soft: { label: 'Soft rule', tone: 'low' },
 };
 
+const CF_SECTIONS = [
+    { id: 'week', label: 'Within a week', max: 6 },
+    { id: 'month', label: 'Within a month', max: 30 },
+    { id: 'quarter', label: 'Within 3 months', max: 91 },
+    { id: 'year', label: 'Within a year', max: 365 },
+];
+
+// coverageViolationsForDay() message → the service nobody is on.
+const CF_MISSING = {
+    'Huntley not staffed': 'Huntley',
+    'No McHenry service staffed': 'McHenry',
+    'McHenry Cyto/Gross not staffed': 'Cyto/Gross',
+    'McHenry Bigs not staffed': 'Bigs',
+    'Breast Bx/WFH not staffed': 'Breast Bx/WFH',
+};
+// …and its 3-letter code for phone-width month cells.
+const CF_MISSING_ABBR = { Huntley: 'HUN', McHenry: 'MCH', 'Cyto/Gross': 'CYT', Bigs: 'BIG', 'Breast Bx/WFH': 'WFH' };
+
+// Collapsed sections, remembered per browser.
+const _cfClosed = (() => {
+    try { return JSON.parse(localStorage.getItem('conflictSectionsClosed')) || {}; } catch (_) { return {}; }
+})();
+function _cfSetClosed(id, closed) {
+    if (closed) _cfClosed[id] = true; else delete _cfClosed[id];
+    try { localStorage.setItem('conflictSectionsClosed', JSON.stringify(_cfClosed)); } catch (_) {}
+}
+
+function _cfDaysUntil(c) { return Math.round((c.date.getTime() - today.getTime()) / 864e5); }
+
+function _cfSectionOf(c) {
+    const d = _cfDaysUntil(c);
+    return (CF_SECTIONS.find(s => d <= s.max) || CF_SECTIONS[CF_SECTIONS.length - 1]).id;
+}
+
+function _cfCountdown(d) {
+    if (d <= 0) return 'Today';
+    if (d === 1) return 'Tomorrow';
+    if (d < 14) return `In ${d} days`;
+    if (d < 56) return `In ${Math.round(d / 7)} weeks`;
+    return `In ${Math.round(d / 30.4)} months`;
+}
+
+// "Thu, Nov 12" (the year only when it isn't this one).
+function _cfDayShort(d) {
+    return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`
+        + (d.getFullYear() !== today.getFullYear() ? `, ${d.getFullYear()}` : '');
+}
+
+function _cfWeekday(d) {
+    return d.toLocaleDateString('en-US', { weekday: 'long' });
+}
+
 function _conflictWhen(c) {
-    return c.dateStr === c.endStr ? _conflictDayLabel(c.date) : _reqDateRange(c.dateStr, c.endStr);
-}
-
-function renderConflictsPage() {
-    const split = document.getElementById('conflictsSplit');
-    if (!split) return;
-    if (!isAdmin()) {
-        split.querySelector('.split-list').innerHTML = '';
-        split.querySelector('.split-detail').innerHTML = '';
-        return;
-    }
-
-    const all = getConflicts();
-    const open = all.filter(c => !c.accepted);
-    const accepted = all.filter(c => c.accepted);
-    const seen = _conflictVisitSeen || _conflictSeenKeys();
-
-    const setText = (id, txt) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = txt;
-    };
-    setText('conflictsTabCountOpen', String(open.length));
-    setText('conflictsTabCountAccepted', String(accepted.length));
-    const nHigh = open.filter(c => (CONFLICT_KIND_META[c.kind] || {}).tone === 'high').length;
-    const nSoft = open.length - nHigh;
-    const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-    setText('conflictsPageSubtitle', open.length === 0
-        ? `Nothing open in the next ${conflictHorizonDays} days.`
-        : [nHigh && plural(nHigh, 'rule break'), nSoft && plural(nSoft, 'soft-rule break')]
-            .filter(Boolean).join(' · ') + ` in the next ${conflictHorizonDays} days, soonest first.`);
-
-    const horizonSel = document.getElementById('conflictsHorizon');
-    if (horizonSel) horizonSel.value = String(conflictHorizonDays);
-
-    document.querySelectorAll('#conflictsPageTabs .req-tab').forEach(b => {
-        b.classList.toggle('active', b.dataset.ctab === activeConflictsTab);
-    });
-
-    const isOpenTab = activeConflictsTab === 'open';
-    const soon = addDays(today, 14);
-    const items = (isOpenTab ? open : accepted).map(c => {
-        const meta = CONFLICT_KIND_META[c.kind] || { label: c.label, tone: 'low' };
-        const isNew = !c.accepted && !seen.has(c.key);
-        return {
-            key: c.key,
-            group: isOpenTab ? (c.date.getTime() < soon.getTime() ? 'Next 2 weeks' : 'Later') : null,
-            html: `<span class="split-dot tone-${meta.tone}" aria-hidden="true"></span>
-                <span class="split-row-main">
-                  <span class="split-row-title">${escapeHtml(c.detail)}</span>
-                  <span class="split-row-sub">${escapeHtml(_conflictWhen(c))} · ${escapeHtml(meta.label)}</span>
-                </span>${isNew ? '<span class="split-new">New</span>' : ''}`,
-        };
-    });
-
-    renderSplit('conflictsSplit', items, (key, el) => _renderConflictDetail(key, el, seen), isOpenTab
-        ? `<span class="split-empty-headline">All clear.</span>No conflicts in the next ${conflictHorizonDays} days. Coverage rules, soft rules and on-call/PTO overlaps all check out.`
-        : '<span class="split-empty-headline">Nothing accepted yet.</span>Accepting a conflict takes it off the open list without changing the schedule.');
-}
-
-// On-call/PTO: the call week, who's on call each day, the PTO days marked.
-function _conflictCallWeekHtml(c) {
-    const cs = getCallCycleStart(c.date);
-    const ce = getCallCycleEnd(cs);
-    let html = '';
-    for (let d = new Date(cs); d.getTime() <= ce.getTime(); d = addDays(d, 1)) {
-        const k = fmt(d);
-        const bad = k >= c.dateStr && k <= c.endStr;
-        const p = pathologists.find(x => x.id === onCallIdForDay(d));
-        html += `<div class="split-week-day${bad ? ' is-bad' : ''}">
-            <span class="split-week-dow">${DOW[d.getDay()]}</span>
-            <span class="split-week-num">${d.getDate()}</span>
-            <span class="split-week-who">${p ? escapeHtml(p.initials) : '—'}${bad ? ' · PTO' : ''}</span>
-          </div>`;
-    }
-    return `<div class="split-section">
-        <div class="split-section-label">Call week ${escapeHtml(_callFmtWeek(cs))}</div>
-        <div class="split-week">${html}</div>
-      </div>`;
-}
-
-function _renderConflictDetail(key, el, seen) {
-    const c = getConflicts().find(x => x.key === key);
-    if (!c) { el.innerHTML = ''; return; }
-    const meta = CONFLICT_KIND_META[c.kind] || { label: c.label, tone: 'low' };
-    const isNew = !c.accepted && !seen.has(c.key);
-    const context = c.kind === 'callpto'
-        ? _conflictCallWeekHtml(c)
-        : `<div class="split-section">
-            <div class="split-section-label">${escapeHtml(_conflictDayLabel(c.date))} as scheduled</div>
-            ${splitDayGrid(c.date, null)}
-          </div>`;
-    const note = c.accepted
-        ? `Accepted${c.ack && c.ack.byName ? ' by ' + escapeHtml(String(c.ack.byName).replace(/^Dr\. /, '')) : ''}${
-            c.ack && c.ack.at ? ' on ' + escapeHtml(_conflictDayLabel(new Date(c.ack.at))) : ''}. The schedule wasn't changed; put it back to see it on the open list again.`
-        : 'Accepting takes it off the list without changing the schedule. It comes back if the assignment changes.';
-    const actions = c.accepted
-        ? `<button type="button" data-cact="unaccept">Put back on the list</button>
-           <button type="button" class="primary" data-cact="goto">Go to day</button>`
-        : `<button type="button" data-cact="accept">Accept as is</button>`
-          + (c.kind === 'callpto'
-            ? `<button type="button" data-cact="goto">Go to day</button>
-               <button type="button" class="primary" data-cact="oncall">Change who's on call</button>`
-            : '<button type="button" class="primary" data-cact="goto">Go to day</button>');
-    el.innerHTML = `
-        <div class="split-detail-head">
-          <div class="split-detail-heading">
-            <span class="split-eyebrow">${escapeHtml(_conflictWhen(c))} · ${escapeHtml(c.label)}${isNew ? ' · new since your last visit' : ''}</span>
-            <h3 class="split-detail-title${splitTitleCls(c.detail)}">${escapeHtml(c.detail)}</h3>
-          </div>
-          <span class="split-pill tone-${c.accepted ? 'none' : meta.tone}">${c.accepted ? 'Accepted' : meta.tone === 'high' ? 'Rule break' : 'Soft rule'}</span>
-        </div>
-        ${context}
-        <p class="split-note">${note}</p>
-        <div class="split-actions" data-key="${escapeHtml(c.key)}">${actions}</div>`;
+    if (c.dateStr === c.endStr) return _cfDayShort(c.date);
+    const e = parseDate(c.endStr);
+    return c.date.getMonth() === e.getMonth()
+        ? `${MONTHS_SHORT[c.date.getMonth()]} ${c.date.getDate()} – ${e.getDate()}`
+        : `${MONTHS_SHORT[c.date.getMonth()]} ${c.date.getDate()} – ${MONTHS_SHORT[e.getMonth()]} ${e.getDate()}`;
 }
 
 function _conflictDayLabel(d) {
     return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
+function _cfNames(arr) {
+    return arr.length <= 1 ? arr.join('') : arr.slice(0, -1).join(', ') + ' and ' + arr[arr.length - 1];
+}
+
+// "Working: Moravek on Huntley, Rehman and Raouf both on McHenry Bigs.
+// Mujeeb is on PTO."
+function _cfWorkingLine(date) {
+    const assign = getDayAssignments(date);
+    const bySvc = new Map();
+    const byOff = new Map();
+    pathologists.forEach(p => {
+        const a = assign[p.id];
+        if (!a) return;
+        const name = _shortPathName(p.id);
+        if (a.type === 'pto') {
+            const what = timeOffName(timeOffOn(p.id, date));
+            if (!byOff.has(what)) byOff.set(what, []);
+            byOff.get(what).push(name);
+        } else if ((a.type === 'service' || a.type === 'off_site') && a.service) {
+            if (!bySvc.has(a.service.name)) bySvc.set(a.service.name, []);
+            bySvc.get(a.service.name).push(name);
+        }
+    });
+    const working = [...bySvc].map(([svc, ns]) =>
+        ns.length === 1 ? `${ns[0]} on ${svc}` : `${_cfNames(ns)} ${ns.length === 2 ? 'both' : 'all'} on ${svc}`);
+    const off = [...byOff].map(([what, ns]) => `${_cfNames(ns)} ${ns.length > 1 ? 'are' : 'is'} on ${what}.`);
+    return [working.length ? `Working: ${working.join(', ')}.` : '', ...off].filter(Boolean).join(' ');
+}
+
+// Title and plain-language explanation for a conflict.
+function _cfDescribe(c) {
+    if (c.kind === 'callpto') {
+        return {
+            title: `${_shortPathName(c.pathId)} on call during ${timeOffName(timeOffOn(c.pathId, c.date))}`,
+            body: c.detail + '.',
+        };
+    }
+    if (c.kind === 'hard') {
+        const miss = CF_MISSING[c.detail];
+        return {
+            title: miss === 'McHenry' ? 'Nobody at McHenry' : miss ? `Nobody on ${miss}` : c.detail,
+            body: _cfWorkingLine(c.date),
+        };
+    }
+    // Soft: "Raouf: on Bigs the day before PTO" → "Raouf on Bigs the day before PTO".
+    const next = nextWorkday(c.date);
+    return {
+        title: c.detail.replace(/^([^:]+):\s*/, '$1 '),
+        body: /PTO$/.test(c.detail)
+            ? `Bigs on ${_cfWeekday(c.date)}, then PTO from ${_cfDayShort(next)}.`
+            : `Bigs on ${_cfWeekday(c.date)}, then Breast Bx/WFH on ${_cfWeekday(next)}.`,
+    };
+}
+
+function _cfPool() {
+    const all = getConflicts();
+    return activeConflictsTab === 'open' ? all.filter(c => !c.accepted) : all.filter(c => c.accepted);
+}
+
+// Select a conflict (or just a day), bring its month into view and make sure
+// its section is open.
+function _cfSelect(c, dayKey) {
+    _cfSel = c ? c.key : null;
+    _cfDay = dayKey || (c ? c.dateStr : null);
+    const d = parseDate(_cfDay || fmt(today));
+    _cfMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+    if (c && _cfClosed[_cfSectionOf(c)]) _cfSetClosed(_cfSectionOf(c), false);
+}
+
+// The month grid, weekdays only, with each day's open conflicts marked:
+// the person breaking a soft rule is outlined, a service nobody is on gets
+// a dashed "No …" row, and On Call turns red for someone on PTO.
+function _cfMonthHtml(selDays) {
+    const y = _cfMonth.getFullYear();
+    const m = _cfMonth.getMonth();
+    const first = new Date(y, m, 1);
+    const last = new Date(y, m + 1, 0);
+    let html = '<div class="month-view cf-month">'
+        + ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(d => `<div class="dow-h">${d}</div>`).join('');
+    for (let mon = addDays(first, -((first.getDay() + 6) % 7)); mon.getTime() <= last.getTime(); mon = addDays(mon, 7)) {
+        const days = [0, 1, 2, 3, 4].map(j => addDays(mon, j));
+        if (!days.some(d => d.getMonth() === m)) continue;
+        days.forEach(date => {
+            const k = fmt(date);
+            const inMonth = date.getMonth() === m;
+            const holiday = inMonth ? getFederalHoliday(date) : null;
+            const open = conflictsForDate(date).filter(c => !c.accepted);
+            const soft = new Set(open.filter(c => c.kind === 'soft' && c.pathId != null).map(c => c.pathId));
+            const callBad = new Set(open.filter(c => c.kind === 'callpto').map(c => c.pathId));
+            let rows = monthCellRowsHtml(date, inMonth, pathologists, p => ({
+                cls: soft.has(p.id) ? 'cf-soft' : '',
+                ocBad: callBad.has(p.id),
+            }));
+            open.filter(c => c.kind === 'hard').forEach(c => {
+                const miss = CF_MISSING[c.detail];
+                const full = miss ? 'No ' + miss : c.detail;
+                const abbr = miss ? 'No ' + CF_MISSING_ABBR[miss] : '!';
+                rows += `<div class="wd-row cf-miss" title="${escapeHtml(c.detail)}"><span class="svc"><span class="svc-full">${escapeHtml(full)}</span><span class="svc-abbr">${escapeHtml(abbr)}</span></span></div>`;
+            });
+            const cls = ['day'];
+            if (!inMonth) cls.push('outside');
+            if (holiday) cls.push('holiday');
+            if (sameDay(date, today)) cls.push('today');
+            else if (date.getTime() < today.getTime()) cls.push('cf-past');
+            if (selDays.has(k)) cls.push('cf-selected');
+            const label = `${_conflictDayLabel(date)}${open.length ? `, ${open.length} conflict${open.length === 1 ? '' : 's'}` : ''}`;
+            html += `<button type="button" class="${cls.join(' ')}" data-date="${k}" aria-label="${escapeHtml(label)}"${selDays.has(k) ? ' aria-current="date"' : ''}>
+                <span class="day-num-row">
+                  <span class="num">${date.getDate()}${inMonth ? flagHtml(date) : ''}</span>
+                  ${holiday ? `<span class="month-holiday-badge" title="${escapeHtml(holiday)}">${escapeHtml(holiday)}</span>` : ''}
+                </span>
+                <span class="wd-rows">${rows}</span>
+              </button>`;
+        });
+    }
+    return html + '</div>';
+}
+
+function _cfItemHtml(c, seen) {
+    const meta = CONFLICT_KIND_META[c.kind] || { label: c.label, tone: 'low' };
+    const on = c.key === _cfSel;
+    const isNew = !c.accepted && !seen.has(c.key);
+    const d = _cfDescribe(c);
+    const by = c.ack && c.ack.byName ? ' by ' + String(c.ack.byName).replace(/^Dr\. /, '') : '';
+    const at = c.ack && c.ack.at ? ' on ' + _cfDayShort(new Date(c.ack.at)) : '';
+    const note = c.accepted
+        ? `<span class="cf-item-note">Accepted${escapeHtml(by + at)}. The schedule wasn't changed.</span>` : '';
+    let actions = '';
+    if (on) {
+        actions = c.accepted
+            ? `<button type="button" data-cact="unaccept">Put back on the list</button>
+               <button type="button" class="primary" data-cact="goto">Open day</button>`
+            : `<button type="button" data-cact="accept">Accept as is</button>`
+              + (c.kind === 'callpto'
+                ? `<button type="button" data-cact="goto">Open day</button>
+                   <button type="button" class="primary" data-cact="oncall">Change who's on call</button>`
+                : '<button type="button" class="primary" data-cact="goto">Open day</button>');
+        actions = `<div class="split-actions cf-item-actions" data-key="${escapeHtml(c.key)}">${actions}</div>`;
+    }
+    return `<div class="cf-item${on ? ' is-selected' : ''}">
+        <button type="button" class="cf-item-main" data-cfpick="${escapeHtml(c.key)}" aria-pressed="${on}">
+          <span class="cf-item-meta">
+            <span class="cf-countdown">${_cfCountdown(_cfDaysUntil(c))}</span>
+            <span>${escapeHtml(_conflictWhen(c))} · ${escapeHtml(meta.label)}</span>
+            ${isNew ? '<span class="split-new">New</span>' : ''}
+          </span>
+          <span class="cf-item-title"><span class="split-dot tone-${meta.tone}" aria-hidden="true"></span><span>${escapeHtml(d.title)}</span></span>
+          <span class="cf-item-body">${escapeHtml(d.body)}</span>
+          ${note}
+        </button>
+        ${actions}
+      </div>`;
+}
+
+function _cfListHtml(pool, seen) {
+    if (pool.length === 0) {
+        return activeConflictsTab === 'open'
+            ? '<div class="cf-empty"><span class="split-empty-headline">All clear.</span>No conflicts in the next year. Coverage rules, soft rules and on-call/PTO overlaps all check out.</div>'
+            : '<div class="cf-empty"><span class="split-empty-headline">Nothing accepted yet.</span>Accepting a conflict takes it off the open list without changing the schedule.</div>';
+    }
+    return CF_SECTIONS.map(s => {
+        const items = pool.filter(c => _cfSectionOf(c) === s.id);
+        const closed = !!_cfClosed[s.id];
+        const body = items.length
+            ? items.map(c => _cfItemHtml(c, seen)).join('')
+            : '<p class="cf-sec-empty">Nothing in this window.</p>';
+        return `<section class="cf-sec${closed ? ' is-closed' : ''}">
+            <h3 class="cf-sec-head">
+              <button type="button" class="cf-sec-toggle" data-cfsec="${s.id}" aria-expanded="${!closed}">
+                <svg class="cf-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="cf-sec-label">${s.label}</span>
+                <span class="cf-sec-count">${items.length}</span>
+              </button>
+            </h3>
+            <div class="cf-sec-body"${closed ? ' hidden' : ''}>${body}</div>
+          </section>`;
+    }).join('');
+}
+
+function renderConflictsPage() {
+    const monthEl = document.getElementById('cfMonth');
+    const listEl = document.getElementById('cfList');
+    const periodEl = document.getElementById('cfPeriod');
+    if (!monthEl || !listEl) return;
+    if (!isAdmin()) { monthEl.innerHTML = ''; listEl.innerHTML = ''; return; }
+
+    const all = getConflicts();
+    const nOpen = all.filter(c => !c.accepted).length;
+    const setText = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    setText('conflictsTabCountOpen', String(nOpen));
+    setText('conflictsTabCountAccepted', String(all.length - nOpen));
+    document.querySelectorAll('#conflictsPageTabs .req-tab').forEach(b => {
+        b.classList.toggle('active', b.dataset.ctab === activeConflictsTab);
+    });
+
+    const pool = _cfPool();
+    // The selected conflict went away (accepted, fixed) — keep its day.
+    if (_cfSel && !pool.some(c => c.key === _cfSel)) _cfSel = null;
+    // First visit: the soonest conflict.
+    if (!_cfMonth) _cfSelect(pool[0] || null, pool[0] ? null : fmt(today));
+
+    const selC = pool.find(c => c.key === _cfSel) || null;
+    const selDays = new Set();
+    if (selC) {
+        for (let d = new Date(selC.date); fmt(d) <= selC.endStr; d = addDays(d, 1)) selDays.add(fmt(d));
+    } else if (_cfDay) {
+        selDays.add(_cfDay);
+    }
+
+    if (periodEl) {
+        const cur = _cfMonth.getFullYear() === today.getFullYear() && _cfMonth.getMonth() === today.getMonth();
+        periodEl.innerHTML = `${MONTHS[_cfMonth.getMonth()]} <span class="year">${_cfMonth.getFullYear()}</span>`;
+        periodEl.classList.toggle('off-today', !cur);
+    }
+    monthEl.innerHTML = _cfMonthHtml(selDays);
+    const scroll = listEl.scrollTop;
+    listEl.innerHTML = _cfListHtml(pool, _conflictVisitSeen || _conflictSeenKeys());
+    listEl.scrollTop = scroll;
+}
+
+// Bring the selected list item into view inside the list (not the page).
+function _cfRevealSelected() {
+    const listEl = document.getElementById('cfList');
+    const item = listEl && listEl.querySelector('.cf-item.is-selected');
+    if (!item) return;
+    const top = item.offsetTop - listEl.offsetTop;
+    if (top < listEl.scrollTop + 40 || top + item.offsetHeight > listEl.scrollTop + listEl.clientHeight) {
+        listEl.scrollTop = Math.max(0, top - 48);
+    }
+}
+
+// Pick a day (calendar or date picker): select its first conflict, if any.
+function _cfPickDay(date) {
+    const k = fmt(date);
+    const c = _cfPool().find(x => k >= x.dateStr && k <= x.endStr) || null;
+    _cfSelect(c, k);
+    renderConflictsPage();
+    _cfRevealSelected();
+}
+
+function _cfStepMonth(n) {
+    _cfMonth = new Date(_cfMonth.getFullYear(), _cfMonth.getMonth() + n, 1);
+    renderConflictsPage();
+}
+
 // Expose for callers that refresh the page after sign-in.
 window.__renderConflictsPage = renderConflictsPage;
 
-// Delegated handlers — the list and detail are rebuilt on every data change.
+// Delegated handlers — the month and list are rebuilt on every data change.
 (function wireConflictsPage() {
-    wireSplit('conflictsSplit', renderConflictsPage);
-    const detailEl = document.getElementById('conflictsDetail');
-    if (detailEl) {
-        detailEl.addEventListener('click', e => {
+    const monthEl = document.getElementById('cfMonth');
+    if (monthEl) {
+        monthEl.addEventListener('click', e => {
+            const day = e.target.closest('.day[data-date]');
+            if (day) _cfPickDay(parseDate(day.dataset.date));
+        });
+    }
+
+    const listEl = document.getElementById('cfList');
+    if (listEl) {
+        listEl.addEventListener('click', e => {
+            const sec = e.target.closest('[data-cfsec]');
+            if (sec) {
+                _cfSetClosed(sec.dataset.cfsec, !_cfClosed[sec.dataset.cfsec]);
+                renderConflictsPage();
+                return;
+            }
+            const pick = e.target.closest('[data-cfpick]');
+            if (pick) {
+                const c = _cfPool().find(x => x.key === pick.dataset.cfpick);
+                if (c) { _cfSelect(c); renderConflictsPage(); }
+                return;
+            }
             const btn = e.target.closest('button[data-cact]');
             if (!btn) return;
-            const key = btn.closest('.split-actions').dataset.key;
+            const key = btn.closest('.cf-item-actions').dataset.key;
             const act = btn.dataset.cact;
             if (act === 'goto') goToConflict(key);
             else if (act === 'accept') acceptConflict(key);
@@ -3210,20 +3414,42 @@ window.__renderConflictsPage = renderConflictsPage;
         });
     }
 
+    const prev = document.getElementById('cfPrev');
+    const next = document.getElementById('cfNext');
+    if (prev) prev.addEventListener('click', () => _cfStepMonth(-1));
+    if (next) next.addEventListener('click', () => _cfStepMonth(1));
+
+    // The month label opens the schedule's date picker, with conflict days dotted.
+    const period = document.getElementById('cfPeriod');
+    if (period) {
+        period.addEventListener('click', e => {
+            e.stopPropagation();
+            toggleMiniCal({
+                anchor: period,
+                month: _cfMonth || today,
+                pick: _cfPickDay,
+                range: null,
+                mark: d => {
+                    if (d.getTime() < today.getTime() && !sameDay(d, today)) return '';
+                    const open = conflictsForDate(d).filter(c => !c.accepted);
+                    if (open.length === 0) return '';
+                    return open.some(c => c.kind !== 'soft') ? 'mc-cf-high' : 'mc-cf-low';
+                },
+            });
+        });
+    }
+
     const tabsEl = document.getElementById('conflictsPageTabs');
     if (tabsEl) {
         tabsEl.addEventListener('click', e => {
             const btn = e.target.closest('.req-tab');
-            if (!btn) return;
+            if (!btn || btn.dataset.ctab === activeConflictsTab) return;
             activeConflictsTab = btn.dataset.ctab;
+            const pool = _cfPool();
+            _cfSelect(pool[0] || null, pool[0] ? null : fmt(today));
             renderConflictsPage();
-        });
-    }
-
-    const horizonSel = document.getElementById('conflictsHorizon');
-    if (horizonSel) {
-        horizonSel.addEventListener('change', () => {
-            setConflictHorizon(parseInt(horizonSel.value, 10));
+            const l = document.getElementById('cfList');
+            if (l) l.scrollTop = 0;
         });
     }
 })();
@@ -8512,57 +8738,10 @@ function renderMonth() {
         const td = sameDay(date, today);
         const we = isWeekend(date);
         const holiday = inMonth ? getFederalHoliday(date) : null;
-        const dayAssign = getDayAssignments(date);
-
-        let rows = '';
         const activePathologists = currentPathFilter === 'all'
             ? pathologists
             : pathologists.filter(p => p.id === parseInt(currentPathFilter));
-
-        // LF sendout banner above the first pathologist row (in-month days
-        // only); full + abbr labels emitted, CSS picks per viewport.
-        if (inMonth && isLfSendoutDay(date)) {
-            rows += `<div class="wd-row lf-sendout" title="Lake Forest sendout">
-            <span class="lf-label lf-label-full">Lake Forest sendout</span>
-            <span class="lf-label lf-label-abbr">LF sendout</span>
-          </div>`;
-        }
-
-        activePathologists.forEach(p => {
-            const a = dayAssign[p.id];
-            if (a.type === 'blank') return; // pre-cutoff date — render no rows
-            const oc = a.onCall ? `<span class="oc-mark" title="On call this week">On Call</span>` : '';
-            const locked = isLockActiveForRender(fmt(date), p.id, a);
-            const lockCls = locked ? ' locked' : '';
-            const lockTip = locked ? ' · Approved & locked' : '';
-            if (a.type === 'pto') {
-                rows += `<div class="wd-row pto" style="--c:${p.color}" title="${p.name} — ${escapeHtml(timeOffName(timeOffOn(p.id, date)))}${a.onCall ? ' · On call' : ''}">
-            <span class="pid">${p.initials}</span>
-            <span class="svc">${timeOffRowLabel(p.id, date)}</span>
-            ${oc}
-          </div>`;
-            } else if (a.type === 'off_site') {
-                const cbg = pathBgColor(p.color);
-                rows += `<div class="wd-row off-site${lockCls}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
-            <span class="pid">${p.initials}</span>
-            <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
-            ${oc}
-          </div>`;
-            } else if (a.type === 'off') {
-                rows += `<div class="wd-row off" style="--c:${p.color}" title="${p.name} — ${(we || holiday) ? 'Off' : 'Unstaffed'}${a.onCall ? ' · On call' : ''}">
-            <span class="pid">${p.initials}</span>
-            <span class="svc">${(we || holiday) ? 'Off' : 'Unstaffed'}</span>
-            ${oc}
-          </div>`;
-            } else {
-                const cbg = pathBgColor(p.color);
-                rows += `<div class="wd-row${lockCls}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
-            <span class="pid">${p.initials}</span>
-            <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
-            ${oc}
-          </div>`;
-            }
-        });
+        const rows = monthCellRowsHtml(date, inMonth, activePathologists);
 
         const holidayBadge = holiday ? `<span class="month-holiday-badge" title="${holiday}">${holiday}</span>` : '';
         html += `<div class="day ${inMonth ? '' : 'outside'} ${we ? 'weekend' : ''} ${holiday ? 'holiday' : ''} ${td ? 'today' : ''}" data-date="${fmt(date)}">
@@ -8576,6 +8755,64 @@ function renderMonth() {
     html += `</div>`;
     main.innerHTML = html;
     attachDayClickHandlers();
+}
+
+// The assignment rows inside one month-view cell. Shared by the month view
+// and the Conflicts page; decorate(p, a) can return { cls, ocBad } to mark a
+// row (a soft-rule break, on call while on PTO).
+function monthCellRowsHtml(date, inMonth, people, decorate) {
+    const we = isWeekend(date);
+    const holiday = inMonth ? getFederalHoliday(date) : null;
+    const dayAssign = getDayAssignments(date);
+    let rows = '';
+
+    // LF sendout banner above the first pathologist row (in-month days
+    // only); full + abbr labels emitted, CSS picks per viewport.
+    if (inMonth && isLfSendoutDay(date)) {
+        rows += `<div class="wd-row lf-sendout" title="Lake Forest sendout">
+            <span class="lf-label lf-label-full">Lake Forest sendout</span>
+            <span class="lf-label lf-label-abbr">LF sendout</span>
+          </div>`;
+    }
+
+    people.forEach(p => {
+        const a = dayAssign[p.id];
+        if (!a || a.type === 'blank') return; // pre-cutoff date — render no rows
+        const dec = (decorate && decorate(p, a)) || {};
+        const extra = dec.cls ? ' ' + dec.cls : '';
+        const oc = a.onCall ? `<span class="oc-mark${dec.ocBad ? ' cf-oc-bad' : ''}" title="${dec.ocBad ? 'On call while on PTO' : 'On call this week'}">On Call</span>` : '';
+        const locked = isLockActiveForRender(fmt(date), p.id, a);
+        const lockCls = locked ? ' locked' : '';
+        const lockTip = locked ? ' · Approved & locked' : '';
+        if (a.type === 'pto') {
+            rows += `<div class="wd-row pto${extra}" style="--c:${p.color}" title="${p.name} — ${escapeHtml(timeOffName(timeOffOn(p.id, date)))}${a.onCall ? ' · On call' : ''}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc">${timeOffRowLabel(p.id, date)}</span>
+            ${oc}
+          </div>`;
+        } else if (a.type === 'off_site') {
+            const cbg = pathBgColor(p.color);
+            rows += `<div class="wd-row off-site${lockCls}${extra}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
+            ${oc}
+          </div>`;
+        } else if (a.type === 'off') {
+            rows += `<div class="wd-row off${extra}" style="--c:${p.color}" title="${p.name} — ${(we || holiday) ? 'Off' : 'Unstaffed'}${a.onCall ? ' · On call' : ''}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc">${(we || holiday) ? 'Off' : 'Unstaffed'}</span>
+            ${oc}
+          </div>`;
+        } else {
+            const cbg = pathBgColor(p.color);
+            rows += `<div class="wd-row${lockCls}${extra}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
+            <span class="pid">${p.initials}</span>
+            <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
+            ${oc}
+          </div>`;
+        }
+    });
+    return rows;
 }
 
 // ────────────── YEAR VIEW ──────────────
@@ -13112,6 +13349,16 @@ window.addEventListener('resize', () => {
 // current view keeps its type — week view shows that date's week, etc.),
 // and Today returns to today. Built once, positioned under the label.
 let _miniCalMonth = null;   // first of the month the picker is showing
+// Who opened it: { anchor, pick(date), range() → [start, end] | null,
+// mark(date) → extra class }. The schedule's period label by default; the
+// Conflicts page opens it from its own month label.
+let _miniCal = null;
+
+function _miniCalPick(d) {
+    const pick = (_miniCal && _miniCal.pick) || goToDate;
+    closeMiniCal();
+    pick(d);
+}
 
 function miniCalEl() {
     let el = document.getElementById('miniCal');
@@ -13132,8 +13379,8 @@ function miniCalEl() {
             return;
         }
         const day = e.target.closest('[data-mc-date]');
-        if (day) { goToDate(parseDate(day.dataset.mcDate)); return; }
-        if (e.target.closest('[data-mc-today]')) goToDate(new Date(today));
+        if (day) { _miniCalPick(parseDate(day.dataset.mcDate)); return; }
+        if (e.target.closest('[data-mc-today]')) _miniCalPick(new Date(today));
     });
     return el;
 }
@@ -13156,7 +13403,8 @@ function renderMiniCal() {
     const el = miniCalEl();
     const first = _miniCalMonth;
     const gridStart = addDays(first, -first.getDay());
-    const range = miniCalShownRange();
+    const range = _miniCal && _miniCal.range ? _miniCal.range() : null;
+    const mark = _miniCal && _miniCal.mark;
     const inRange = d => range && fmt(d) >= fmt(range[0]) && fmt(d) <= fmt(range[1]);
     let cells = '';
     for (let i = 0; i < 42; i++) {
@@ -13167,6 +13415,8 @@ function renderMiniCal() {
         if (inRange(d)) cls.push('mc-shown');
         if (range && sameDay(d, range[0])) cls.push('mc-shown-start');
         if (range && sameDay(d, range[1])) cls.push('mc-shown-end');
+        const extra = mark ? mark(d) : '';
+        if (extra) cls.push(extra);
         cells += `<button type="button" class="${cls.join(' ')}" data-mc-date="${fmt(d)}" aria-label="${DOW[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}">${d.getDate()}</button>`;
     }
     el.innerHTML = `
@@ -13185,7 +13435,7 @@ function renderMiniCal() {
 // Fixed-position under the label, kept on screen (phones included).
 function positionMiniCal() {
     const el = document.getElementById('miniCal');
-    const label = document.getElementById('currentPeriod');
+    const label = _miniCal && _miniCal.anchor;
     if (!el || el.hidden || !label) return;
     const r = label.getBoundingClientRect();
     const w = el.offsetWidth;
@@ -13194,26 +13444,41 @@ function positionMiniCal() {
     el.style.top = (r.bottom + 6) + 'px';
 }
 
-function openMiniCal() {
-    _miniCalMonth = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+// opts (all optional): anchor, month (a date in the month to show first),
+// pick, range, mark — see _miniCal. No opts = the schedule's own picker.
+function openMiniCal(opts) {
+    _miniCal = Object.assign({
+        anchor: document.getElementById('currentPeriod'),
+        month: cursor,
+        pick: goToDate,
+        range: miniCalShownRange,
+        mark: null,
+    }, opts || {});
+    _miniCalMonth = new Date(_miniCal.month.getFullYear(), _miniCal.month.getMonth(), 1);
     renderMiniCal();
     const el = miniCalEl();
     el.hidden = false;
     positionMiniCal();
-    document.getElementById('currentPeriod').setAttribute('aria-expanded', 'true');
+    _miniCal.anchor.setAttribute('aria-expanded', 'true');
 }
 
 function closeMiniCal() {
     const el = document.getElementById('miniCal');
     if (el) el.hidden = true;
-    document.getElementById('currentPeriod').setAttribute('aria-expanded', 'false');
+    if (_miniCal && _miniCal.anchor) _miniCal.anchor.setAttribute('aria-expanded', 'false');
+}
+
+// Open from anchor, or close if it's already open from there.
+function toggleMiniCal(opts) {
+    const el = document.getElementById('miniCal');
+    const anchor = (opts && opts.anchor) || document.getElementById('currentPeriod');
+    if (el && !el.hidden && _miniCal && _miniCal.anchor === anchor) closeMiniCal();
+    else openMiniCal(opts);
 }
 
 document.getElementById('currentPeriod').addEventListener('click', e => {
     e.stopPropagation();
-    const el = document.getElementById('miniCal');
-    if (el && !el.hidden) closeMiniCal();
-    else openMiniCal();
+    toggleMiniCal();
 });
 document.addEventListener('click', e => {
     const el = document.getElementById('miniCal');

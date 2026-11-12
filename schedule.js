@@ -5726,9 +5726,8 @@ function _chItemHtml(key, c, showMine) {
       </div>`;
 }
 
-// Each day: a count of changes beside the date, and the people a change
-// moved outlined (the selected change's are made stronger afterwards, by
-// _tlRenderMonth).
+// Each day: the people a change moved outlined (the selected change's are
+// made stronger afterwards, by _tlRenderMonth).
 function _chDecorator(entries) {
     const byDay = new Map();
     entries.forEach(([, c]) => {
@@ -5746,10 +5745,10 @@ function _chDecorator(entries) {
         const k = fmt(date);
         const hit = byDay.get(k);
         if (!hit) return {};
-        const tip = hit.list.slice(0, 6).map(c => c.summary || '').join('\n') + (hit.list.length > 6 ? `\n+${hit.list.length - 6} more` : '');
+        // No count badge beside the date here (the user found them noisy);
+        // the outlined rows show what changed.
         return {
             rowDec: p => ({ cls: hit.people.has(p.id) ? 'rq-mark' : '' }),
-            flag: inMonth ? `<span class="rq-flag" title="${escapeHtml(tip)}">${hit.list.length}</span>` : '',
             ariaExtra: `, ${hit.list.length} change${hit.list.length === 1 ? '' : 's'}`,
         };
     };

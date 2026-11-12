@@ -8441,30 +8441,51 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .split-actions button.primary { color: #fff; background: var(--accent); border-color: var(--accent); }
 .split-actions button.primary:hover { background: #154463; }
 
-/* ════ CONFLICTS PAGE: month view + list by time until the conflict ════
-   The month cells are the schedule's own (.month-view, monthCellRowsHtml),
-   weekdays only, marked with each day's open conflicts. */
-#conflictsPage .conflicts-page-content { max-width: none; padding-bottom: 20px; }
-#conflictsPage .conflicts-page-header { align-items: center; padding-bottom: 16px; margin-bottom: 16px; }
-#conflictsPage .conflicts-page-title { margin: 0; }
+/* ════ TIMELINE PAGES (Conflicts, Requests): list + month view ════
+   The list sits on the left in collapsible time sections; the month cells
+   on the right are the schedule's own (.month-view, monthCellRowsHtml),
+   weekdays only, marked by each page. */
+.tl-content { max-width: none; margin: 0 auto; padding: 12px 4px 20px; }
+.tl-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    padding-bottom: 16px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--rule-soft);
+}
+.tl-title {
+    font-family: var(--serif);
+    font-size: 36px;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: -0.015em;
+    line-height: 1.05;
+    margin: 0;
+}
+.tl-header .req-tabs { margin: 0; }
 
 /* Desktop: the header is a toolbar-height band, edge to edge, whose bottom
    line continues the sidebar's line under "Pathology Schedule" — the same
    way the schedule toolbar does. */
 @media (min-width: 801px) {
-    #conflictsPage.page-shell { padding-top: 0; }
-    #conflictsPage .conflicts-page-content { padding-top: 0; }
-    #conflictsPage .conflicts-page-header {
+    .app .page-shell.tl-page { padding-top: 0; }
+    .tl-content { padding-top: 0; }
+    .tl-header {
+        flex-wrap: nowrap;
         height: var(--toolbar-h);
         box-sizing: border-box;
         margin: 0 -32px 16px;
         padding: 0 32px;
         border-bottom: 1px solid var(--rule);
     }
-    #conflictsPage .conflicts-page-title { font-size: 26px; line-height: 1; }
+    .tl-title { font-size: 26px; line-height: 1; }
 }
 
 .cf-body { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+.cf-side { flex: 1 1 360px; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .cf-cal { flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .cf-nav { display: flex; align-items: center; justify-content: center; gap: 8px; }
 .cf-nav .current-period { cursor: pointer; }
@@ -8485,7 +8506,6 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .wd-row.cf-miss .svc { flex: none; color: #9b2c22; font-weight: 600; }
 
 .cf-list {
-    flex: 1 1 360px;
     min-width: 0;
     background: #fff;
     border: 1px solid var(--rule-soft);
@@ -8565,16 +8585,68 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
     background: #b92a2a;
 }
 .mc-day.mc-cf-low::after { background: #ca8a04; }
+.mc-day.mc-rq::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 3px;
+    width: 4px;
+    height: 4px;
+    margin-left: -2px;
+    border-radius: 50%;
+    background: var(--accent);
+}
 .mc-day.mc-today::after { background: #fff; }
+
+/* Requests page: the requester's row on their requested days, and a count
+   of requests beside the date. */
+.month-view .day .wd-row.rq-mark { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.month-view .day .wd-row.rq-mark.is-sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.rq-flag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 15px;
+    height: 15px;
+    margin-left: 5px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    border-radius: 999px;
+    font-family: var(--sans);
+    font-style: normal;
+    font-size: 9.5px;
+    font-weight: 700;
+    line-height: 1;
+    color: #fff;
+    background: var(--accent);
+    vertical-align: middle;
+}
+.cf-item-title .split-avatar { width: 22px; height: 22px; font-size: 9px; margin-top: -1px; }
+.rq-item-note { color: var(--ink); }
+.rq-item-status.tone-warn { color: #8a5a00; font-weight: 500; }
+.rq-item-status.tone-ok { color: #2f6b3a; }
+.rq-item-status.tone-bad { color: #9b3b22; }
+/* The full request card (detail, decision, actions) under the selected item,
+   without its own frame or heading — the item above already shows those. */
+.rq-item-card { padding: 0 16px 14px 46px; }
+.rq-item-card .req-card,
+.rq-item-card .req-card[class*="status-"] { padding: 0; margin: 0; border: 0; background: none; box-shadow: none; }
+.rq-item-card .req-card-head { display: none; }
+.rq-item-card .req-card .req-detail { font-size: 13px; }
+.rq-item-card .req-card > .req-note { display: none; }   /* already on the item */
+.rq-item-card .req-card-actions { margin-top: 10px; justify-content: flex-start; }
+/* The new-request buttons sit above the list. */
+.cf-side .requests-page-bar { justify-content: flex-start; margin: 0; }
+.cf-side .requests-page-bar .req-new-group { justify-content: flex-start; }
 
 /* Wide screens: the page fills the window. The list (left) scrolls on its
    own; the calendar (right) splits the remaining height between its weeks,
    and the cell text grows with the cell (container units), so a 1080p
    laptop and a 4K monitor both get a full, readable month. */
 @media (min-width: 1024px) {
-    #conflictsPage:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; }
-    #conflictsPage .conflicts-page-content { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; }
-    #conflictsPage .conflicts-page-header { flex: none; }
+    .tl-page:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; }
+    .tl-content { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; }
+    .tl-header { flex: none; }
     .cf-body {
         flex: 1 1 auto;
         min-height: 0;
@@ -8583,9 +8655,10 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
         gap: 20px;
         align-items: stretch;
     }
-    .cf-list { height: 100%; min-height: 0; overflow-y: auto; }
+    .cf-side { min-height: 0; }
+    .cf-side > .cf-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
     .cf-cal { min-height: 0; overflow-y: auto; }
-    #cfMonth { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .cf-month-host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
     .month-view.cf-month {
         flex: 1 1 auto;
         /* Too short a window → the weeks keep 96px and the calendar scrolls. */
@@ -8621,7 +8694,7 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 }
 
 @media (max-width: 800px) {
-    .cf-list { flex-basis: 100%; }
+    .cf-side { flex-basis: 100%; }
     .cf-sec-head { position: static; }
     .cf-nav .current-period { min-width: 0; font-size: 19px; }
 }

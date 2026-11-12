@@ -3204,11 +3204,12 @@ function _cfMonthHtml(selDays) {
     const m = _cfMonth.getMonth();
     const first = new Date(y, m, 1);
     const last = new Date(y, m + 1, 0);
-    let html = '<div class="month-view cf-month">'
-        + ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(d => `<div class="dow-h">${d}</div>`).join('');
+    let html = '';
+    let weeks = 0;
     for (let mon = addDays(first, -((first.getDay() + 6) % 7)); mon.getTime() <= last.getTime(); mon = addDays(mon, 7)) {
         const days = [0, 1, 2, 3, 4].map(j => addDays(mon, j));
         if (!days.some(d => d.getMonth() === m)) continue;
+        weeks++;
         days.forEach(date => {
             const k = fmt(date);
             const inMonth = date.getMonth() === m;
@@ -3233,7 +3234,10 @@ function _cfMonthHtml(selDays) {
             else if (date.getTime() < today.getTime()) cls.push('cf-past');
             if (selDays.has(k)) cls.push('cf-selected');
             const label = `${_conflictDayLabel(date)}${open.length ? `, ${open.length} conflict${open.length === 1 ? '' : 's'}` : ''}`;
-            html += `<button type="button" class="${cls.join(' ')}" data-date="${k}" aria-label="${escapeHtml(label)}"${selDays.has(k) ? ' aria-current="date"' : ''}>
+            // How many rows the cell holds, so the text can be sized to fit them.
+            const nRows = (rows.match(/class="wd-row/g) || []).length;
+            if (nRows > 4) cls.push('cf-many');
+            html +=`<button type="button" class="${cls.join(' ')}" style="--cf-rows:${Math.max(4, nRows)}" data-date="${k}" aria-label="${escapeHtml(label)}"${selDays.has(k) ? ' aria-current="date"' : ''}>
                 <span class="day-num-row">
                   <span class="num">${date.getDate()}${inMonth ? flagHtml(date) : ''}</span>
                   ${holiday ? `<span class="month-holiday-badge" title="${escapeHtml(holiday)}">${escapeHtml(holiday)}</span>` : ''}
@@ -3242,7 +3246,10 @@ function _cfMonthHtml(selDays) {
               </button>`;
         });
     }
-    return html + '</div>';
+    // --cf-weeks lets the grid split the available height between the weeks.
+    return `<div class="month-view cf-month" style="--cf-weeks:${weeks}">`
+        + ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(d => `<div class="dow-h">${d}</div>`).join('')
+        + html + '</div>';
 }
 
 function _cfItemHtml(c, seen) {

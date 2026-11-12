@@ -195,6 +195,15 @@
     var listeners = []; // { path, cb, errCb }
     var notifying = false;
     var notifyAgain = false;
+    // Paths written since the last pass. Like real Firebase, a write only
+    // fires listeners at, above or below the path it touched — so a seen-
+    // state write doesn't re-run every data listener (which made page
+    // switches look far slower in the mock than in production).
+    var pendingPaths = [];
+    function pathsOverlap(a, b) {
+        return a === b || a === '' || b === ''
+            || a.indexOf(b + '/') === 0 || b.indexOf(a + '/') === 0;
+    }
 
     function snapshotFor(path) {
         var segs = splitPath(path);
@@ -205,7 +214,9 @@
             val: function () { return v === undefined ? null : v; },
         };
     }
-    function notifyAll() {
+    // path: what was written ('' or omitted = everything).
+    function notifyAll(path) {
+        pendingPaths.push(path ? splitPath(path).join('/') : '');
         if (notifying) { notifyAgain = true; return; }
         notifying = true;
         try {
@@ -214,7 +225,11 @@
                 notifyAgain = false;
                 passes++;
                 persist();
+                var changed = pendingPaths;
+                pendingPaths = [];
                 listeners.slice().forEach(function (l) {
+                    var lp = splitPath(l.path).join('/');
+                    if (!changed.some(function (p) { return pathsOverlap(p, lp); })) return;
                     try {
                         l.cb(snapshotFor(l.path));
                     } catch (e) {
@@ -273,12 +288,12 @@
 
             set: function (value) {
                 setAt(splitPath(norm), value);
-                notifyAll();
+                notifyAll(norm);
                 return Promise.resolve();
             },
             remove: function () {
                 setAt(splitPath(norm), null);
-                notifyAll();
+                notifyAll(norm);
                 return Promise.resolve();
             },
             update: function (obj) {
@@ -286,7 +301,7 @@
                     Object.keys(obj).forEach(function (rel) {
                         setAt(splitPath(joinPath(norm, rel)), obj[rel]);
                     });
-                    notifyAll();
+                    notifyAll(norm);
                 }
                 return Promise.resolve();
             },
@@ -295,7 +310,7 @@
                 var childPath = joinPath(norm, key);
                 if (value !== undefined) {
                     setAt(splitPath(childPath), value);
-                    notifyAll();
+                    notifyAll(childPath);
                 }
                 // ThenableReference: awaitable AND usable as a ref (.key etc).
                 // CRITICAL: the promise must resolve with a PLAIN ref — if it

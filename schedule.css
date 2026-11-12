@@ -8601,7 +8601,8 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 /* Requests page: the requester's row on their requested days, and a count
    of requests beside the date. */
 .month-view .day .wd-row.rq-mark { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
-.month-view .day .wd-row.rq-mark.is-sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+/* The selected item's rows (set by _tlRenderMonth without rebuilding). */
+.month-view .day .wd-row.is-sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 .rq-flag {
     display: inline-flex;
     align-items: center;
@@ -8663,8 +8664,10 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
         align-items: stretch;
     }
     .cf-side { min-height: 0; }
-    .cf-side > .cf-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-    .cf-cal { min-height: 0; overflow-y: auto; }
+    /* Containment: redrawing the list doesn't make the browser re-lay-out
+       the month beside it, and vice versa. */
+    .cf-side > .cf-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; contain: strict; }
+    .cf-cal { min-height: 0; overflow-y: auto; contain: strict; }
     .cf-month-host { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
     .month-view.cf-month {
         flex: 1 1 auto;

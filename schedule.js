@@ -3049,9 +3049,9 @@ function _tlSetHtml(el, html) {
 }
 
 // Draw the month into host, then mark the selection — sel: { days: Set of
-// yyyy-mm-dd to ring, cells: Set of "yyyy-mm-dd|pathId" rows to outline }.
+// yyyy-mm-dd to box, cells: Set of "yyyy-mm-dd|pathId" rows to outline }.
 // The grid is only replaced when its content changed: picking a different
-// item usually just moves the ring, which costs a repaint instead of a
+// item usually just moves the box, which costs a repaint instead of a
 // rebuild and a full re-layout of the month.
 function _tlRenderMonth(host, month, decorate, sel) {
     const html = _tlMonthHtml(month, decorate);
@@ -3059,6 +3059,7 @@ function _tlRenderMonth(host, month, decorate, sel) {
         host.innerHTML = html;
         host._tlHtml = html;
     }
+    const grid = host.querySelector('.cf-month');
     const days = sel.days || new Set();
     host.querySelectorAll('.day.cf-selected').forEach(d => {
         if (days.has(d.dataset.date)) return;
@@ -3071,6 +3072,27 @@ function _tlRenderMonth(host, month, decorate, sel) {
         d.classList.add('cf-selected');
         d.setAttribute('aria-current', 'date');
     });
+    // One box around each run of selected days in a week row, rather than a
+    // ring per day. Boxes are grid items placed over the days' cells.
+    host.querySelectorAll('.tl-sel-box').forEach(b => b.remove());
+    if (grid) {
+        const runs = [];
+        grid.querySelectorAll('.day.cf-selected').forEach(d => {
+            const row = Number(d.dataset.row);
+            const col = Number(d.dataset.col);
+            const last = runs[runs.length - 1];
+            if (last && last.row === row && last.end === col - 1) last.end = col;
+            else runs.push({ row, start: col, end: col });
+        });
+        runs.forEach(r => {
+            const box = document.createElement('div');
+            box.className = 'tl-sel-box';
+            box.setAttribute('aria-hidden', 'true');
+            box.style.gridRow = String(r.row);
+            box.style.gridColumn = `${r.start} / ${r.end + 1}`;
+            grid.appendChild(box);
+        });
+    }
     host.querySelectorAll('.wd-row.is-sel').forEach(r => r.classList.remove('is-sel'));
     (sel.cells || new Set()).forEach(cell => {
         const [k, pid] = cell.split('|');
@@ -3092,7 +3114,10 @@ function _tlMonthHtml(month, decorate) {
         const days = [0, 1, 2, 3, 4].map(j => addDays(mon, j));
         if (!days.some(d => d.getMonth() === m)) continue;
         weeks++;
-        days.forEach(date => {
+        // Days are placed explicitly (row 1 is the weekday header) so the
+        // selection boxes can be laid over them in the same grid.
+        const row = weeks + 1;
+        days.forEach((date, j) => {
             const k = fmt(date);
             const inMonth = date.getMonth() === m;
             const holiday = inMonth ? getFederalHoliday(date) : null;
@@ -3107,7 +3132,7 @@ function _tlMonthHtml(month, decorate) {
             const nRows = (rows.match(/class="wd-row/g) || []).length;
             if (nRows > 4) cls.push('cf-many');
             const label = _conflictDayLabel(date) + (dec.ariaExtra || '');
-            html += `<button type="button" class="${cls.join(' ')}" style="--cf-rows:${Math.max(4, nRows)}" data-date="${k}" aria-label="${escapeHtml(label)}">
+            html += `<button type="button" class="${cls.join(' ')}" style="--cf-rows:${Math.max(4, nRows)}; grid-row:${row}; grid-column:${j + 1}" data-date="${k}" data-row="${row}" data-col="${j + 1}" aria-label="${escapeHtml(label)}">
                 <span class="day-num-row">
                   <span class="num">${date.getDate()}${dec.flag || ''}</span>
                   ${holiday ? `<span class="month-holiday-badge" title="${escapeHtml(holiday)}">${escapeHtml(holiday)}</span>` : ''}
@@ -5844,7 +5869,7 @@ window.__renderChangesPage = renderChangesPage;
     }, () => {
         const days = new Set();
         _chEntries().forEach(([, c]) => _chgSpan(c).days.forEach(k => days.add(k)));
-        return { month: _chMonth || today, pick: _chPickDay, mark: d => (days.has(fmt(d)) ? 'mc-rq' : '') };
+        return { month: _chMonth || today, pick: _chPickDay, mark: d => (days.has(fmt(d)) ? 'mc-ch' : '') };
     });
 
     // Scope tabs (Affecting me / All changes)

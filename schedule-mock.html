@@ -243,15 +243,14 @@
             <!-- Default page: schedule renders here -->
             <main id="main"></main>
 
-            <!-- Requests page — admin reviews team requests; non-admin tracks own.
-                 Requests listed on the left, the selected one on the right. -->
-            <div class="page-shell" id="requestsPage" hidden>
-                <div class="requests-page-content">
-                    <header class="requests-page-header">
-                        <div class="requests-page-heading">
-                            <h2 class="requests-page-title" id="requestsPageTitle">Requests</h2>
-                            <p class="requests-page-subtitle" id="requestsPageSubtitle">Review and decide on schedule change requests from the team.</p>
-                        </div>
+            <!-- Requests page — the director reviews team requests; everyone else
+                 tracks their own. Laid out like Conflicts: the list on the left in
+                 collapsible sections (Pending by when the dates come up, History by
+                 when decided), the month view on the right. -->
+            <div class="page-shell tl-page" id="requestsPage" hidden>
+                <div class="tl-content">
+                    <header class="tl-header">
+                        <h2 class="tl-title" id="requestsPageTitle">Requests</h2>
                         <div class="req-tabs requests-page-tabs" id="requestsPageTabs">
                             <button class="req-tab active" data-rtab="pending">
                                 <span>Pending</span>
@@ -264,23 +263,30 @@
                         </div>
                     </header>
 
-                    <div class="split" id="requestsSplit">
-                        <nav class="split-list" id="requestsPageList" aria-label="Requests"></nav>
-                        <section class="split-detail" id="requestsPageDetail" aria-label="Selected request"></section>
+                    <div class="cf-body">
+                        <div class="cf-side" id="rqSide">
+                            <div class="cf-list" id="rqList" aria-label="Requests"></div>
+                        </div>
+                        <section class="cf-cal" aria-label="Month">
+                            <div class="cf-nav">
+                                <button class="nav-btn" id="rqPrev" type="button" title="Previous month" aria-label="Previous month">‹</button>
+                                <button class="current-period" id="rqPeriod" type="button" title="Go to a date" aria-haspopup="dialog" aria-expanded="false">—</button>
+                                <button class="nav-btn" id="rqNext" type="button" title="Next month" aria-label="Next month">›</button>
+                            </div>
+                            <div class="cf-month-host" id="rqMonth"></div>
+                        </section>
                     </div>
                 </div>
             </div>
 
             <!-- Conflicts page — admin-only: everything wrong with the schedule
                  (on-call/PTO overlaps, coverage rule breaks, soft rule breaks).
-                 The month view on the left, the list on the right ordered by
-                 time until the conflict, in collapsible sections. -->
-            <div class="page-shell" id="conflictsPage" hidden>
-                <div class="conflicts-page-content">
-                    <header class="conflicts-page-header">
-                        <div class="conflicts-page-heading">
-                            <h2 class="conflicts-page-title">Conflicts</h2>
-                        </div>
+                 The list on the left ordered by time until the conflict, in
+                 collapsible sections; the month view on the right. -->
+            <div class="page-shell tl-page" id="conflictsPage" hidden>
+                <div class="tl-content">
+                    <header class="tl-header">
+                        <h2 class="tl-title">Conflicts</h2>
                         <div class="conflicts-page-controls">
                             <div class="req-tabs conflicts-page-tabs" id="conflictsPageTabs">
                                 <button class="req-tab active" data-ctab="open">
@@ -296,14 +302,16 @@
                     </header>
 
                     <div class="cf-body">
-                        <div class="cf-list" id="cfList" aria-label="Conflicts by time until they happen"></div>
+                        <div class="cf-side">
+                            <div class="cf-list" id="cfList" aria-label="Conflicts by time until they happen"></div>
+                        </div>
                         <section class="cf-cal" aria-label="Month">
                             <div class="cf-nav">
                                 <button class="nav-btn" id="cfPrev" type="button" title="Previous month" aria-label="Previous month">‹</button>
                                 <button class="current-period" id="cfPeriod" type="button" title="Go to a date" aria-haspopup="dialog" aria-expanded="false">—</button>
                                 <button class="nav-btn" id="cfNext" type="button" title="Next month" aria-label="Next month">›</button>
                             </div>
-                            <div id="cfMonth"></div>
+                            <div class="cf-month-host" id="cfMonth"></div>
                         </section>
                     </div>
                 </div>

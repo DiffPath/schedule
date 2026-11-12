@@ -1800,6 +1800,7 @@ auth.onAuthStateChanged(user => {
         // Requests page likewise lands on the Pending tab — without this the
         // tab selection leaks from the previous user in the same session.
         activeRequestsPageTab = 'pending';
+        _rqSel = null; _rqDay = null; _rqMonth = null;
         // Start the data listeners now that reads are permitted. When data
         // arrives, checkReady() handles filter defaults + render.
         startDataListeners();
@@ -3027,35 +3028,168 @@ function splitShortTime(ts) {
         : `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`;
 }
 
-// The day as scheduled: each pathologist and what they're on, highlightPid
-// picked out.
-function splitDayGrid(date, highlightPid) {
-    const dk = fmt(date);
-    const assign = getDayAssignments(date);
-    return '<div class="split-day-grid">' + pathologists.map(p => {
-        const a = assign[p.id];
-        if (!a || a.type === 'blank') return '';
-        const what = a.type === 'pto' ? timeOffName(timeOffOn(p.id, date))
-            : a.type === 'off' ? 'Off'
-            : (a.service ? a.service.name : '—');
-        const extra = (isLockActiveForRender(dk, p.id, a) ? ' · locked' : '') + (a.onCall ? ' · on call' : '');
-        return `<div class="split-day-cell${p.id === highlightPid ? ' is-me' : ''}" style="--c:${p.color}">
-            <span class="split-day-dot" aria-hidden="true"></span>
-            <span class="split-day-name">${escapeHtml(_shortPathName(p.id))}</span>
-            <span class="split-day-svc">${escapeHtml(what + extra)}</span>
-          </div>`;
-    }).join('') + '</div>';
+// ── Timeline pages (Conflicts, Requests): shared pieces ─────────────────
+// Both pages show a list in collapsible time sections on the left and the
+// schedule's month view on the right. Picking a list item shows its days in
+// the month; picking a day selects its item.
+
+// Which sections are collapsed, remembered per browser under lsKey.
+function _tlStore(lsKey) {
+    let closed = {};
+    try { closed = JSON.parse(localStorage.getItem(lsKey)) || {}; } catch (_) { closed = {}; }
+    return {
+        closed,
+        set(id, isClosed) {
+            if (isClosed) closed[id] = true; else delete closed[id];
+            try { localStorage.setItem(lsKey, JSON.stringify(closed)); } catch (_) {}
+        },
+    };
+}
+
+// Whole days from today to d (negative = in the past).
+function _tlDaysFromToday(d) {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    return Math.round((x.getTime() - today.getTime()) / 864e5);
+}
+
+function _tlCountdown(d) {
+    if (d < 0) return 'Started';
+    if (d === 0) return 'Today';
+    if (d === 1) return 'Tomorrow';
+    if (d < 14) return `In ${d} days`;
+    if (d < 56) return `In ${Math.round(d / 7)} weeks`;
+    return `In ${Math.round(d / 30.4)} months`;
+}
+
+function _tlAgo(d) {
+    if (d <= 0) return 'Today';
+    if (d === 1) return 'Yesterday';
+    if (d < 14) return `${d} days ago`;
+    if (d < 56) return `${Math.round(d / 7)} weeks ago`;
+    return `${Math.round(d / 30.4)} months ago`;
+}
+
+// "Thu, Nov 12" (the year only when it isn't this one).
+function _cfDayShort(d) {
+    return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`
+        + (d.getFullYear() !== today.getFullYear() ? `, ${d.getFullYear()}` : '');
+}
+
+// "Thu, Nov 12" / "Nov 16 – 18" / "Nov 30 – Dec 4".
+function _tlRange(s, e) {
+    if (sameDay(s, e)) return _cfDayShort(s);
+    return s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()
+        ? `${MONTHS_SHORT[s.getMonth()]} ${s.getDate()} – ${e.getDate()}`
+        : `${MONTHS_SHORT[s.getMonth()]} ${s.getDate()} – ${MONTHS_SHORT[e.getMonth()]} ${e.getDate()}`;
+}
+
+function _conflictDayLabel(d) {
+    return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+// Collapsible sections. sections: [{ id, label, items: [html] }].
+function _tlSectionsHtml(sections, store) {
+    return sections.map(s => {
+        const closed = !!store.closed[s.id];
+        const body = s.items.length ? s.items.join('') : '<p class="cf-sec-empty">Nothing in this window.</p>';
+        return `<section class="cf-sec${closed ? ' is-closed' : ''}">
+            <h3 class="cf-sec-head">
+              <button type="button" class="cf-sec-toggle" data-cfsec="${s.id}" aria-expanded="${!closed}">
+                <svg class="cf-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span class="cf-sec-label">${s.label}</span>
+                <span class="cf-sec-count">${s.items.length}</span>
+              </button>
+            </h3>
+            <div class="cf-sec-body"${closed ? ' hidden' : ''}>${body}</div>
+          </section>`;
+    }).join('');
+}
+
+// The month grid (weekdays only) built from the schedule's own cells.
+// decorate(date, inMonth) → { rowDec(p, a), extraRows, flag, ariaExtra }.
+function _tlMonthHtml(month, selDays, decorate) {
+    const y = month.getFullYear();
+    const m = month.getMonth();
+    const first = new Date(y, m, 1);
+    const last = new Date(y, m + 1, 0);
+    let html = '';
+    let weeks = 0;
+    for (let mon = addDays(first, -((first.getDay() + 6) % 7)); mon.getTime() <= last.getTime(); mon = addDays(mon, 7)) {
+        const days = [0, 1, 2, 3, 4].map(j => addDays(mon, j));
+        if (!days.some(d => d.getMonth() === m)) continue;
+        weeks++;
+        days.forEach(date => {
+            const k = fmt(date);
+            const inMonth = date.getMonth() === m;
+            const holiday = inMonth ? getFederalHoliday(date) : null;
+            const dec = decorate(date, inMonth) || {};
+            const rows = monthCellRowsHtml(date, inMonth, pathologists, dec.rowDec) + (dec.extraRows || '');
+            const cls = ['day'];
+            if (!inMonth) cls.push('outside');
+            if (holiday) cls.push('holiday');
+            if (sameDay(date, today)) cls.push('today');
+            else if (date.getTime() < today.getTime()) cls.push('cf-past');
+            if (selDays.has(k)) cls.push('cf-selected');
+            // How many rows the cell holds, so the text can be sized to fit them.
+            const nRows = (rows.match(/class="wd-row/g) || []).length;
+            if (nRows > 4) cls.push('cf-many');
+            const label = _conflictDayLabel(date) + (dec.ariaExtra || '');
+            html += `<button type="button" class="${cls.join(' ')}" style="--cf-rows:${Math.max(4, nRows)}" data-date="${k}" aria-label="${escapeHtml(label)}"${selDays.has(k) ? ' aria-current="date"' : ''}>
+                <span class="day-num-row">
+                  <span class="num">${date.getDate()}${dec.flag || ''}</span>
+                  ${holiday ? `<span class="month-holiday-badge" title="${escapeHtml(holiday)}">${escapeHtml(holiday)}</span>` : ''}
+                </span>
+                <span class="wd-rows">${rows}</span>
+              </button>`;
+        });
+    }
+    // --cf-weeks lets the grid split the available height between the weeks.
+    return `<div class="month-view cf-month" style="--cf-weeks:${weeks}">`
+        + ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(d => `<div class="dow-h">${d}</div>`).join('')
+        + html + '</div>';
+}
+
+function _tlPeriodLabel(el, month) {
+    if (!el) return;
+    const cur = month.getFullYear() === today.getFullYear() && month.getMonth() === today.getMonth();
+    el.innerHTML = `${MONTHS[month.getMonth()]} <span class="year">${month.getFullYear()}</span>`;
+    el.classList.toggle('off-today', !cur);
+}
+
+// Bring the selected list item into view inside its list (not the page).
+function _tlReveal(listEl) {
+    const item = listEl && listEl.querySelector('.cf-item.is-selected');
+    if (!item || listEl.scrollHeight <= listEl.clientHeight) return;
+    const top = item.getBoundingClientRect().top - listEl.getBoundingClientRect().top + listEl.scrollTop;
+    if (top < listEl.scrollTop + 40 || top + item.offsetHeight > listEl.scrollTop + listEl.clientHeight) {
+        listEl.scrollTop = Math.max(0, top - 48);
+    }
+}
+
+// ‹ › and the month label (which opens the schedule's date picker).
+function _tlWireNav(prefix, stepMonth, pickerOpts) {
+    const prev = document.getElementById(prefix + 'Prev');
+    const next = document.getElementById(prefix + 'Next');
+    const period = document.getElementById(prefix + 'Period');
+    if (prev) prev.addEventListener('click', () => stepMonth(-1));
+    if (next) next.addEventListener('click', () => stepMonth(1));
+    if (period) {
+        period.addEventListener('click', e => {
+            e.stopPropagation();
+            toggleMiniCal(Object.assign({ anchor: period, range: null }, pickerOpts()));
+        });
+    }
 }
 
 // ── Conflicts page ──────────────────────────────────────────────────────
-// The month view (the schedule's month cells, marked with each day's
-// conflicts) beside a list ordered by time until the conflict, in
-// collapsible sections: within a week / month / 3 months / year. Picking a
-// list item shows its day in the month; picking a day selects its conflict.
+// The list ordered by time until the conflict (within a week / month /
+// 3 months / year) beside the month view, each day marked with its open
+// conflicts.
 let activeConflictsTab = 'open';
 let _cfMonth = null;   // first of the month the calendar shows
 let _cfSel = null;     // selected conflict key
 let _cfDay = null;     // selected day (yyyy-mm-dd), with or without a conflict
+const _cfStore = _tlStore('conflictSectionsClosed');
 
 const CONFLICT_KIND_META = {
     callpto: { label: 'On call / PTO', tone: 'high' },
@@ -3081,34 +3215,11 @@ const CF_MISSING = {
 // …and its 3-letter code for phone-width month cells.
 const CF_MISSING_ABBR = { Huntley: 'HUN', McHenry: 'MCH', 'Cyto/Gross': 'CYT', Bigs: 'BIG', 'Breast Bx/WFH': 'WFH' };
 
-// Collapsed sections, remembered per browser.
-const _cfClosed = (() => {
-    try { return JSON.parse(localStorage.getItem('conflictSectionsClosed')) || {}; } catch (_) { return {}; }
-})();
-function _cfSetClosed(id, closed) {
-    if (closed) _cfClosed[id] = true; else delete _cfClosed[id];
-    try { localStorage.setItem('conflictSectionsClosed', JSON.stringify(_cfClosed)); } catch (_) {}
-}
-
-function _cfDaysUntil(c) { return Math.round((c.date.getTime() - today.getTime()) / 864e5); }
+function _cfDaysUntil(c) { return _tlDaysFromToday(c.date); }
 
 function _cfSectionOf(c) {
     const d = _cfDaysUntil(c);
     return (CF_SECTIONS.find(s => d <= s.max) || CF_SECTIONS[CF_SECTIONS.length - 1]).id;
-}
-
-function _cfCountdown(d) {
-    if (d <= 0) return 'Today';
-    if (d === 1) return 'Tomorrow';
-    if (d < 14) return `In ${d} days`;
-    if (d < 56) return `In ${Math.round(d / 7)} weeks`;
-    return `In ${Math.round(d / 30.4)} months`;
-}
-
-// "Thu, Nov 12" (the year only when it isn't this one).
-function _cfDayShort(d) {
-    return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`
-        + (d.getFullYear() !== today.getFullYear() ? `, ${d.getFullYear()}` : '');
 }
 
 function _cfWeekday(d) {
@@ -3116,15 +3227,7 @@ function _cfWeekday(d) {
 }
 
 function _conflictWhen(c) {
-    if (c.dateStr === c.endStr) return _cfDayShort(c.date);
-    const e = parseDate(c.endStr);
-    return c.date.getMonth() === e.getMonth()
-        ? `${MONTHS_SHORT[c.date.getMonth()]} ${c.date.getDate()} – ${e.getDate()}`
-        : `${MONTHS_SHORT[c.date.getMonth()]} ${c.date.getDate()} – ${MONTHS_SHORT[e.getMonth()]} ${e.getDate()}`;
-}
-
-function _conflictDayLabel(d) {
-    return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+    return _tlRange(c.date, parseDate(c.endStr));
 }
 
 function _cfNames(arr) {
@@ -3193,63 +3296,28 @@ function _cfSelect(c, dayKey) {
     _cfDay = dayKey || (c ? c.dateStr : null);
     const d = parseDate(_cfDay || fmt(today));
     _cfMonth = new Date(d.getFullYear(), d.getMonth(), 1);
-    if (c && _cfClosed[_cfSectionOf(c)]) _cfSetClosed(_cfSectionOf(c), false);
+    if (c && _cfStore.closed[_cfSectionOf(c)]) _cfStore.set(_cfSectionOf(c), false);
 }
 
-// The month grid, weekdays only, with each day's open conflicts marked:
-// the person breaking a soft rule is outlined, a service nobody is on gets
-// a dashed "No …" row, and On Call turns red for someone on PTO.
-function _cfMonthHtml(selDays) {
-    const y = _cfMonth.getFullYear();
-    const m = _cfMonth.getMonth();
-    const first = new Date(y, m, 1);
-    const last = new Date(y, m + 1, 0);
-    let html = '';
-    let weeks = 0;
-    for (let mon = addDays(first, -((first.getDay() + 6) % 7)); mon.getTime() <= last.getTime(); mon = addDays(mon, 7)) {
-        const days = [0, 1, 2, 3, 4].map(j => addDays(mon, j));
-        if (!days.some(d => d.getMonth() === m)) continue;
-        weeks++;
-        days.forEach(date => {
-            const k = fmt(date);
-            const inMonth = date.getMonth() === m;
-            const holiday = inMonth ? getFederalHoliday(date) : null;
-            const open = conflictsForDate(date).filter(c => !c.accepted);
-            const soft = new Set(open.filter(c => c.kind === 'soft' && c.pathId != null).map(c => c.pathId));
-            const callBad = new Set(open.filter(c => c.kind === 'callpto').map(c => c.pathId));
-            let rows = monthCellRowsHtml(date, inMonth, pathologists, p => ({
-                cls: soft.has(p.id) ? 'cf-soft' : '',
-                ocBad: callBad.has(p.id),
-            }));
-            open.filter(c => c.kind === 'hard').forEach(c => {
-                const miss = CF_MISSING[c.detail];
-                const full = miss ? 'No ' + miss : c.detail;
-                const abbr = miss ? 'No ' + CF_MISSING_ABBR[miss] : '!';
-                rows += `<div class="wd-row cf-miss" title="${escapeHtml(c.detail)}"><span class="svc"><span class="svc-full">${escapeHtml(full)}</span><span class="svc-abbr">${escapeHtml(abbr)}</span></span></div>`;
-            });
-            const cls = ['day'];
-            if (!inMonth) cls.push('outside');
-            if (holiday) cls.push('holiday');
-            if (sameDay(date, today)) cls.push('today');
-            else if (date.getTime() < today.getTime()) cls.push('cf-past');
-            if (selDays.has(k)) cls.push('cf-selected');
-            const label = `${_conflictDayLabel(date)}${open.length ? `, ${open.length} conflict${open.length === 1 ? '' : 's'}` : ''}`;
-            // How many rows the cell holds, so the text can be sized to fit them.
-            const nRows = (rows.match(/class="wd-row/g) || []).length;
-            if (nRows > 4) cls.push('cf-many');
-            html +=`<button type="button" class="${cls.join(' ')}" style="--cf-rows:${Math.max(4, nRows)}" data-date="${k}" aria-label="${escapeHtml(label)}"${selDays.has(k) ? ' aria-current="date"' : ''}>
-                <span class="day-num-row">
-                  <span class="num">${date.getDate()}${inMonth ? flagHtml(date) : ''}</span>
-                  ${holiday ? `<span class="month-holiday-badge" title="${escapeHtml(holiday)}">${escapeHtml(holiday)}</span>` : ''}
-                </span>
-                <span class="wd-rows">${rows}</span>
-              </button>`;
-        });
-    }
-    // --cf-weeks lets the grid split the available height between the weeks.
-    return `<div class="month-view cf-month" style="--cf-weeks:${weeks}">`
-        + ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map(d => `<div class="dow-h">${d}</div>`).join('')
-        + html + '</div>';
+// Each day's open conflicts: the person breaking a soft rule is outlined, a
+// service nobody is on gets a dashed "No …" row, and On Call turns red for
+// someone on PTO.
+function _cfDecorateDay(date, inMonth) {
+    const open = conflictsForDate(date).filter(c => !c.accepted);
+    const soft = new Set(open.filter(c => c.kind === 'soft' && c.pathId != null).map(c => c.pathId));
+    const callBad = new Set(open.filter(c => c.kind === 'callpto').map(c => c.pathId));
+    const extraRows = open.filter(c => c.kind === 'hard').map(c => {
+        const miss = CF_MISSING[c.detail];
+        const full = miss ? 'No ' + miss : c.detail;
+        const abbr = miss ? 'No ' + CF_MISSING_ABBR[miss] : '!';
+        return `<div class="wd-row cf-miss" title="${escapeHtml(c.detail)}"><span class="svc"><span class="svc-full">${escapeHtml(full)}</span><span class="svc-abbr">${escapeHtml(abbr)}</span></span></div>`;
+    }).join('');
+    return {
+        rowDec: p => ({ cls: soft.has(p.id) ? 'cf-soft' : '', ocBad: callBad.has(p.id) }),
+        extraRows,
+        flag: inMonth ? flagHtml(date) : '',
+        ariaExtra: open.length ? `, ${open.length} conflict${open.length === 1 ? '' : 's'}` : '',
+    };
 }
 
 function _cfItemHtml(c, seen) {
@@ -3276,7 +3344,7 @@ function _cfItemHtml(c, seen) {
     return `<div class="cf-item${on ? ' is-selected' : ''}">
         <button type="button" class="cf-item-main" data-cfpick="${escapeHtml(c.key)}" aria-pressed="${on}">
           <span class="cf-item-meta">
-            <span class="cf-countdown">${_cfCountdown(_cfDaysUntil(c))}</span>
+            <span class="cf-countdown">${_tlCountdown(_cfDaysUntil(c))}</span>
             <span>${escapeHtml(_conflictWhen(c))} · ${escapeHtml(meta.label)}</span>
             ${isNew ? '<span class="split-new">New</span>' : ''}
           </span>
@@ -3294,29 +3362,16 @@ function _cfListHtml(pool, seen) {
             ? '<div class="cf-empty"><span class="split-empty-headline">All clear.</span>No conflicts in the next year. Coverage rules, soft rules and on-call/PTO overlaps all check out.</div>'
             : '<div class="cf-empty"><span class="split-empty-headline">Nothing accepted yet.</span>Accepting a conflict takes it off the open list without changing the schedule.</div>';
     }
-    return CF_SECTIONS.map(s => {
-        const items = pool.filter(c => _cfSectionOf(c) === s.id);
-        const closed = !!_cfClosed[s.id];
-        const body = items.length
-            ? items.map(c => _cfItemHtml(c, seen)).join('')
-            : '<p class="cf-sec-empty">Nothing in this window.</p>';
-        return `<section class="cf-sec${closed ? ' is-closed' : ''}">
-            <h3 class="cf-sec-head">
-              <button type="button" class="cf-sec-toggle" data-cfsec="${s.id}" aria-expanded="${!closed}">
-                <svg class="cf-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                <span class="cf-sec-label">${s.label}</span>
-                <span class="cf-sec-count">${items.length}</span>
-              </button>
-            </h3>
-            <div class="cf-sec-body"${closed ? ' hidden' : ''}>${body}</div>
-          </section>`;
-    }).join('');
+    return _tlSectionsHtml(CF_SECTIONS.map(s => ({
+        id: s.id,
+        label: s.label,
+        items: pool.filter(c => _cfSectionOf(c) === s.id).map(c => _cfItemHtml(c, seen)),
+    })), _cfStore);
 }
 
 function renderConflictsPage() {
     const monthEl = document.getElementById('cfMonth');
     const listEl = document.getElementById('cfList');
-    const periodEl = document.getElementById('cfPeriod');
     if (!monthEl || !listEl) return;
     if (!isAdmin()) { monthEl.innerHTML = ''; listEl.innerHTML = ''; return; }
 
@@ -3343,26 +3398,11 @@ function renderConflictsPage() {
         selDays.add(_cfDay);
     }
 
-    if (periodEl) {
-        const cur = _cfMonth.getFullYear() === today.getFullYear() && _cfMonth.getMonth() === today.getMonth();
-        periodEl.innerHTML = `${MONTHS[_cfMonth.getMonth()]} <span class="year">${_cfMonth.getFullYear()}</span>`;
-        periodEl.classList.toggle('off-today', !cur);
-    }
-    monthEl.innerHTML = _cfMonthHtml(selDays);
+    _tlPeriodLabel(document.getElementById('cfPeriod'), _cfMonth);
+    monthEl.innerHTML = _tlMonthHtml(_cfMonth, selDays, _cfDecorateDay);
     const scroll = listEl.scrollTop;
     listEl.innerHTML = _cfListHtml(pool, _conflictVisitSeen || _conflictSeenKeys());
     listEl.scrollTop = scroll;
-}
-
-// Bring the selected list item into view inside the list (not the page).
-function _cfRevealSelected() {
-    const listEl = document.getElementById('cfList');
-    const item = listEl && listEl.querySelector('.cf-item.is-selected');
-    if (!item) return;
-    const top = item.offsetTop - listEl.offsetTop;
-    if (top < listEl.scrollTop + 40 || top + item.offsetHeight > listEl.scrollTop + listEl.clientHeight) {
-        listEl.scrollTop = Math.max(0, top - 48);
-    }
 }
 
 // Pick a day (calendar or date picker): select its first conflict, if any.
@@ -3371,12 +3411,7 @@ function _cfPickDay(date) {
     const c = _cfPool().find(x => k >= x.dateStr && k <= x.endStr) || null;
     _cfSelect(c, k);
     renderConflictsPage();
-    _cfRevealSelected();
-}
-
-function _cfStepMonth(n) {
-    _cfMonth = new Date(_cfMonth.getFullYear(), _cfMonth.getMonth() + n, 1);
-    renderConflictsPage();
+    _tlReveal(document.getElementById('cfList'));
 }
 
 // Expose for callers that refresh the page after sign-in.
@@ -3397,7 +3432,7 @@ window.__renderConflictsPage = renderConflictsPage;
         listEl.addEventListener('click', e => {
             const sec = e.target.closest('[data-cfsec]');
             if (sec) {
-                _cfSetClosed(sec.dataset.cfsec, !_cfClosed[sec.dataset.cfsec]);
+                _cfStore.set(sec.dataset.cfsec, !_cfStore.closed[sec.dataset.cfsec]);
                 renderConflictsPage();
                 return;
             }
@@ -3421,30 +3456,20 @@ window.__renderConflictsPage = renderConflictsPage;
         });
     }
 
-    const prev = document.getElementById('cfPrev');
-    const next = document.getElementById('cfNext');
-    if (prev) prev.addEventListener('click', () => _cfStepMonth(-1));
-    if (next) next.addEventListener('click', () => _cfStepMonth(1));
-
-    // The month label opens the schedule's date picker, with conflict days dotted.
-    const period = document.getElementById('cfPeriod');
-    if (period) {
-        period.addEventListener('click', e => {
-            e.stopPropagation();
-            toggleMiniCal({
-                anchor: period,
-                month: _cfMonth || today,
-                pick: _cfPickDay,
-                range: null,
-                mark: d => {
-                    if (d.getTime() < today.getTime() && !sameDay(d, today)) return '';
-                    const open = conflictsForDate(d).filter(c => !c.accepted);
-                    if (open.length === 0) return '';
-                    return open.some(c => c.kind !== 'soft') ? 'mc-cf-high' : 'mc-cf-low';
-                },
-            });
-        });
-    }
+    _tlWireNav('cf', n => {
+        _cfMonth = new Date(_cfMonth.getFullYear(), _cfMonth.getMonth() + n, 1);
+        renderConflictsPage();
+    }, () => ({
+        month: _cfMonth || today,
+        pick: _cfPickDay,
+        // Conflict days get a dot in the picker.
+        mark: d => {
+            if (d.getTime() < today.getTime() && !sameDay(d, today)) return '';
+            const open = conflictsForDate(d).filter(c => !c.accepted);
+            if (open.length === 0) return '';
+            return open.some(c => c.kind !== 'soft') ? 'mc-cf-high' : 'mc-cf-low';
+        },
+    }));
 
     const tabsEl = document.getElementById('conflictsPageTabs');
     if (tabsEl) {
@@ -3460,6 +3485,7 @@ window.__renderConflictsPage = renderConflictsPage;
         });
     }
 })();
+
 
 // ────────────── CONFLICT PRE-CHECKS (point of action) ──────────────
 // Used before an admin writes PTO or an on-call assignment, so the conflict
@@ -4437,35 +4463,6 @@ function openRequestsModal() {
     markRequestsPageSeen();
 }
 
-// The Requests page's button row above the list (New PTO request, call /
-// service / lock requests, Request LF sendout dates). Made once.
-function _requestsPageBar() {
-    let bar = document.getElementById('requestsPageBar');
-    if (bar) return bar;
-    const split = document.getElementById('requestsSplit');
-    bar = document.createElement('div');
-    bar.id = 'requestsPageBar';
-    bar.className = 'requests-page-bar';
-    split.parentNode.insertBefore(bar, split);
-    const group = document.createElement('div');
-    group.id = 'requestsPageBtns';
-    group.className = 'req-new-group';
-    bar.appendChild(group);
-    return bar;
-}
-
-// One button in the Requests page's button group.
-function _requestsPageButton(id, label, onClick) {
-    _requestsPageBar();
-    const btn = document.createElement('button');
-    btn.id = id;
-    btn.type = 'button';
-    btn.className = 'req-new-btn';
-    btn.textContent = label;
-    btn.addEventListener('click', onClick);
-    document.getElementById('requestsPageBtns').appendChild(btn);
-    return btn;
-}
 
 // Today if it's a workday, else the next one — where the service request
 // panels open from the Requests page.
@@ -4771,10 +4768,43 @@ document.getElementById('reqTabs').addEventListener('click', e => {
 });
 
 // ────────────── REQUESTS PAGE (sidebar → "Requests") ──────────────
-// Requests listed on the left, the selected one on the right. The detail
-// pane reuses the modal's card (renderRequestsList with onlyKey), so every
-// action works the same; the page has its own tab state.
+// Laid out like the Conflicts page: the list on the left in collapsible
+// sections — Pending by when the request's dates come up, History by when
+// it was decided — and the month view on the right, with the selected
+// request's days ringed and each requester's row outlined on their
+// requested days. The selected item opens the modal's own card
+// (renderRequestsList with onlyKey), so every action works the same.
 let activeRequestsPageTab = 'pending';
+let _rqMonth = null;      // first of the month the calendar shows
+let _rqSel = null;        // selected request key
+let _rqDay = null;        // selected day (yyyy-mm-dd), with or without a request
+let _rqVisitAck = null;   // the "seen" stamp from before this visit, for New
+const _rqStore = _tlStore('requestSectionsClosed');
+
+const RQ_SECTIONS_PENDING = [
+    { id: 'week', label: 'Within a week', max: 6 },
+    { id: 'month', label: 'Within a month', max: 30 },
+    { id: 'quarter', label: 'Within 3 months', max: 91 },
+    { id: 'year', label: 'Within a year', max: 365 },
+    { id: 'later', label: 'More than a year out', max: Infinity },
+];
+const RQ_SECTIONS_HISTORY = [
+    { id: 'h-week', label: 'Decided in the last week', max: 6 },
+    { id: 'h-month', label: 'In the last month', max: 30 },
+    { id: 'h-quarter', label: 'In the last 3 months', max: 91 },
+    { id: 'h-older', label: 'Earlier', max: Infinity },
+];
+
+const RQ_TYPE_LABEL = {
+    pto_add: 'PTO',
+    pto_remove: 'Remove PTO',
+    oncall_change: 'Call change',
+    oncall_swap: 'Call trade',
+    service_change: 'Service change',
+    service_lock: 'Service lock',
+    lf_sendout: 'LF sendout',
+    lf_dates_request: 'LF dates',
+};
 
 // One line for a list row: what was asked, without the requester's name.
 function _requestShortWhat(r) {
@@ -4816,23 +4846,173 @@ function _requestRowStatus(r) {
     return { text: 'Denied' + when, tone: 'bad' };
 }
 
-// The day as scheduled, under a single-day service request.
-function _requestContextHtml(r) {
+// The days a request is about: { start, end, days: Set of yyyy-mm-dd }, or
+// null when it has no dates. Week-scoped requests cover the call week.
+function _requestSpan(r) {
     const p = r.payload || {};
-    if ((r.type !== 'service_change' && r.type !== 'service_lock') || !p.date || p.scope === 'week') return '';
-    const d = parseDate(p.date);
-    return `<div class="split-section req-context">
-        <div class="split-section-label">${escapeHtml(_conflictDayLabel(d))} as scheduled</div>
-        ${splitDayGrid(d, r.requesterId)}
+    const week = k => { const cs = getCallCycleStart(parseDate(k)); return [cs, getCallCycleEnd(cs)]; };
+    const ranges = [];
+    switch (r.type) {
+        case 'pto_add':
+        case 'pto_remove':
+        case 'lf_dates_request':
+            if (p.start) ranges.push([parseDate(p.start), parseDate(p.end || p.start)]);
+            break;
+        case 'oncall_swap':
+            if (p.aStart) ranges.push(week(p.aStart));
+            if (p.bStart) ranges.push(week(p.bStart));
+            break;
+        default:
+            if (p.date) ranges.push(p.scope === 'week' ? week(p.date) : [parseDate(p.date), parseDate(p.date)]);
+    }
+    if (!ranges.length) return null;
+    const days = new Set();
+    ranges.forEach(([s, e]) => { for (let d = new Date(s); d.getTime() <= e.getTime(); d = addDays(d, 1)) days.add(fmt(d)); });
+    const starts = ranges.map(x => x[0].getTime());
+    const ends = ranges.map(x => x[1].getTime());
+    return { start: new Date(Math.min(...starts)), end: new Date(Math.max(...ends)), days };
+}
+
+function _rqIsPending() { return activeRequestsPageTab === 'pending'; }
+
+// Pending: soonest dates first. History: most recently decided first.
+function _rqPool() {
+    const entries = visibleRequestEntries(activeRequestsPageTab);
+    if (_rqIsPending()) {
+        const at = r => { const s = _requestSpan(r); return s ? s.start.getTime() : today.getTime(); };
+        return entries.sort((a, b) => (at(a[1]) - at(b[1])) || ((a[1].createdAt || 0) - (b[1].createdAt || 0)));
+    }
+    return entries.sort((a, b) => ((b[1].decisionAt || b[1].createdAt || 0) - (a[1].decisionAt || a[1].createdAt || 0)));
+}
+
+function _rqDecidedAgo(r) {
+    return -_tlDaysFromToday(new Date(r.decisionAt || r.createdAt || Date.now()));
+}
+
+function _rqSectionOf(r) {
+    if (_rqIsPending()) {
+        const s = _requestSpan(r);
+        const d = s ? _tlDaysFromToday(s.start) : 0;
+        return RQ_SECTIONS_PENDING.find(x => d <= x.max).id;
+    }
+    const ago = _rqDecidedAgo(r);
+    return RQ_SECTIONS_HISTORY.find(x => ago <= x.max).id;
+}
+
+// New since the last visit: an ask that landed for me, or a decision on
+// one of mine made by someone else.
+function _rqIsNew(r) {
+    const ack = _rqVisitAck != null ? _rqVisitAck : _getAckTs();
+    if (isOpenRequest(r)) return r.requesterId !== loggedInPathId && (r.createdAt || 0) > ack;
+    const mine = r.requesterId === loggedInPathId || r.targetId === loggedInPathId;
+    return mine && r.decisionBy !== loggedInPathId && (r.decisionAt || 0) > ack;
+}
+
+function _rqTypeLabel(r) {
+    if (r.type === 'pto_add' && _callTrade(r)) return 'PTO + call trade';
+    return RQ_TYPE_LABEL[r.type] || r.type;
+}
+
+// Select a request (or just a day), bring its month into view and make sure
+// its section is open.
+function _rqSelect(key, dayKey) {
+    const r = key ? requests[key] : null;
+    _rqSel = r ? key : null;
+    const span = r ? _requestSpan(r) : null;
+    _rqDay = dayKey || (span ? fmt(span.start) : null);
+    const d = parseDate(_rqDay || fmt(today));
+    _rqMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+    if (r && _rqStore.closed[_rqSectionOf(r)]) _rqStore.set(_rqSectionOf(r), false);
+}
+
+function _rqItemHtml(key, r) {
+    const on = key === _rqSel;
+    const span = _requestSpan(r);
+    const pending = isOpenRequest(r);
+    const chip = pending
+        ? (span ? _tlCountdown(_tlDaysFromToday(span.start)) : 'Open')
+        : _tlAgo(_rqDecidedAgo(r));
+    const when = span ? _tlRange(span.start, span.end) : '';
+    const st = _requestRowStatus(r);
+    const note = r.note ? `<span class="cf-item-body rq-item-note">“${escapeHtml(r.note)}”</span>` : '';
+    return `<div class="cf-item${on ? ' is-selected' : ''}">
+        <button type="button" class="cf-item-main" data-rqpick="${escapeHtml(key)}" aria-pressed="${on}">
+          <span class="cf-item-meta">
+            <span class="cf-countdown">${escapeHtml(chip)}</span>
+            <span>${escapeHtml([when, _rqTypeLabel(r)].filter(Boolean).join(' · '))}</span>
+            ${_rqIsNew(r) ? '<span class="split-new">New</span>' : ''}
+          </span>
+          <span class="cf-item-title">${splitAvatar(r.requesterId)}<span>${escapeHtml(_shortPathName(r.requesterId))}: ${escapeHtml(_requestShortWhat(r))}</span></span>
+          ${note}
+          <span class="cf-item-body rq-item-status${st.tone ? ' tone-' + st.tone : ''}">${escapeHtml(st.text)}</span>
+        </button>
+        ${on ? `<div class="rq-item-card" data-rqcard="${escapeHtml(key)}"></div>` : ''}
       </div>`;
+}
+
+// Each day: a count beside the date when requests touch it, and the
+// requester's row outlined (stronger for the selected request).
+function _rqDecorator(pool) {
+    const byDay = new Map();
+    pool.forEach(([key, r]) => {
+        const span = _requestSpan(r);
+        if (!span) return;
+        span.days.forEach(k => {
+            if (!byDay.has(k)) byDay.set(k, []);
+            byDay.get(k).push([key, r]);
+        });
+    });
+    return (date, inMonth) => {
+        const list = byDay.get(fmt(date)) || [];
+        if (!list.length) return {};
+        const people = new Set(list.map(([, r]) => r.requesterId));
+        const selPeople = new Set(list.filter(([k]) => k === _rqSel).map(([, r]) => r.requesterId));
+        const tip = list.map(([, r]) => `${_shortPathName(r.requesterId)}: ${_requestShortWhat(r)}`).join('\n');
+        return {
+            rowDec: p => ({ cls: selPeople.has(p.id) ? 'rq-mark is-sel' : people.has(p.id) ? 'rq-mark' : '' }),
+            flag: inMonth ? `<span class="rq-flag" title="${escapeHtml(tip)}">${list.length}</span>` : '',
+            ariaExtra: `, ${list.length} request${list.length === 1 ? '' : 's'}`,
+        };
+    };
+}
+
+// The page's button row (New PTO request, call / service / lock requests,
+// Request LF sendout dates), at the top of the list column. Made once.
+function _requestsPageBar() {
+    let bar = document.getElementById('requestsPageBar');
+    if (bar) return bar;
+    const side = document.getElementById('rqSide');
+    bar = document.createElement('div');
+    bar.id = 'requestsPageBar';
+    bar.className = 'requests-page-bar';
+    side.insertBefore(bar, side.firstChild);
+    const group = document.createElement('div');
+    group.id = 'requestsPageBtns';
+    group.className = 'req-new-group';
+    bar.appendChild(group);
+    return bar;
+}
+
+// One button in the Requests page's button group.
+function _requestsPageButton(id, label, onClick) {
+    _requestsPageBar();
+    const btn = document.createElement('button');
+    btn.id = id;
+    btn.type = 'button';
+    btn.className = 'req-new-btn';
+    btn.textContent = label;
+    btn.addEventListener('click', onClick);
+    document.getElementById('requestsPageBtns').appendChild(btn);
+    return btn;
 }
 
 function renderRequestsPage() {
     const pg = document.getElementById('requestsPage');
-    if (!pg) return;
+    const listEl = document.getElementById('rqList');
+    const monthEl = document.getElementById('rqMonth');
+    if (!pg || !listEl || !monthEl) return;
 
     const titleEl = document.getElementById('requestsPageTitle');
-    const subEl = document.getElementById('requestsPageSubtitle');
     const admin = (typeof isAdmin === 'function') ? isAdmin() : false;
     if (titleEl) titleEl.textContent = admin ? 'Requests' : 'My Requests';
 
@@ -4875,84 +5055,133 @@ function renderRequestsPage() {
     _requestsPageBar().hidden = !Array.from(document.querySelectorAll('#requestsPageBtns .req-new-btn'))
         .some(b => b.style.display !== 'none');
 
-    const pending = visibleRequestEntries('pending');
-    const history = visibleRequestEntries('history');
-
-    // Subtitle: who the open requests are waiting on.
-    if (subEl) {
-        const onMe = pending.filter(([, r]) => _requestWaitingOn(r).includes(loggedInPathId)).length;
-        const onOthers = pending.length - onMe;
-        subEl.textContent = pending.length === 0
-            ? (admin ? 'Nothing waiting on you.' : 'Nothing open. Your decided requests are under History.')
-            : [onMe && `${onMe} waiting on you`, onOthers && `${onOthers} waiting on ${admin ? 'a colleague' : 'others'}`]
-                .filter(Boolean).join(' · ');
-    }
-
-    const tabPending = document.getElementById('requestsPageTabCountPending');
-    const tabHist = document.getElementById('requestsPageTabCountHistory');
-    if (tabPending) tabPending.textContent = String(pending.length);
-    if (tabHist) tabHist.textContent = String(history.length);
+    const setText = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    setText('requestsPageTabCountPending', String(visibleRequestEntries('pending').length));
+    setText('requestsPageTabCountHistory', String(visibleRequestEntries('history').length));
     document.querySelectorAll('#requestsPageTabs .req-tab').forEach(b => {
         b.classList.toggle('active', b.dataset.rtab === activeRequestsPageTab);
     });
 
-    const isPending = activeRequestsPageTab === 'pending';
-    const items = (isPending ? pending : history).map(([key, r]) => {
-        const st = _requestRowStatus(r);
-        return {
-            key,
-            html: `${splitAvatar(r.requesterId)}
-                <span class="split-row-main">
-                  <span class="split-row-top">
-                    <span class="split-row-title">${escapeHtml(_shortPathName(r.requesterId))}</span>
-                    <span class="split-row-time">${escapeHtml(splitShortTime(r.createdAt))}</span>
-                  </span>
-                  <span class="split-row-text">${escapeHtml(_requestShortWhat(r))}</span>
-                  <span class="split-row-sub${st.tone ? ' tone-' + st.tone : ''}">${escapeHtml(st.text)}</span>
-                </span>`,
-        };
-    });
+    const pool = _rqPool();
+    // The selected request moved tabs (decided, withdrawn) — keep its day.
+    if (_rqSel && !pool.some(([k]) => k === _rqSel)) _rqSel = null;
+    // First visit: the first request in the list.
+    if (!_rqMonth) _rqSelect(pool[0] ? pool[0][0] : null, pool[0] ? null : fmt(today));
 
-    renderSplit('requestsSplit', items, (key, el) => {
-        renderRequestsList(el, activeRequestsPageTab, key);
-        const ctx = _requestContextHtml(requests[key] || {});
-        const anchor = el.querySelector('.req-card > .req-note') || el.querySelector('.req-card > .req-detail');
-        if (ctx && anchor) anchor.insertAdjacentHTML('afterend', ctx);
-    }, isPending
-        ? (admin
-            ? '<span class="split-empty-headline">All caught up.</span>No requests are waiting for your review.'
-            : '<span class="split-empty-headline">Nothing pending.</span>You have no requests awaiting a decision.')
-        : '<span class="split-empty-headline">No history yet.</span>Approved and denied requests will appear here.');
+    const selR = _rqSel ? requests[_rqSel] : null;
+    const selSpan = selR ? _requestSpan(selR) : null;
+    const selDays = selSpan ? selSpan.days : new Set(_rqDay ? [_rqDay] : []);
+
+    _tlPeriodLabel(document.getElementById('rqPeriod'), _rqMonth);
+    monthEl.innerHTML = _tlMonthHtml(_rqMonth, selDays, _rqDecorator(pool));
+
+    const scroll = listEl.scrollTop;
+    if (pool.length === 0) {
+        listEl.innerHTML = `<div class="cf-empty">${_rqIsPending()
+            ? (admin
+                ? '<span class="split-empty-headline">All caught up.</span>No requests are waiting for your review.'
+                : '<span class="split-empty-headline">Nothing pending.</span>You have no requests awaiting a decision.')
+            : '<span class="split-empty-headline">No history yet.</span>Approved and denied requests will appear here.'}</div>`;
+    } else {
+        const secs = _rqIsPending() ? RQ_SECTIONS_PENDING : RQ_SECTIONS_HISTORY;
+        listEl.innerHTML = _tlSectionsHtml(secs
+            .map(s => ({ id: s.id, label: s.label, items: pool.filter(([, r]) => _rqSectionOf(r) === s.id).map(([k, r]) => _rqItemHtml(k, r)) }))
+            // Pending shows "More than a year out" only when something is there.
+            .filter(s => s.id !== 'later' || s.items.length), _rqStore);
+        const cardEl = listEl.querySelector('[data-rqcard]');
+        if (cardEl) renderRequestsList(cardEl, activeRequestsPageTab, cardEl.dataset.rqcard);
+    }
+    listEl.scrollTop = scroll;
+}
+
+// Pick a day (calendar or date picker): select its first request, if any.
+function _rqPickDay(date) {
+    const k = fmt(date);
+    const hit = _rqPool().find(([, r]) => { const s = _requestSpan(r); return s && s.days.has(k); });
+    _rqSelect(hit ? hit[0] : null, k);
+    renderRequestsPage();
+    _tlReveal(document.getElementById('rqList'));
+}
+
+// Open the Requests page on one request (from the Changes page).
+function openRequestOnPage(key) {
+    const r = requests[key];
+    if (!r) return;
+    activeRequestsPageTab = isOpenRequest(r) ? 'pending' : 'history';
+    if (typeof window.__setPage === 'function') window.__setPage('requests');
+    markRequestsPageSeen();
+    _rqSelect(key);
+    renderRequestsPage();
+    _tlReveal(document.getElementById('rqList'));
 }
 
 // Expose for any caller that needs to refresh the page (e.g. after sign-in)
 window.__renderRequestsPage = renderRequestsPage;
 
-wireSplit('requestsSplit', renderRequestsPage);
+(function wireRequestsPage() {
+    const monthEl = document.getElementById('rqMonth');
+    if (monthEl) {
+        monthEl.addEventListener('click', e => {
+            const day = e.target.closest('.day[data-date]');
+            if (day) _rqPickDay(parseDate(day.dataset.date));
+        });
+    }
 
-// Page tabs: switch Pending / History
-const _reqPageTabsEl = document.getElementById('requestsPageTabs');
-if (_reqPageTabsEl) {
-    _reqPageTabsEl.addEventListener('click', e => {
-        const btn = e.target.closest('.req-tab');
-        if (!btn) return;
-        activeRequestsPageTab = btn.dataset.rtab;
+    const listEl = document.getElementById('rqList');
+    if (listEl) {
+        listEl.addEventListener('click', e => {
+            const sec = e.target.closest('[data-cfsec]');
+            if (sec) {
+                _rqStore.set(sec.dataset.cfsec, !_rqStore.closed[sec.dataset.cfsec]);
+                renderRequestsPage();
+                return;
+            }
+            const pick = e.target.closest('[data-rqpick]');
+            if (pick) {
+                _rqSelect(pick.dataset.rqpick);
+                renderRequestsPage();
+            }
+        });
+    }
+
+    _tlWireNav('rq', n => {
+        _rqMonth = new Date(_rqMonth.getFullYear(), _rqMonth.getMonth() + n, 1);
         renderRequestsPage();
+    }, () => {
+        const days = new Set();
+        _rqPool().forEach(([, r]) => { const s = _requestSpan(r); if (s) s.days.forEach(k => days.add(k)); });
+        return { month: _rqMonth || today, pick: _rqPickDay, mark: d => (days.has(fmt(d)) ? 'mc-rq' : '') };
     });
-}
 
-// Nav click already calls setPage('requests'); piggy-back to (re)render
-// the page contents.
-document.querySelectorAll('.nav-item[data-page="requests"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-        // Mark decisions seen before re-rendering so the dot clears
-        // at the same moment the content appears (no flash of old dot).
-        markRequestsPageSeen();
-        // Defer one tick so setPage's own handler (which un-hides #requestsPage)
-        // runs first; otherwise summary widths can compute against a hidden node.
-        setTimeout(renderRequestsPage, 0);
+    // Page tabs: switch Pending / History
+    const tabsEl = document.getElementById('requestsPageTabs');
+    if (tabsEl) {
+        tabsEl.addEventListener('click', e => {
+            const btn = e.target.closest('.req-tab');
+            if (!btn || btn.dataset.rtab === activeRequestsPageTab) return;
+            activeRequestsPageTab = btn.dataset.rtab;
+            const pool = _rqPool();
+            _rqSelect(pool[0] ? pool[0][0] : null, pool[0] ? null : fmt(today));
+            renderRequestsPage();
+            if (listEl) listEl.scrollTop = 0;
+        });
+    }
+
+    // Nav click already calls setPage('requests'); piggy-back to (re)render
+    // the page contents.
+    document.querySelectorAll('.nav-item[data-page="requests"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            // Keep the old stamp for this visit's New labels, then mark seen
+            // before re-rendering so the dot clears as the content appears.
+            _rqVisitAck = _getAckTs();
+            markRequestsPageSeen();
+            // Defer one tick so setPage's own handler (which un-hides
+            // #requestsPage) runs first.
+            setTimeout(renderRequestsPage, 0);
+        });
     });
-});
+})();
+
 
 // ════ CHANGE LOG SUBSYSTEM ════
 // Applied schedule changes (PTO, on-call/service overrides, recompute,
@@ -5494,14 +5723,8 @@ function _renderChangeDetail(key, el, showMine) {
         if (btn.dataset.chact === 'goto') {
             goToDay(parseDate(c.date || c.startDate));
         } else if (btn.dataset.chact === 'request') {
-            const r = _chgRequestFor(c);
-            if (!r) return;
-            activeRequestsPageTab = isOpenRequest(r) ? 'pending' : 'history';
-            _splitSel.requestsSplit = c.requestKey;
-            if (typeof window.__setPage === 'function') window.__setPage('requests');
-            document.getElementById('requestsSplit').dataset.view = 'detail';
-            markRequestsPageSeen();
-            renderRequestsPage();
+            if (!_chgRequestFor(c)) return;
+            openRequestOnPage(c.requestKey);
         }
     });
 })();

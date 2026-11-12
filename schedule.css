@@ -8444,7 +8444,7 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 /* ════ CONFLICTS PAGE: month view + list by time until the conflict ════
    The month cells are the schedule's own (.month-view, monthCellRowsHtml),
    weekdays only, marked with each day's open conflicts. */
-#conflictsPage .conflicts-page-content { max-width: 1440px; }
+#conflictsPage .conflicts-page-content { max-width: none; padding-bottom: 20px; }
 #conflictsPage .conflicts-page-header { align-items: center; padding-bottom: 16px; margin-bottom: 16px; }
 #conflictsPage .conflicts-page-title { margin: 0; }
 
@@ -8471,8 +8471,6 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .cf-list {
     flex: 1 1 360px;
     min-width: 0;
-    max-height: calc(100vh - 170px);
-    overflow-y: auto;
     background: #fff;
     border: 1px solid var(--rule-soft);
     border-radius: 10px;
@@ -8553,8 +8551,61 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .mc-day.mc-cf-low::after { background: #ca8a04; }
 .mc-day.mc-today::after { background: #fff; }
 
+/* Wide screens: the page fills the window. The list (left) scrolls on its
+   own; the calendar (right) splits the remaining height between its weeks,
+   and the cell text grows with the cell (container units), so a 1080p
+   laptop and a 4K monitor both get a full, readable month. */
+@media (min-width: 1024px) {
+    #conflictsPage:not([hidden]) { display: flex; flex-direction: column; overflow: hidden; }
+    #conflictsPage .conflicts-page-content { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; }
+    #conflictsPage .conflicts-page-header { flex: none; }
+    .cf-body {
+        flex: 1 1 auto;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: clamp(340px, 30%, 640px) minmax(0, 1fr);
+        gap: 20px;
+        align-items: stretch;
+    }
+    .cf-list { height: 100%; min-height: 0; overflow-y: auto; }
+    .cf-cal { min-height: 0; overflow-y: auto; }
+    #cfMonth { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+    .month-view.cf-month {
+        flex: 1 1 auto;
+        /* Too short a window → the weeks keep 96px and the calendar scrolls. */
+        grid-template-rows: auto repeat(var(--cf-weeks, 5), minmax(96px, 1fr));
+    }
+    .cf-month .day { min-height: 0; overflow: hidden; container-type: size; }
+    .cf-month .day .num { font-size: clamp(15px, min(11cqh, 9cqw), 22px); }
+    /* Row text sized so the cell's rows (--cf-rows) fill its height. */
+    .cf-month .day .wd-rows {
+        font-size: clamp(9px, min(calc((100cqh - 44px) / (var(--cf-rows, 4) * 2.15)), 6.5cqw), 14px);
+        gap: 0.25em;
+    }
+    .cf-month .day .wd-row { font-size: 1em; padding: 0.3em 0.6em; gap: 0.5em; }
+    .cf-month .day .wd-row .pid { font-size: 1em; width: 2em; }
+    .cf-month .day .wd-row .svc { font-size: 1em; }
+    .cf-month .day .wd-row.pto .svc,
+    .cf-month .day .wd-row.off .svc { font-size: 0.95em; }
+    .cf-month .day .wd-row .svc .swatch { width: 0.75em; height: 0.75em; margin-right: 0.45em; }
+    .cf-month .day .wd-row .oc-mark { font-size: 0.72em; padding: 0.25em 0.5em; }
+    .cf-month .day .wd-rows::after { display: none; }
+}
+/* Short cells (a 1080p laptop), and days with extra "No …" rows: tighter
+   padding so all the rows still fit. */
+@container (max-height: 132px) {
+    .cf-month .day .day-num-row { padding: 4px 7px 1px; }
+    .cf-month .day .num { font-size: 13px; }
+    .cf-month .day .wd-rows { gap: 1px; padding: 1px 3px 2px; }
+    .cf-month .day .wd-row { padding: 0.15em 0.5em; line-height: 1.15; }
+}
+@media (min-width: 1024px) {
+    .cf-month .day.cf-many .wd-rows { gap: 1px; padding: 1px 3px 2px; }
+    .cf-month .day.cf-many .wd-row { padding: 0.15em 0.5em; line-height: 1.15; }
+}
+
 @media (max-width: 800px) {
-    .cf-list { flex-basis: 100%; max-height: none; overflow: visible; }
+    .cf-list { flex-basis: 100%; }
     .cf-sec-head { position: static; }
     .cf-nav .current-period { min-width: 0; font-size: 19px; }
 }

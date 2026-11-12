@@ -3038,9 +3038,50 @@ function _tlSectionsHtml(sections, store) {
     }).join('');
 }
 
+// Replace el's content only when it changed. The browser keeps the list's
+// scroll position across the swap, so nothing here reads or sets scrollTop
+// (each of those forced an extra full layout per click).
+function _tlSetHtml(el, html) {
+    if (el._tlHtml === html) return false;
+    el.innerHTML = html;
+    el._tlHtml = html;
+    return true;
+}
+
+// Draw the month into host, then mark the selection — sel: { days: Set of
+// yyyy-mm-dd to ring, cells: Set of "yyyy-mm-dd|pathId" rows to outline }.
+// The grid is only replaced when its content changed: picking a different
+// item usually just moves the ring, which costs a repaint instead of a
+// rebuild and a full re-layout of the month.
+function _tlRenderMonth(host, month, decorate, sel) {
+    const html = _tlMonthHtml(month, decorate);
+    if (host._tlHtml !== html) {
+        host.innerHTML = html;
+        host._tlHtml = html;
+    }
+    const days = sel.days || new Set();
+    host.querySelectorAll('.day.cf-selected').forEach(d => {
+        if (days.has(d.dataset.date)) return;
+        d.classList.remove('cf-selected');
+        d.removeAttribute('aria-current');
+    });
+    days.forEach(k => {
+        const d = host.querySelector(`.day[data-date="${k}"]`);
+        if (!d) return;
+        d.classList.add('cf-selected');
+        d.setAttribute('aria-current', 'date');
+    });
+    host.querySelectorAll('.wd-row.is-sel').forEach(r => r.classList.remove('is-sel'));
+    (sel.cells || new Set()).forEach(cell => {
+        const [k, pid] = cell.split('|');
+        const r = host.querySelector(`.day[data-date="${k}"] .wd-row[data-pid="${pid}"]`);
+        if (r) r.classList.add('is-sel');
+    });
+}
+
 // The month grid (weekdays only) built from the schedule's own cells.
 // decorate(date, inMonth) → { rowDec(p, a), extraRows, flag, ariaExtra }.
-function _tlMonthHtml(month, selDays, decorate) {
+function _tlMonthHtml(month, decorate) {
     const y = month.getFullYear();
     const m = month.getMonth();
     const first = new Date(y, m, 1);
@@ -3062,12 +3103,11 @@ function _tlMonthHtml(month, selDays, decorate) {
             if (holiday) cls.push('holiday');
             if (sameDay(date, today)) cls.push('today');
             else if (date.getTime() < today.getTime()) cls.push('cf-past');
-            if (selDays.has(k)) cls.push('cf-selected');
             // How many rows the cell holds, so the text can be sized to fit them.
             const nRows = (rows.match(/class="wd-row/g) || []).length;
             if (nRows > 4) cls.push('cf-many');
             const label = _conflictDayLabel(date) + (dec.ariaExtra || '');
-            html += `<button type="button" class="${cls.join(' ')}" style="--cf-rows:${Math.max(4, nRows)}" data-date="${k}" aria-label="${escapeHtml(label)}"${selDays.has(k) ? ' aria-current="date"' : ''}>
+            html += `<button type="button" class="${cls.join(' ')}" style="--cf-rows:${Math.max(4, nRows)}" data-date="${k}" aria-label="${escapeHtml(label)}">
                 <span class="day-num-row">
                   <span class="num">${date.getDate()}${dec.flag || ''}</span>
                   ${holiday ? `<span class="month-holiday-badge" title="${escapeHtml(holiday)}">${escapeHtml(holiday)}</span>` : ''}
@@ -3306,7 +3346,7 @@ function renderConflictsPage() {
     const monthEl = document.getElementById('cfMonth');
     const listEl = document.getElementById('cfList');
     if (!monthEl || !listEl) return;
-    if (!isAdmin()) { monthEl.innerHTML = ''; listEl.innerHTML = ''; return; }
+    if (!isAdmin()) { _tlSetHtml(monthEl, ''); _tlSetHtml(listEl, ''); return; }
 
     const all = getConflicts();
     const nOpen = all.filter(c => !c.accepted).length;
@@ -3332,10 +3372,8 @@ function renderConflictsPage() {
     }
 
     _tlPeriodLabel(document.getElementById('cfPeriod'), _cfMonth);
-    monthEl.innerHTML = _tlMonthHtml(_cfMonth, selDays, _cfDecorateDay);
-    const scroll = listEl.scrollTop;
-    listEl.innerHTML = _cfListHtml(pool, _conflictVisitSeen || _conflictSeenKeys());
-    listEl.scrollTop = scroll;
+    _tlRenderMonth(monthEl, _cfMonth, _cfDecorateDay, { days: selDays });
+    _tlSetHtml(listEl, _cfListHtml(pool, _conflictVisitSeen || _conflictSeenKeys()));
 }
 
 // Pick a day (calendar or date picker): select its first conflict, if any.
@@ -4884,7 +4922,8 @@ function _rqItemHtml(key, r) {
 }
 
 // Each day: a count beside the date when requests touch it, and the
-// requester's row outlined (stronger for the selected request).
+// requester's row outlined (the selected request's are made stronger
+// afterwards, by _tlRenderMonth).
 function _rqDecorator(pool) {
     const byDay = new Map();
     pool.forEach(([key, r]) => {
@@ -4899,10 +4938,9 @@ function _rqDecorator(pool) {
         const list = byDay.get(fmt(date)) || [];
         if (!list.length) return {};
         const people = new Set(list.map(([, r]) => r.requesterId));
-        const selPeople = new Set(list.filter(([k]) => k === _rqSel).map(([, r]) => r.requesterId));
         const tip = list.map(([, r]) => `${_shortPathName(r.requesterId)}: ${_requestShortWhat(r)}`).join('\n');
         return {
-            rowDec: p => ({ cls: selPeople.has(p.id) ? 'rq-mark is-sel' : people.has(p.id) ? 'rq-mark' : '' }),
+            rowDec: p => ({ cls: people.has(p.id) ? 'rq-mark' : '' }),
             flag: inMonth ? `<span class="rq-flag" title="${escapeHtml(tip)}">${list.length}</span>` : '',
             ariaExtra: `, ${list.length} request${list.length === 1 ? '' : 's'}`,
         };
@@ -5006,25 +5044,27 @@ function renderRequestsPage() {
     const selDays = selSpan ? selSpan.days : new Set(_rqDay ? [_rqDay] : []);
 
     _tlPeriodLabel(document.getElementById('rqPeriod'), _rqMonth);
-    monthEl.innerHTML = _tlMonthHtml(_rqMonth, selDays, _rqDecorator(pool));
+    // The selected request's days are ringed and the requester's row on them outlined.
+    const selCells = new Set(selR && selSpan ? [...selSpan.days].map(k => k + '|' + selR.requesterId) : []);
+    _tlRenderMonth(monthEl, _rqMonth, _rqDecorator(pool), { days: selDays, cells: selCells });
 
-    const scroll = listEl.scrollTop;
     if (pool.length === 0) {
-        listEl.innerHTML = `<div class="cf-empty">${_rqIsPending()
+        _tlSetHtml(listEl, `<div class="cf-empty">${_rqIsPending()
             ? (admin
                 ? '<span class="split-empty-headline">All caught up.</span>No requests are waiting for your review.'
                 : '<span class="split-empty-headline">Nothing pending.</span>You have no requests awaiting a decision.')
-            : '<span class="split-empty-headline">No history yet.</span>Approved and denied requests will appear here.'}</div>`;
+            : '<span class="split-empty-headline">No history yet.</span>Approved and denied requests will appear here.'}</div>`);
     } else {
         const secs = _rqIsPending() ? RQ_SECTIONS_PENDING : RQ_SECTIONS_HISTORY;
-        listEl.innerHTML = _tlSectionsHtml(secs
+        _tlSetHtml(listEl, _tlSectionsHtml(secs
             .map(s => ({ id: s.id, label: s.label, items: pool.filter(([, r]) => _rqSectionOf(r) === s.id).map(([k, r]) => _rqItemHtml(k, r)) }))
             // Pending shows "More than a year out" only when something is there.
-            .filter(s => s.id !== 'later' || s.items.length), _rqStore);
+            .filter(s => s.id !== 'later' || s.items.length), _rqStore));
+        // The card is filled in after the list HTML, so refresh it every time
+        // (offers, decisions) even when the list itself didn't change.
         const cardEl = listEl.querySelector('[data-rqcard]');
         if (cardEl) renderRequestsList(cardEl, activeRequestsPageTab, cardEl.dataset.rqcard);
     }
-    listEl.scrollTop = scroll;
 }
 
 // Pick a day (calendar or date picker): select its first request, if any.
@@ -5662,13 +5702,12 @@ function _chItemHtml(key, c, showMine) {
 }
 
 // Each day: a count of changes beside the date, and the people a change
-// moved outlined (stronger for the selected change).
+// moved outlined (the selected change's are made stronger afterwards, by
+// _tlRenderMonth).
 function _chDecorator(entries) {
     const byDay = new Map();
-    let selCells = new Set();
-    entries.forEach(([key, c]) => {
+    entries.forEach(([, c]) => {
         const span = _chgSpan(c);
-        if (key === _chSel) selCells = span.cells;
         span.days.forEach(k => {
             if (!byDay.has(k)) byDay.set(k, { list: [], people: new Set() });
             byDay.get(k).list.push(c);
@@ -5684,7 +5723,7 @@ function _chDecorator(entries) {
         if (!hit) return {};
         const tip = hit.list.slice(0, 6).map(c => c.summary || '').join('\n') + (hit.list.length > 6 ? `\n+${hit.list.length - 6} more` : '');
         return {
-            rowDec: p => ({ cls: selCells.has(k + '|' + p.id) ? 'rq-mark is-sel' : hit.people.has(p.id) ? 'rq-mark' : '' }),
+            rowDec: p => ({ cls: hit.people.has(p.id) ? 'rq-mark' : '' }),
             flag: inMonth ? `<span class="rq-flag" title="${escapeHtml(tip)}">${hit.list.length}</span>` : '',
             ariaExtra: `, ${hit.list.length} change${hit.list.length === 1 ? '' : 's'}`,
         };
@@ -5732,23 +5771,22 @@ function renderChangesPage() {
     const selDays = selC ? _chgSpan(selC).days : new Set(_chDay ? [_chDay] : []);
 
     _tlPeriodLabel(document.getElementById('chPeriod'), _chMonth);
-    monthEl.innerHTML = _tlMonthHtml(_chMonth, selDays, _chDecorator(entries));
+    // The selected change's days are ringed and the people it moved outlined.
+    _tlRenderMonth(monthEl, _chMonth, _chDecorator(entries), { days: selDays, cells: selC ? _chgSpan(selC).cells : new Set() });
 
-    const scroll = listEl.scrollTop;
     if (entries.length === 0) {
-        listEl.innerHTML = `<div class="cf-empty">${lfGuest
+        _tlSetHtml(listEl, `<div class="cf-empty">${lfGuest
             ? '<span class="split-empty-headline">No sendout updates yet.</span>Lake Forest sendout changes will appear here as they happen.'
             : showMine
                 ? '<span class="split-empty-headline">Nothing for you yet.</span>Changes that affect your schedule will appear here. Switch to <strong>All changes</strong> to see team-wide updates.'
-                : '<span class="split-empty-headline">Nothing yet.</span>Schedule changes will appear here as they happen.'}</div>`;
+                : '<span class="split-empty-headline">Nothing yet.</span>Schedule changes will appear here as they happen.'}</div>`);
     } else {
-        listEl.innerHTML = _tlSectionsHtml(CH_SECTIONS.map(s => ({
+        _tlSetHtml(listEl, _tlSectionsHtml(CH_SECTIONS.map(s => ({
             id: s.id,
             label: s.label,
             items: entries.filter(([, c]) => _chSectionOf(c) === s.id).map(([k, c]) => _chItemHtml(k, c, showMine)),
-        })), _chStore);
+        })), _chStore));
     }
-    listEl.scrollTop = scroll;
 }
 
 // Pick a day (calendar or date picker): select the newest change touching it.
@@ -5824,16 +5862,13 @@ window.__renderChangesPage = renderChangesPage;
         });
     });
 
-    // Re-render the page when the user clicks the Changes nav item, just like
-    // the requests page does (defer a tick so setPage un-hides the shell first)
+    // Nav click: mark changes seen so the nav dot clears as the page appears,
+    // but keep the old seen-time so this visit can still mark the new rows.
+    // This runs before the page switcher's own handler, which draws the page.
     document.querySelectorAll('.nav-item[data-page="changes"]').forEach(btn => {
         btn.addEventListener('click', () => {
-            // Mark changes seen before re-rendering so the nav dot clears at
-            // the same moment the content appears (no flash of old dot) — but
-            // keep the old seen-time so this visit can still mark the new rows.
             _changesVisitAck = _getChangesAckTs();
             markChangesPageSeen();
-            setTimeout(renderChangesPage, 0);
         });
     });
 })();
@@ -9096,27 +9131,27 @@ function monthCellRowsHtml(date, inMonth, people, decorate) {
         const lockCls = locked ? ' locked' : '';
         const lockTip = locked ? ' · Approved & locked' : '';
         if (a.type === 'pto') {
-            rows += `<div class="wd-row pto${extra}" style="--c:${p.color}" title="${p.name} — ${escapeHtml(timeOffName(timeOffOn(p.id, date)))}${a.onCall ? ' · On call' : ''}">
+            rows += `<div class="wd-row pto${extra}" data-pid="${p.id}" style="--c:${p.color}" title="${p.name} — ${escapeHtml(timeOffName(timeOffOn(p.id, date)))}${a.onCall ? ' · On call' : ''}">
             <span class="pid">${p.initials}</span>
             <span class="svc">${timeOffRowLabel(p.id, date)}</span>
             ${oc}
           </div>`;
         } else if (a.type === 'off_site') {
             const cbg = pathBgColor(p.color);
-            rows += `<div class="wd-row off-site${lockCls}${extra}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
+            rows += `<div class="wd-row off-site${lockCls}${extra}" data-pid="${p.id}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
             <span class="pid">${p.initials}</span>
             <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
             ${oc}
           </div>`;
         } else if (a.type === 'off') {
-            rows += `<div class="wd-row off${extra}" style="--c:${p.color}" title="${p.name} — ${(we || holiday) ? 'Off' : 'Unstaffed'}${a.onCall ? ' · On call' : ''}">
+            rows += `<div class="wd-row off${extra}" data-pid="${p.id}" style="--c:${p.color}" title="${p.name} — ${(we || holiday) ? 'Off' : 'Unstaffed'}${a.onCall ? ' · On call' : ''}">
             <span class="pid">${p.initials}</span>
             <span class="svc">${(we || holiday) ? 'Off' : 'Unstaffed'}</span>
             ${oc}
           </div>`;
         } else {
             const cbg = pathBgColor(p.color);
-            rows += `<div class="wd-row${lockCls}${extra}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
+            rows += `<div class="wd-row${lockCls}${extra}" data-pid="${p.id}" style="--c:${p.color}; --sc:var(${a.service.cssVar})${cbg ? `; --c-bg:${cbg}` : ''}" title="${p.name} — ${a.service.name}${a.onCall ? ' · On call' : ''}${lockTip}">
             <span class="pid">${p.initials}</span>
             <span class="svc"><span class="swatch"></span><span class="svc-full">${a.service.short}</span><span class="svc-abbr">${a.service.abbr}</span></span>
             ${oc}

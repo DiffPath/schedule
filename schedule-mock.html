@@ -317,15 +317,13 @@
                 </div>
             </div>
 
-            <!-- Changes page — log of every applied schedule change. Changes
-                 listed on the left, the selected one on the right. -->
-            <div class="page-shell" id="changesPage" hidden>
-                <div class="changes-page-content">
-                    <header class="changes-page-header">
-                        <div class="changes-page-heading">
-                            <h2 class="changes-page-title">Changes</h2>
-                            <p class="changes-page-subtitle" id="changesPageSubtitle">Recent updates that affect your schedule, newest first.</p>
-                        </div>
+            <!-- Changes page — log of every applied schedule change. Laid out like
+                 Conflicts and Requests: the log on the left in collapsible sections
+                 by when each change was made, the month view on the right. -->
+            <div class="page-shell tl-page" id="changesPage" hidden>
+                <div class="tl-content">
+                    <header class="tl-header">
+                        <h2 class="tl-title">Changes</h2>
                         <div class="req-tabs changes-page-tabs" id="changesPageTabs">
                             <button class="req-tab active" data-ctab="mine">
                                 <span>Affecting me</span>
@@ -338,9 +336,18 @@
                         </div>
                     </header>
 
-                    <div class="split" id="changesSplit">
-                        <nav class="split-list" id="changesList" aria-label="Changes"></nav>
-                        <section class="split-detail" id="changesDetail" aria-label="Selected change"></section>
+                    <div class="cf-body">
+                        <div class="cf-side">
+                            <div class="cf-list" id="chList" aria-label="Changes, newest first"></div>
+                        </div>
+                        <section class="cf-cal" aria-label="Month">
+                            <div class="cf-nav">
+                                <button class="nav-btn" id="chPrev" type="button" title="Previous month" aria-label="Previous month">‹</button>
+                                <button class="current-period" id="chPeriod" type="button" title="Go to a date" aria-haspopup="dialog" aria-expanded="false">—</button>
+                                <button class="nav-btn" id="chNext" type="button" title="Next month" aria-label="Next month">›</button>
+                            </div>
+                            <div class="cf-month-host" id="chMonth"></div>
+                        </section>
                     </div>
                 </div>
             </div>

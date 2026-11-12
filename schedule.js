@@ -1797,6 +1797,7 @@ auth.onAuthStateChanged(user => {
         hideLoginOverlay();
         // Reset Changes page scope to its default for the new session.
         activeChangesScope = 'mine';
+        _chSel = null; _chDay = null; _chMonth = null;
         // Requests page likewise lands on the Pending tab — without this the
         // tab selection leaks from the previous user in the same session.
         activeRequestsPageTab = 'pending';
@@ -2940,69 +2941,7 @@ function goToConflict(key) {
     if (c) goToDay(c.date);
 }
 
-// ────────────── LIST + DETAIL LAYOUT (Conflicts / Requests / Changes) ──────────────
-// Each page lists compact rows in .split-list and shows the selected one in
-// .split-detail. Wide screens show both side by side; at phone width the
-// list shows alone, and picking a row swaps to its detail (with a Back
-// button). The selection is kept by key across live re-renders.
-const _splitSel = {};   // split element id → selected key
-
-// items: [{ key, group?, html }] in display order; renderDetail(key, el)
-// fills the detail pane for the selected key.
-function renderSplit(splitId, items, renderDetail, emptyHtml) {
-    const split = document.getElementById(splitId);
-    if (!split) return;
-    const listEl = split.querySelector('.split-list');
-    const detailEl = split.querySelector('.split-detail');
-    if (items.length === 0) {
-        split.classList.add('is-empty');
-        split.dataset.view = 'list';
-        listEl.innerHTML = `<div class="split-empty">${emptyHtml}</div>`;
-        detailEl.innerHTML = '';
-        return;
-    }
-    split.classList.remove('is-empty');
-    let sel = _splitSel[splitId];
-    if (!items.some(it => it.key === sel)) {
-        sel = items[0].key;
-        _splitSel[splitId] = sel;
-        // The open item went away (decided, accepted…) — back to the list on a phone.
-        split.dataset.view = 'list';
-    }
-    let group = null;
-    listEl.innerHTML = items.map(it => {
-        let head = '';
-        if (it.group && it.group !== group) {
-            group = it.group;
-            head = `<div class="split-group">${escapeHtml(group)}</div>`;
-        }
-        const on = it.key === sel;
-        return head + `<button type="button" class="split-row${on ? ' is-selected' : ''}" data-key="${escapeHtml(it.key)}"${on ? ' aria-current="true"' : ''}>${it.html}</button>`;
-    }).join('');
-    detailEl.innerHTML = '<button type="button" class="split-back">‹ Back to the list</button><div class="split-detail-body"></div>';
-    renderDetail(sel, detailEl.querySelector('.split-detail-body'));
-}
-
-// Row clicks select; Back returns to the list (phone). rerender redraws the page.
-function wireSplit(splitId, rerender) {
-    const split = document.getElementById(splitId);
-    if (!split) return;
-    split.addEventListener('click', e => {
-        const row = e.target.closest('.split-row');
-        if (row) {
-            _splitSel[splitId] = row.dataset.key;
-            split.dataset.view = 'detail';
-            rerender();
-            if (window.matchMedia('(max-width: 800px)').matches) split.scrollIntoView({ block: 'start' });
-            return;
-        }
-        if (e.target.closest('.split-back')) {
-            split.dataset.view = 'list';
-            const selRow = split.querySelector('.split-row.is-selected');
-            if (selRow) selRow.scrollIntoView({ block: 'center' });
-        }
-    });
-}
+// ────────────── Small helpers for the list pages ──────────────
 
 // Pathologist initials in their color (initials of the display name for
 // the other accounts).
@@ -3011,12 +2950,6 @@ function splitAvatar(pid) {
     const initials = p ? p.initials
         : _shortPathName(pid).split(/\s+/).map(w => w.charAt(0)).join('').slice(0, 2);
     return `<span class="split-avatar" style="--c:${p ? p.color : 'var(--ink-3)'}" aria-hidden="true">${escapeHtml(initials)}</span>`;
-}
-
-// Long titles (an auto-adjust summary runs to a paragraph) drop to a
-// smaller size so the serif heading doesn't swamp the pane.
-function splitTitleCls(text) {
-    return String(text || '').length > 90 ? ' is-long' : '';
 }
 
 // "12:14 PM" today, "Oct 24" before that.
@@ -5533,122 +5466,28 @@ const CHANGE_SOURCE_NOTE = {
     request_revoked:  'Made by revoking an approved request.',
 };
 
-// The seen-time when the Changes page was opened, so this visit can still
-// mark which entries are new (the visit itself moves the seen-time on).
-let _changesVisitAck = null;
-
-function _chgIsNew(c) {
-    return _changesVisitAck !== null && (c.at || 0) > _changesVisitAck
-        && c.byPathId !== loggedInPathId;
-}
-
-// List group for a change's time: Today / Yesterday / weekday / date.
-function _chgDayGroup(ts) {
-    if (!ts) return 'Earlier';
-    const d = new Date(ts);
-    const day = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    const now = new Date();
-    const ago = daysBetween(day, new Date(now.getFullYear(), now.getMonth(), now.getDate()));
-    if (ago === 0) return 'Today';
-    if (ago === 1) return 'Yesterday';
-    if (ago < 7) return d.toLocaleDateString([], { weekday: 'long' });
-    return `${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}${d.getFullYear() !== now.getFullYear() ? ', ' + d.getFullYear() : ''}`;
-}
-
-function renderChangesPage() {
-    const pg = document.getElementById('changesPage');
-    if (!pg) return;
-
-    const subEl = document.getElementById('changesPageSubtitle');
-    const countMineEl = document.getElementById('changesTabCountMine');
-    const countAllEl = document.getElementById('changesTabCountAll');
-
-    // Non-pathologist accounts can't be change targets — default them to "all".
-    const meIsPath = (typeof loggedInPathId === 'number');
-    if (!meIsPath && activeChangesScope === 'mine') {
-        activeChangesScope = 'all';
-    }
-
-    // Lake Forest guest: the log is just sendout entries — no Mine/All
-    // split, so the scope tabs are hidden entirely.
-    const lfGuest = isLakeForest();
-    const tabsWrap = document.getElementById('changesPageTabs');
-    if (tabsWrap) tabsWrap.style.display = lfGuest ? 'none' : '';
-
-    const allEntries = Object.entries(changes || {})
-        .filter(([, c]) => !!c)
-        .filter(([, c]) => !lfGuest || c.kind === 'lf_sendout')
-        .sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
-
-    const mineEntries = meIsPath
-        ? allEntries.filter(([, c]) => _chgAffectsUser(c, loggedInPathId))
-        : [];
-
-    // Keep the tab badges in sync regardless of which view is active
-    if (countMineEl) countMineEl.textContent = String(mineEntries.length);
-    if (countAllEl) countAllEl.textContent = String(allEntries.length);
-
-    // Reflect the active scope in the tab UI
-    document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
-        btn.classList.toggle('active', btn.getAttribute('data-ctab') === activeChangesScope);
-    });
-
-    // Disable the "Affecting me" tab for non-pathologist accounts
-    const mineTab = document.querySelector('#changesPageTabs .req-tab[data-ctab="mine"]');
-    if (mineTab) {
-        mineTab.disabled = !meIsPath;
-        mineTab.style.opacity = meIsPath ? '' : '0.5';
-        mineTab.style.cursor = meIsPath ? '' : 'not-allowed';
-        mineTab.title = meIsPath ? '' : 'Sign in as a pathologist to see your personal changes';
-    }
-
-    const showMine = (activeChangesScope === 'mine' && meIsPath);
-    const entries = showMine ? mineEntries : allEntries;
-
-    if (subEl) {
-        const newCount = entries.filter(([, c]) => _chgIsNew(c)).length;
-        const base = lfGuest
-            ? 'Lake Forest sendout updates, newest first.'
-            : showMine
-                ? 'Updates that affect your schedule, newest first.'
-                : 'Every update to the schedule, newest first.';
-        subEl.textContent = newCount > 0 ? `${base} ${newCount} new since you last looked.` : base;
-    }
-
-    const items = entries.map(([key, c]) => {
-        const display = showMine
-            ? _chgDescribeForUser(c, loggedInPathId)
-            : { summary: c.summary || '' };
-        const kind = c.kind || 'service';
-        const lead = typeof c.forPathId === 'number' && pathologists.some(p => p.id === c.forPathId)
-            ? splitAvatar(c.forPathId)
-            : `<span class="split-dot kind-${escapeHtml(kind)}" aria-hidden="true"></span>`;
-        const time = c.at ? new Date(c.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-        return {
-            key,
-            group: _chgDayGroup(c.at),
-            html: `${lead}
-                <span class="split-row-main">
-                  <span class="split-row-title">${escapeHtml(display.summary)}</span>
-                  <span class="split-row-sub">${escapeHtml([CHANGE_KIND_LABEL[kind] || kind, time].filter(Boolean).join(' · '))}</span>
-                </span>${_chgIsNew(c) ? '<span class="split-new">New</span>' : ''}`,
-        };
-    });
-
-    renderSplit('changesSplit', items, (key, el) => _renderChangeDetail(key, el, showMine), lfGuest
-        ? '<span class="split-empty-headline">No sendout updates yet.</span>Lake Forest sendout changes will appear here as they happen.'
-        : showMine
-            ? '<span class="split-empty-headline">Nothing for you yet.</span>Changes that affect your schedule will appear here. Switch to <strong>All changes</strong> to see team-wide updates.'
-            : '<span class="split-empty-headline">Nothing yet.</span>Schedule changes will appear here as they happen.');
-}
-
 // A recompute's moves (who went from what to what, each day) as a table;
-// onlyPid narrows it to one pathologist's moves (the Affecting me tab).
-function _chgMovesHtml(c, onlyPid) {
+// onlyPid narrows it to one pathologist's moves (the Affecting me tab), and
+// month (the first of a month) to the moves in that month — the one the
+// calendar beside it shows.
+function _chgMovesHtml(c, onlyPid, month) {
     // Firebase can hand an array back as an object keyed "0", "1", …
-    const moves = Object.values(c.moves || {})
+    const all = Object.values(c.moves || {})
         .filter(m => onlyPid == null || Number(m.p) === onlyPid);
-    if (moves.length === 0) return '';
+    if (all.length === 0) return '';
+    const inMonth = m => { const d = parseDate(m.d); return d.getFullYear() === month.getFullYear() && d.getMonth() === month.getMonth(); };
+    const moves = month ? all.filter(inMonth) : all;
+    const label = (onlyPid == null ? 'What moved' : 'What moved for you') + (month ? ` in ${MONTHS[month.getMonth()]}` : '');
+    const elsewhere = all.length - moves.length;
+    const elsewhereNote = month && elsewhere
+        ? `<p class="split-note">${elsewhere} more move${elsewhere === 1 ? '' : 's'} in other months — use ‹ › beside the month to see them.</p>`
+        : '';
+    if (moves.length === 0) {
+        return `<div class="split-section">
+            <div class="split-section-label">${label}</div>
+            <p class="split-note">Nothing moved this month.</p>${elsewhereNote}
+          </div>`;
+    }
     const rows = moves.map(m => {
         const d = parseDate(m.d);
         const p = pathologists.find(x => x.id === Number(m.p));
@@ -5660,13 +5499,14 @@ function _chgMovesHtml(c, onlyPid) {
           </tr>`;
     }).join('');
     return `<div class="split-section">
-        <div class="split-section-label">${onlyPid == null ? 'What moved' : 'What moved for you'}</div>
+        <div class="split-section-label">${label}</div>
         <div class="split-moves-wrap">
           <table class="split-moves">
             <thead><tr><th>Day</th><th>Who</th><th>Was</th><th>Now</th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
+        ${elsewhereNote}
         ${c.movesMore ? `<p class="split-note">A long recompute: ${c.movesMore} later moves weren't recorded.</p>` : ''}
       </div>`;
 }
@@ -5678,84 +5518,325 @@ function _chgRequestFor(c) {
     return (isAdmin() || r.requesterId === loggedInPathId || r.targetId === loggedInPathId) ? r : null;
 }
 
-function _renderChangeDetail(key, el, showMine) {
-    const c = changes[key];
-    if (!c) { el.innerHTML = ''; return; }
+// ── Changes page ────────────────────────────────────────────────────────
+// Laid out like Conflicts and Requests: the log on the left in collapsible
+// sections by when each change was made, and the month view on the right,
+// with the selected change's days ringed, the people it moved outlined, and
+// a count of changes beside each date.
+
+// The seen-time when the Changes page was opened, so this visit can still
+// mark which entries are new (the visit itself moves the seen-time on).
+let _changesVisitAck = null;
+let _chMonth = null;   // first of the month the calendar shows
+let _chSel = null;     // selected change key
+let _chDay = null;     // selected day (yyyy-mm-dd), with or without a change
+const _chStore = _tlStore('changeSectionsClosed');
+
+const CH_SECTIONS = [
+    { id: 'week', label: 'In the last week', max: 6 },
+    { id: 'month', label: 'In the last month', max: 30 },
+    { id: 'quarter', label: 'In the last 3 months', max: 91 },
+    { id: 'older', label: 'Earlier', max: Infinity },
+];
+
+function _chgIsNew(c) {
+    return _changesVisitAck !== null && (c.at || 0) > _changesVisitAck
+        && c.byPathId !== loggedInPathId;
+}
+
+function _chgAgo(c) {
+    return c.at ? -_tlDaysFromToday(new Date(c.at)) : Infinity;
+}
+
+function _chSectionOf(c) {
+    const ago = _chgAgo(c);
+    return CH_SECTIONS.find(s => ago <= s.max).id;
+}
+
+// What a change touched: { days: Set of yyyy-mm-dd, cells: Set of
+// "yyyy-mm-dd|pathId" } — a recompute's moves when it recorded them,
+// otherwise its dates (call week for week-scoped entries) and the people
+// it names.
+function _chgSpan(c) {
+    const days = new Set();
+    const cells = new Set();
+    const addRange = (s, e, pids) => {
+        for (let d = parseDate(s); fmt(d) <= e; d = addDays(d, 1)) {
+            const k = fmt(d);
+            days.add(k);
+            pids.forEach(p => cells.add(k + '|' + p));
+        }
+    };
+    const week = k => { const cs = getCallCycleStart(parseDate(k)); return [fmt(cs), fmt(getCallCycleEnd(cs))]; };
+    const moves = Object.values(c.moves || {});
+    if (moves.length) {
+        moves.forEach(m => { days.add(m.d); cells.add(m.d + '|' + Number(m.p)); });
+        return { days, cells };
+    }
+    const pids = [];
+    if (typeof c.forPathId === 'number') pids.push(c.forPathId);
+    Object.keys(c.assignments || {}).forEach(k => pids.push(Number(k)));
+    (Array.isArray(c.cleared) ? c.cleared : []).forEach(k => pids.push(Number(k)));
+    if (c.startDate && c.endDate) addRange(c.startDate, c.endDate, pids);
+    else if (c.date) {
+        const [s, e] = c.scope === 'week' ? week(c.date) : [c.date, c.date];
+        addRange(s, e, c.type === 'oncall_swap' ? pids.slice(0, 1) : pids);
+    }
+    if (c.otherDate) {
+        const [s, e] = week(c.otherDate);
+        addRange(s, e, typeof c.otherPathId === 'number' ? [c.otherPathId] : []);
+    }
+    return { days, cells };
+}
+
+// The entries this account sees on the current tab, newest first.
+function _chPool() {
+    const meIsPath = (typeof loggedInPathId === 'number');
+    const lfGuest = isLakeForest();
+    const all = Object.entries(changes || {})
+        .filter(([, c]) => !!c)
+        .filter(([, c]) => !lfGuest || c.kind === 'lf_sendout')
+        .sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+    const mine = meIsPath ? all.filter(([, c]) => _chgAffectsUser(c, loggedInPathId)) : [];
+    return { all, mine, showMine: activeChangesScope === 'mine' && meIsPath };
+}
+
+function _chEntries() {
+    const p = _chPool();
+    return p.showMine ? p.mine : p.all;
+}
+
+// Select a change (or just a day), bring its first day's month into view
+// and make sure its section is open.
+function _chSelect(key, dayKey) {
+    const c = key ? changes[key] : null;
+    _chSel = c ? key : null;
+    const days = c ? [..._chgSpan(c).days].sort() : [];
+    _chDay = dayKey || days[0] || null;
+    const d = _chDay ? parseDate(_chDay) : (c && c.at ? new Date(c.at) : new Date(today));
+    _chMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+    if (c && _chStore.closed[_chSectionOf(c)]) _chStore.set(_chSectionOf(c), false);
+}
+
+function _chItemHtml(key, c, showMine) {
+    const on = key === _chSel;
     const display = showMine
         ? _chgDescribeForUser(c, loggedInPathId)
         : { summary: c.summary || '', details: c.details || '' };
     const kind = c.kind || 'service';
-    const when = c.at
-        ? new Date(c.at).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-        : '';
-    const by = c.byName ? 'by ' + c.byName.replace(/^Dr\. /, '') : '';
-    const eyebrow = [CHANGE_KIND_LABEL[kind] || kind, by, when].filter(Boolean).join(' · ');
+    const ago = _chgAgo(c);
+    const chip = ago === 0 && c.at
+        ? new Date(c.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+        : _tlAgo(ago);
+    const when = _chgWhenText(c);
+    const lead = typeof c.forPathId === 'number' && pathologists.some(p => p.id === c.forPathId)
+        ? splitAvatar(c.forPathId)
+        : `<span class="split-dot kind-${escapeHtml(kind)}" aria-hidden="true"></span>`;
     const lines = (display.details || '').split('\n').map(s => s.trim()).filter(Boolean);
-    const detailsHtml = lines.length
-        ? `<ul class="split-lines">${lines.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`
-        : '';
-    const sourceNote = CHANGE_SOURCE_NOTE[c.source] || '';
-    const day = c.date || c.startDate;
-    const actions = (_chgRequestFor(c) ? '<button type="button" data-chact="request">Open the request</button>' : '')
-        + (day && !isLakeForest() ? '<button type="button" class="primary" data-chact="goto">Show on the calendar</button>' : '');
-    el.innerHTML = `
-        <div class="split-detail-head">
-          <div class="split-detail-heading">
-            <span class="split-eyebrow">${escapeHtml(eyebrow)}${_chgIsNew(c) ? ' · new since your last visit' : ''}</span>
-            <h3 class="split-detail-title${splitTitleCls(display.summary)}">${escapeHtml(display.summary)}</h3>
-          </div>
-        </div>
-        ${detailsHtml}
-        ${_chgMovesHtml(c, showMine ? loggedInPathId : null)}
-        ${sourceNote ? `<p class="split-note">${escapeHtml(sourceNote)}</p>` : ''}
-        ${actions ? `<div class="split-actions" data-key="${escapeHtml(key)}">${actions}</div>` : ''}`;
+    const by = c.byName ? 'By ' + c.byName.replace(/^Dr\. /, '') : '';
+    let detail = '';
+    if (on) {
+        const sourceNote = CHANGE_SOURCE_NOTE[c.source] || '';
+        const day = c.date || c.startDate;
+        const actions = (_chgRequestFor(c) ? '<button type="button" data-chact="request">Open the request</button>' : '')
+            + (day && !isLakeForest() ? '<button type="button" class="primary" data-chact="goto">Show on the calendar</button>' : '');
+        detail = `<div class="ch-item-detail">
+            ${_chgMovesHtml(c, showMine ? loggedInPathId : null, _chMonth)}
+            ${sourceNote ? `<p class="split-note">${escapeHtml(sourceNote)}</p>` : ''}
+            ${actions ? `<div class="split-actions cf-item-actions" data-key="${escapeHtml(key)}">${actions}</div>` : ''}
+          </div>`;
+    }
+    return `<div class="cf-item${on ? ' is-selected' : ''}">
+        <button type="button" class="cf-item-main" data-chpick="${escapeHtml(key)}" aria-pressed="${on}">
+          <span class="cf-item-meta">
+            <span class="cf-countdown">${escapeHtml(chip)}</span>
+            <span>${escapeHtml([when, CHANGE_KIND_LABEL[kind] || kind].filter(Boolean).join(' · '))}</span>
+            ${_chgIsNew(c) ? '<span class="split-new">New</span>' : ''}
+          </span>
+          <span class="cf-item-title">${lead}<span>${escapeHtml(display.summary)}</span></span>
+          ${lines.length ? `<span class="cf-item-body ch-item-lines">${lines.map(l => `<span>${escapeHtml(l)}</span>`).join('')}</span>` : ''}
+          ${by ? `<span class="cf-item-body">${escapeHtml(by)}</span>` : ''}
+        </button>
+        ${detail}
+      </div>`;
 }
 
-(function wireChangesDetail() {
-    wireSplit('changesSplit', renderChangesPage);
-    const detailEl = document.getElementById('changesDetail');
-    if (!detailEl) return;
-    detailEl.addEventListener('click', e => {
-        const btn = e.target.closest('button[data-chact]');
-        if (!btn) return;
-        const c = changes[btn.closest('.split-actions').dataset.key];
-        if (!c) return;
-        if (btn.dataset.chact === 'goto') {
-            goToDay(parseDate(c.date || c.startDate));
-        } else if (btn.dataset.chact === 'request') {
-            if (!_chgRequestFor(c)) return;
-            openRequestOnPage(c.requestKey);
-        }
+// Each day: a count of changes beside the date, and the people a change
+// moved outlined (stronger for the selected change).
+function _chDecorator(entries) {
+    const byDay = new Map();
+    let selCells = new Set();
+    entries.forEach(([key, c]) => {
+        const span = _chgSpan(c);
+        if (key === _chSel) selCells = span.cells;
+        span.days.forEach(k => {
+            if (!byDay.has(k)) byDay.set(k, { list: [], people: new Set() });
+            byDay.get(k).list.push(c);
+        });
+        span.cells.forEach(cell => {
+            const [k, p] = cell.split('|');
+            if (byDay.has(k)) byDay.get(k).people.add(Number(p));
+        });
     });
-})();
+    return (date, inMonth) => {
+        const k = fmt(date);
+        const hit = byDay.get(k);
+        if (!hit) return {};
+        const tip = hit.list.slice(0, 6).map(c => c.summary || '').join('\n') + (hit.list.length > 6 ? `\n+${hit.list.length - 6} more` : '');
+        return {
+            rowDec: p => ({ cls: selCells.has(k + '|' + p.id) ? 'rq-mark is-sel' : hit.people.has(p.id) ? 'rq-mark' : '' }),
+            flag: inMonth ? `<span class="rq-flag" title="${escapeHtml(tip)}">${hit.list.length}</span>` : '',
+            ariaExtra: `, ${hit.list.length} change${hit.list.length === 1 ? '' : 's'}`,
+        };
+    };
+}
+
+function renderChangesPage() {
+    const pg = document.getElementById('changesPage');
+    const listEl = document.getElementById('chList');
+    const monthEl = document.getElementById('chMonth');
+    if (!pg || !listEl || !monthEl) return;
+
+    // Non-pathologist accounts can't be change targets — default them to "all".
+    const meIsPath = (typeof loggedInPathId === 'number');
+    if (!meIsPath && activeChangesScope === 'mine') activeChangesScope = 'all';
+
+    // Lake Forest guest: the log is just sendout entries — no Mine/All
+    // split, so the scope tabs are hidden entirely.
+    const lfGuest = isLakeForest();
+    const tabsWrap = document.getElementById('changesPageTabs');
+    if (tabsWrap) tabsWrap.style.display = lfGuest ? 'none' : '';
+
+    const { all, mine, showMine } = _chPool();
+    const setText = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    setText('changesTabCountMine', String(mine.length));
+    setText('changesTabCountAll', String(all.length));
+    document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-ctab') === activeChangesScope);
+    });
+    // Disable the "Affecting me" tab for non-pathologist accounts
+    const mineTab = document.querySelector('#changesPageTabs .req-tab[data-ctab="mine"]');
+    if (mineTab) {
+        mineTab.disabled = !meIsPath;
+        mineTab.style.opacity = meIsPath ? '' : '0.5';
+        mineTab.style.cursor = meIsPath ? '' : 'not-allowed';
+        mineTab.title = meIsPath ? '' : 'Sign in as a pathologist to see your personal changes';
+    }
+
+    const entries = showMine ? mine : all;
+    if (_chSel && !entries.some(([k]) => k === _chSel)) _chSel = null;
+    // First visit: the newest change.
+    if (!_chMonth) _chSelect(entries[0] ? entries[0][0] : null, entries[0] ? null : fmt(today));
+
+    const selC = _chSel ? changes[_chSel] : null;
+    const selDays = selC ? _chgSpan(selC).days : new Set(_chDay ? [_chDay] : []);
+
+    _tlPeriodLabel(document.getElementById('chPeriod'), _chMonth);
+    monthEl.innerHTML = _tlMonthHtml(_chMonth, selDays, _chDecorator(entries));
+
+    const scroll = listEl.scrollTop;
+    if (entries.length === 0) {
+        listEl.innerHTML = `<div class="cf-empty">${lfGuest
+            ? '<span class="split-empty-headline">No sendout updates yet.</span>Lake Forest sendout changes will appear here as they happen.'
+            : showMine
+                ? '<span class="split-empty-headline">Nothing for you yet.</span>Changes that affect your schedule will appear here. Switch to <strong>All changes</strong> to see team-wide updates.'
+                : '<span class="split-empty-headline">Nothing yet.</span>Schedule changes will appear here as they happen.'}</div>`;
+    } else {
+        listEl.innerHTML = _tlSectionsHtml(CH_SECTIONS.map(s => ({
+            id: s.id,
+            label: s.label,
+            items: entries.filter(([, c]) => _chSectionOf(c) === s.id).map(([k, c]) => _chItemHtml(k, c, showMine)),
+        })), _chStore);
+    }
+    listEl.scrollTop = scroll;
+}
+
+// Pick a day (calendar or date picker): select the newest change touching it.
+function _chPickDay(date) {
+    const k = fmt(date);
+    const hit = _chEntries().find(([, c]) => _chgSpan(c).days.has(k));
+    _chSelect(hit ? hit[0] : null, k);
+    renderChangesPage();
+    _tlReveal(document.getElementById('chList'));
+}
 
 // Expose so other code (e.g. login flow) can refresh the page on demand
 window.__renderChangesPage = renderChangesPage;
 
-// Wire up the scope tabs (Affecting me / All changes)
-document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-        if (btn.disabled) return;
-        const scope = btn.getAttribute('data-ctab');
-        if (scope !== 'mine' && scope !== 'all') return;
-        if (scope === activeChangesScope) return;
-        activeChangesScope = scope;
-        renderChangesPage();
-    });
-});
+(function wireChangesPage() {
+    const monthEl = document.getElementById('chMonth');
+    if (monthEl) {
+        monthEl.addEventListener('click', e => {
+            const day = e.target.closest('.day[data-date]');
+            if (day) _chPickDay(parseDate(day.dataset.date));
+        });
+    }
 
-// Re-render the page when the user clicks the Changes nav item, just like
-// the requests page does (defer a tick so setPage un-hides the shell first)
-document.querySelectorAll('.nav-item[data-page="changes"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-        // Mark changes seen before re-rendering so the nav dot clears at
-        // the same moment the content appears (no flash of old dot) — but
-        // keep the old seen-time so this visit can still mark the new rows.
-        _changesVisitAck = _getChangesAckTs();
-        markChangesPageSeen();
-        setTimeout(renderChangesPage, 0);
+    const listEl = document.getElementById('chList');
+    if (listEl) {
+        listEl.addEventListener('click', e => {
+            const sec = e.target.closest('[data-cfsec]');
+            if (sec) {
+                _chStore.set(sec.dataset.cfsec, !_chStore.closed[sec.dataset.cfsec]);
+                renderChangesPage();
+                return;
+            }
+            const pick = e.target.closest('[data-chpick]');
+            if (pick) {
+                _chSelect(pick.dataset.chpick);
+                renderChangesPage();
+                return;
+            }
+            const btn = e.target.closest('button[data-chact]');
+            if (!btn) return;
+            const c = changes[btn.closest('.cf-item-actions').dataset.key];
+            if (!c) return;
+            if (btn.dataset.chact === 'goto') {
+                goToDay(parseDate(c.date || c.startDate));
+            } else if (btn.dataset.chact === 'request') {
+                if (!_chgRequestFor(c)) return;
+                openRequestOnPage(c.requestKey);
+            }
+        });
+    }
+
+    _tlWireNav('ch', n => {
+        _chMonth = new Date(_chMonth.getFullYear(), _chMonth.getMonth() + n, 1);
+        renderChangesPage();
+    }, () => {
+        const days = new Set();
+        _chEntries().forEach(([, c]) => _chgSpan(c).days.forEach(k => days.add(k)));
+        return { month: _chMonth || today, pick: _chPickDay, mark: d => (days.has(fmt(d)) ? 'mc-rq' : '') };
     });
-});
+
+    // Scope tabs (Affecting me / All changes)
+    document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
+        btn.addEventListener('click', () => {
+            if (btn.disabled) return;
+            const scope = btn.getAttribute('data-ctab');
+            if (scope !== 'mine' && scope !== 'all') return;
+            if (scope === activeChangesScope) return;
+            activeChangesScope = scope;
+            const entries = _chEntries();
+            _chSelect(entries[0] ? entries[0][0] : null, entries[0] ? null : fmt(today));
+            renderChangesPage();
+            if (listEl) listEl.scrollTop = 0;
+        });
+    });
+
+    // Re-render the page when the user clicks the Changes nav item, just like
+    // the requests page does (defer a tick so setPage un-hides the shell first)
+    document.querySelectorAll('.nav-item[data-page="changes"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            // Mark changes seen before re-rendering so the nav dot clears at
+            // the same moment the content appears (no flash of old dot) — but
+            // keep the old seen-time so this visit can still mark the new rows.
+            _changesVisitAck = _getChangesAckTs();
+            markChangesPageSeen();
+            setTimeout(renderChangesPage, 0);
+        });
+    });
+})();
 
 // ════ CONFERENCE TRACKER SUBSYSTEM ════
 // Counts conference presentations per pathologist. scheduler/conferenceLog
@@ -14209,8 +14290,6 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         if (page === 'requests' && loggedInPathId !== null && !canSeeRequestsPage()) page = 'schedule';
         if (!VALID_PAGES.includes(page)) page = 'schedule';
         currentPage = page;
-        // Phones open the list + detail pages on their list.
-        document.querySelectorAll('.split').forEach(s => { s.dataset.view = 'list'; });
 
         // Update app data-attribute (CSS hides toolbar/main on non-schedule pages)
         if (app) app.setAttribute('data-page', page);

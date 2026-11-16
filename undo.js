@@ -91,9 +91,12 @@ function _undoCapture(entries) {
         // A recompute offered after a change belongs to that change.
         _undoOpen = _undoJoinTarget;
     } else if (!_undoOpen || now - _undoLastWriteAt > UNDO_GROUP_MS) {
-        _undoOpen = { id: ++_undoSeq, at: now, recs: [], labels: [], undone: false };
+        // logKeys: the change-log entries written for this change.
+        _undoOpen = { id: ++_undoSeq, at: now, recs: [], labels: [], logKeys: [], undone: false };
         if (_undoPendingLabel && now - _undoPendingLabel.at <= UNDO_GROUP_MS) {
             _undoOpen.labels.push(_undoPendingLabel.text);
+            // Shared array: a key that resolves later still lands here.
+            _undoOpen.logKeys = _undoPendingLabel.logKeys;
         }
         _undoPendingLabel = null;
         _undoHistory.unshift(_undoOpen);
@@ -123,18 +126,23 @@ function _undoDescribeProcedure(recs) {
 }
 
 // Label changes from the change log (logChange is called around the writes).
+// Returns what the entry belongs to — the change, or the pending label that
+// will become one — so its log key can be filed there.
 function _undoNote(summary) {
-    if (_undoSuspended || !summary) return;
+    if (_undoSuspended || !summary) return null;
     const now = Date.now();
     if (_undoJoinTarget && !_undoJoinTarget.undone) {
         if (!_undoJoinTarget.labels.includes(summary)) _undoJoinTarget.labels.push(summary);
         _undoShowToast(_undoJoinTarget);
-    } else if (_undoOpen && now - _undoLastWriteAt <= UNDO_GROUP_MS) {
+        return _undoJoinTarget;
+    }
+    if (_undoOpen && now - _undoLastWriteAt <= UNDO_GROUP_MS) {
         if (!_undoOpen.labels.includes(summary)) _undoOpen.labels.push(summary);
         _undoShowToast(_undoOpen);
-    } else {
-        _undoPendingLabel = { text: summary, at: now };
+        return _undoOpen;
     }
+    _undoPendingLabel = { text: summary, at: now, logKeys: [] };
+    return _undoPendingLabel;
 }
 
 function _undoLabel(ch) {
@@ -190,8 +198,17 @@ function _undoLabel(ch) {
     // Label source: the change log.
     const origLog = logChange;
     logChange = function (entry) {
-        if (entry && entry.summary) _undoNote(entry.summary);
-        return origLog.apply(this, arguments);
+        const owner = entry && entry.summary ? _undoNote(entry.summary) : null;
+        const p = origLog.apply(this, arguments);
+        // File the new entry's key with its change, so Undo can mark it.
+        if (owner) {
+            Promise.resolve(p).then(key => {
+                if (!key) return;
+                if (!owner.logKeys) owner.logKeys = [];
+                owner.logKeys.push(key);
+            }).catch(() => {});
+        }
+        return p;
     };
     window._undoRawLogChange = origLog;
 
@@ -257,8 +274,18 @@ async function undoChange(id) {
     }
     ch.undone = true;
     if (typeof clearDayCache === 'function') clearDayCache();
+    // Mark the change-log entries this reversed, so the Changes page can
+    // leave the whole thing out (the change and its undo cancel out).
+    const keys = (ch.logKeys || []).slice();
+    if (keys.length) {
+        const marks = {};
+        keys.forEach(k => { marks['scheduler/changes/' + k + '/undone'] = true; });
+        try { await db._rawRef().update(marks); } catch (_) { }
+    }
     try {
-        window._undoRawLogChange({ kind: 'undo', type: 'undo', summary: 'Undone — ' + _undoLabel(ch) });
+        // marksUndone: this note's change-log entries were marked above, so
+        // the Changes page needn't match it to them by its label.
+        window._undoRawLogChange({ kind: 'undo', type: 'undo', summary: 'Undone — ' + _undoLabel(ch), undoes: keys, marksUndone: true });
     } catch (_) { }
     _undoShowToast(ch, true);
     _undoRenderHistory();

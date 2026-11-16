@@ -8665,6 +8665,13 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 /* Changes page: a change's detail lines, one per line; the selected change's
    moves table, source note and actions under it. */
 .ch-item-lines { display: flex; flex-direction: column; gap: 1px; }
+/* The rest of a combined listing: other edits from the same action, and the
+   recompute or back-fix it triggered — one line each, the first two shown. */
+.ch-item-also { display: flex; flex-direction: column; gap: 2px; }
+.ch-item-also > span { position: relative; padding-left: 12px; }
+.ch-item-also > span::before { content: '+'; position: absolute; left: 0; color: var(--ink-3); }
+.ch-item-also > .ch-item-more { color: var(--accent); font-weight: 500; }
+.ch-item-also > .ch-item-more::before { content: none; }
 .ch-item-detail { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 4px 46px; }
 .ch-item-detail .split-moves td { padding: 6px 10px; }
 .ch-item-detail .split-moves th { padding: 6px 10px; }

@@ -3021,7 +3021,7 @@ function _conflictDayLabel(d) {
     return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
-// Collapsible sections. sections: [{ id, label, items: [html] }].
+// Collapsible sections. sections: [{ id, label, items: [html], count? }].
 function _tlSectionsHtml(sections, store) {
     return sections.map(s => {
         const closed = !!store.closed[s.id];
@@ -3031,7 +3031,7 @@ function _tlSectionsHtml(sections, store) {
               <button type="button" class="cf-sec-toggle" data-cfsec="${s.id}" aria-expanded="${!closed}">
                 <svg class="cf-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 <span class="cf-sec-label">${s.label}</span>
-                <span class="cf-sec-count">${s.items.length}</span>
+                <span class="cf-sec-count">${s.count != null ? s.count : s.items.length}</span>
               </button>
             </h3>
             <div class="cf-sec-body"${closed ? ' hidden' : ''}>${body}</div>
@@ -3799,6 +3799,10 @@ async function approveRequest(reqKey, choice) {
     if (!isAdmin()) { showToast('Only the director can approve.', { type: 'error' }); return; }
     const req = requests[reqKey];
     if (!req || req.status !== 'pending') return;
+    // The requester's service before the change, for the change log's
+    // before/after (read now — the log entry is written after the change).
+    const svcBefore = req.type === 'service_change' && req.payload && req.payload.date
+        ? _chServiceOn(req.requesterId, parseDate(req.payload.date)) : null;
 
     // Track recompute parameters across the type-specific apply blocks
     let rcFromDate = null;
@@ -4044,6 +4048,7 @@ async function approveRequest(reqKey, choice) {
                         date: req.payload.date,
                         serviceId: req.payload.serviceId,
                         scope: scope,
+                        before: svcBefore ? { [reqPid]: svcBefore } : null,
                     }, _chgSummaryServiceSet(
                         reqPid, req.payload.date, req.payload.serviceId, scope
                     )));
@@ -4057,6 +4062,7 @@ async function approveRequest(reqKey, choice) {
                         date: req.payload.date,
                         serviceId: null,
                         scope: scope,
+                        before: svcBefore ? { [reqPid]: svcBefore } : null,
                     }, _chgSummaryServiceSet(
                         reqPid, req.payload.date, null, scope
                     )));
@@ -4947,9 +4953,8 @@ function _rqItemHtml(key, r) {
       </div>`;
 }
 
-// Each day: a count beside the date when requests touch it, and the
-// requester's row outlined (the selected request's are made stronger
-// afterwards, by _tlRenderMonth).
+// Each day: the requester's row outlined on their requested days (the
+// selected request's are made stronger afterwards, by _tlRenderMonth).
 function _rqDecorator(pool) {
     const byDay = new Map();
     pool.forEach(([key, r]) => {
@@ -4964,10 +4969,8 @@ function _rqDecorator(pool) {
         const list = byDay.get(fmt(date)) || [];
         if (!list.length) return {};
         const people = new Set(list.map(([, r]) => r.requesterId));
-        const tip = list.map(([, r]) => `${_shortPathName(r.requesterId)}: ${_requestShortWhat(r)}`).join('\n');
         return {
             rowDec: p => ({ cls: people.has(p.id) ? 'rq-mark' : '' }),
-            flag: inMonth ? `<span class="rq-flag" title="${escapeHtml(tip)}">${list.length}</span>` : '',
             ariaExtra: `, ${list.length} request${list.length === 1 ? '' : 's'}`,
         };
     };
@@ -5410,12 +5413,14 @@ function _chgRequestFor(c) {
 }
 
 // ── Changes page ────────────────────────────────────────────────────────
-// A ledger: one short line per change, under the day it was made — a tag
-// (PTO change / Call change / Service change / Service lock / LF sendout)
-// and what changed with its dates ("PTO added · Nov 23 – 24"). Affecting me
-// words it for the signed-in pathologist; All changes adds whose schedule
-// it is. The month view on the right boxes the selected change's days and
-// outlines the people it moved.
+// A ledger: one short line per change — a tag (PTO change / Call change /
+// Service change / Service lock / LF sendout) and what changed with its
+// dates ("PTO added · Nov 23 – 24") — under the day it was made, in the
+// same collapsible sections as the other pages (within the last week /
+// month / 3 months / year). Each day opens to a before/after table of the
+// dates it changed. Affecting me words it for the signed-in pathologist;
+// All changes adds whose schedule it is. The month view on the right boxes
+// the selected change's days and outlines the people it moved.
 //
 // Left out: anything that was undone (and Undo's own notes), and
 // conference / tumor-board logging (the Tracking page has it).
@@ -5426,6 +5431,17 @@ let _changesVisitAck = null;
 let _chMonth = null;   // first of the month the calendar shows
 let _chSel = null;     // selected change key
 let _chDay = null;     // selected day (yyyy-mm-dd), with or without a change
+const _chStore = _tlStore('changeSectionsClosed');
+// Days opened to their before/after table (yyyy-mm-dd → true), per browser.
+const _chOpenDays = _tlStore('changeDaysOpen');
+
+const CH_SECTIONS = [
+    { id: 'week', label: 'Within the last week', max: 6 },
+    { id: 'month', label: 'Within the last month', max: 30 },
+    { id: 'quarter', label: 'Within the last 3 months', max: 91 },
+    { id: 'year', label: 'Within the last year', max: 365 },
+    { id: 'older', label: 'Over a year ago', max: Infinity },
+];
 
 const CH_TAGS = {
     pto: 'PTO change',
@@ -5438,6 +5454,15 @@ const CH_TAGS = {
 function _chgIsNew(c) {
     return _changesVisitAck !== null && (c.at || 0) > _changesVisitAck
         && c.byPathId !== loggedInPathId;
+}
+
+// What someone is on that day — a service id, 'pto', or '' — for the
+// before half of a change's before/after.
+function _chServiceOn(pid, date) {
+    const a = getDayAssignments(date)[pid];
+    if (!a) return '';
+    if (a.type === 'pto') return 'pto';
+    return a.service ? a.service.id : '';
 }
 
 // What a change touched: { days: Set of yyyy-mm-dd, cells: Set of
@@ -5516,6 +5541,7 @@ function _chVisibleEntries() {
 const CH_SVC_SHORT = { cyto: 'Cyto', bigs: 'Bigs', huntley: 'Huntley', wfh: 'WFH', cytobigs: 'Cyto/Bigs' };
 function _chSvc(sid) {
     if (!sid) return 'No service';
+    if (sid === 'pto') return 'PTO';
     if (CH_SVC_SHORT[sid]) return CH_SVC_SHORT[sid];
     const s = SERVICE_BY_ID[sid];
     return s ? (s.short || s.name) : sid;
@@ -5532,6 +5558,13 @@ function _chMoves(c, pid) {
     return Object.values(c.moves || {}).filter(m => pid == null || Number(m.p) === pid);
 }
 
+// What a service entry set, when it only says so in its summary
+// ("… → Off Service (locked), Nov 20").
+function _chSetFromSummary(c) {
+    const m = /→\s*([^,]+)/.exec(c.summary || '');
+    return m ? m[1].trim() : '';
+}
+
 // The short line for a change: { tag, what, dates }. pid: the pathologist
 // it's worded for (Affecting me), or null for the team-wide view.
 function _chLine(c, pid) {
@@ -5540,8 +5573,7 @@ function _chLine(c, pid) {
         : c.date ? (c.scope === 'week' ? _chWeek(c.date) : _chRange(c.date)) : '');
     switch (c.kind) {
         case 'pto': {
-            const leave = /leave added|leave removed/i.test(c.summary || '');
-            const word = leave ? 'Leave' : 'PTO';
+            const word = /leave added|leave removed/i.test(c.summary || '') ? 'Leave' : 'PTO';
             const what = c.type === 'pto_remove' ? `${word} removed`
                 : c.type === 'pto_edit' ? `${word} dates changed` : `${word} added`;
             return { tag: 'pto', what, dates: when() };
@@ -5576,9 +5608,8 @@ function _chLine(c, pid) {
             }
             if (c.type === 'service_reset') return { tag: 'svc', what: 'Back to the rotation', dates: when() };
             const set = sid => (sid ? `Set to ${_chSvc(sid)}` : 'Back to the rotation');
+            const fromSummary = () => { const s = _chSetFromSummary(c); return s ? `Set to ${s}` : 'Service changed'; };
             const a = c.assignments || {};
-            // Off service and the like only say what they set in the summary.
-            const fromSummary = () => { const m = /→\s*([^,]+)/.exec(c.summary || ''); return m ? `Set to ${m[1].trim()}` : 'Service changed'; };
             if (mine) {
                 if (c.forPathId === pid) return { tag: 'svc', what: c.serviceId !== undefined ? set(c.serviceId) : fromSummary(), dates: when() };
                 const sid = a[pid] !== undefined ? a[pid] : a[String(pid)];
@@ -5593,6 +5624,103 @@ function _chLine(c, pid) {
     }
 }
 
+// Before/after rows for one change: [{ k (yyyy-mm-dd, for sorting), label
+// (a fixed date label, for call weeks), who (pathId or null), before,
+// after }]. "—" where the log didn't record what it was before.
+function _chDiffRows(c) {
+    const rows = [];
+    const add = (k, who, before, after, label) => rows.push({ k, who: typeof who === 'number' ? who : null, before, after, label: label || null });
+    const workdays = (s, e) => {
+        const out = [];
+        for (let d = parseDate(s); fmt(d) <= e; d = addDays(d, 1)) if (!isWeekend(d) && !getFederalHoliday(d)) out.push(fmt(d));
+        return out;
+    };
+    const weekStart = k => fmt(getCallCycleStart(parseDate(k)));
+    const range = () => (c.startDate && c.endDate ? workdays(c.startDate, c.endDate)
+        : c.date ? (c.scope === 'week' ? workdays(...(cs => [fmt(cs), fmt(getCallCycleEnd(cs))])(getCallCycleStart(parseDate(c.date)))) : [c.date]) : []);
+    const before = pid => {
+        const b = c.before && (c.before[pid] !== undefined ? c.before[pid] : c.before[String(pid)]);
+        return b ? _chSvc(b) : '—';
+    };
+    switch (c.kind) {
+        case 'recompute':
+            _chMoves(c, null).forEach(m => add(m.d, Number(m.p), _chSvc(m.f), _chSvc(m.t)));
+            break;
+        case 'pto': {
+            const p = c.forPathId;
+            if (c.type === 'pto_edit' && c.oldStartDate) {
+                const was = new Set(workdays(c.oldStartDate, c.oldEndDate || c.oldStartDate));
+                const now = new Set(workdays(c.startDate, c.endDate || c.startDate));
+                was.forEach(k => { if (!now.has(k)) add(k, p, 'PTO', 'Working'); });
+                now.forEach(k => { if (!was.has(k)) add(k, p, 'Working', 'PTO'); });
+            } else {
+                const off = c.type === 'pto_remove';
+                range().forEach(k => add(k, p, off ? 'PTO' : 'Working', off ? 'Working' : 'PTO'));
+            }
+            break;
+        }
+        case 'oncall':
+            if (c.type === 'oncall_swap') {
+                // forPathId gave c.date's week and took otherDate's.
+                add(weekStart(c.date), c.forPathId, 'On call', 'Off call', _chWeek(c.date));
+                add(weekStart(c.otherDate), c.forPathId, 'Off call', 'On call', _chWeek(c.otherDate));
+                add(weekStart(c.date), c.otherPathId, 'Off call', 'On call', _chWeek(c.date));
+                add(weekStart(c.otherDate), c.otherPathId, 'On call', 'Off call', _chWeek(c.otherDate));
+            } else if (c.date) {
+                const label = c.scope === 'week' ? _chWeek(c.date) : null;
+                const k = c.scope === 'week' ? weekStart(c.date) : c.date;
+                if (c.type === 'oncall_clear') add(k, null, 'Changed', 'Rotation', label);
+                else add(k, c.forPathId, 'Off call', 'On call', label);
+            }
+            break;
+        case 'lf_sendout':
+            if (c.date) {
+                const label = c.scope === 'week' ? _chWeek(c.date) : null;
+                const k = c.scope === 'week' ? weekStart(c.date) : c.date;
+                add(k, null, c.type === 'lf_clear' ? 'Sendout' : 'No sendout', c.type === 'lf_clear' ? 'No sendout' : 'Sendout', label);
+            }
+            break;
+        case 'service': {
+            const p = c.forPathId;
+            if (c.type === 'service_lock') range().forEach(k => add(k, p, _chSvc(c.serviceId), `${_chSvc(c.serviceId)} · locked`));
+            else if (c.type === 'service_unlock') range().forEach(k => add(k, p, 'Locked', 'Unlocked'));
+            else if (c.type === 'service_backfix') Object.values(c.days || {}).filter(x => typeof x === 'string').forEach(k => add(k, null, '—', 'Adjusted'));
+            else if (c.type === 'service_reset') range().forEach(k => add(k, p, _chSetFromSummary(c) || '—', 'Rotation'));
+            else if (typeof p === 'number') {
+                const after = c.serviceId !== undefined ? (c.serviceId ? _chSvc(c.serviceId) : 'Rotation') : (_chSetFromSummary(c) || '—');
+                range().forEach(k => add(k, p, before(p), after));
+            } else {
+                Object.entries(c.assignments || {}).forEach(([pid, sid]) => range().forEach(k => add(k, Number(pid), before(pid), _chSvc(sid))));
+                Object.values(c.cleared || {}).forEach(pid => range().forEach(k => add(k, Number(pid), before(pid), 'Rotation')));
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return rows;
+}
+
+// Merge rows that run over consecutive workdays with the same person and
+// the same before/after into one "Nov 23 – 24" row; sort by date.
+function _chMergeRows(rows) {
+    const sorted = rows.slice().sort((a, b) => (a.who === b.who ? 0 : (a.who == null ? 1 : b.who == null ? -1 : a.who - b.who))
+        || (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
+    const out = [];
+    sorted.forEach(r => {
+        const last = out[out.length - 1];
+        if (last && !r.label && !last.label && last.who === r.who && last.before === r.before && last.after === r.after
+            && fmt(nextWorkday(parseDate(last.end))) === r.k) {
+            last.end = r.k;
+        } else {
+            out.push(Object.assign({}, r, { end: r.k }));
+        }
+    });
+    return out
+        .map(r => Object.assign(r, { label: r.label || _chRange(r.k, r.end) }))
+        .sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
+}
+
 // Whose schedule a change is (for the All changes tab): up to two people.
 function _chPeople(c) {
     const ids = [];
@@ -5603,6 +5731,12 @@ function _chPeople(c) {
     Object.keys(c.assignments || {}).forEach(add);
     Object.values(c.cleared || {}).forEach(add);
     return ids.slice(0, 2);
+}
+
+function _chAvatar(id, title) {
+    const p = pathologists.find(x => x.id === id);
+    if (!p) return '';
+    return `<span class="split-avatar ch-av" style="--c:${p.color}"${title ? ` title="${escapeHtml(_shortPathName(id))}"` : ''} aria-hidden="true">${escapeHtml(p.initials)}</span>`;
 }
 
 // The current tab's entries.
@@ -5639,7 +5773,8 @@ function _chSelSpan(c, showMine) {
     return { days: new Set([...mine].map(x => x.split('|')[0])), cells: mine };
 }
 
-// Select a change (or just a day), bring its first day's month into view.
+// Select a change (or just a day), bring its first day's month into view
+// and make sure its section is open.
 function _chSelect(key, dayKey) {
     const c = key ? changes[key] : null;
     _chSel = c ? key : null;
@@ -5647,50 +5782,26 @@ function _chSelect(key, dayKey) {
     _chDay = dayKey || days[0] || null;
     const d = _chDay ? parseDate(_chDay) : (c && c.at ? new Date(c.at) : new Date(today));
     _chMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+    if (c && c.at) {
+        const sec = _chSectionOf(c.at);
+        if (_chStore.closed[sec]) _chStore.set(sec, false);
+    }
 }
 
-// A recompute's moves for the selected row: the ones in the month on the
-// calendar, with how many more are in other months.
-function _chMovesHtml(c, pid) {
-    const all = _chMoves(c, pid).slice().sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
-    if (!all.length) return '';
-    const inMonth = m => { const d = parseDate(m.d); return d.getFullYear() === _chMonth.getFullYear() && d.getMonth() === _chMonth.getMonth(); };
-    const shown = all.filter(inMonth);
-    const other = all.length - shown.length;
-    const lines = shown.map(m => {
-        const d = parseDate(m.d);
-        const p = pathologists.find(x => x.id === Number(m.p));
-        return `<span class="ch-move">
-            <span class="ch-move-day">${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}</span>
-            ${pid == null && p ? `<span class="split-avatar ch-av" style="--c:${p.color}" aria-hidden="true">${escapeHtml(p.initials)}</span>` : ''}
-            <span>${escapeHtml(_chSvc(m.f))} → ${escapeHtml(_chSvc(m.t))}</span>
-          </span>`;
-    }).join('');
-    return `<div class="ch-moves">${lines || '<span class="ch-note">Nothing moved this month.</span>'}
-        ${other ? `<span class="ch-note">${other} more in other months — use ‹ › beside the month.</span>` : ''}
-        ${c.movesMore ? `<span class="ch-note">${c.movesMore} later moves weren't recorded.</span>` : ''}
-      </div>`;
+function _chSectionOf(ts) {
+    const ago = -_tlDaysFromToday(new Date(ts));
+    return CH_SECTIONS.find(s => ago <= s.max).id;
 }
 
 function _chRowHtml(key, c, showMine) {
     const on = key === _chSel;
     const line = _chLine(c, showMine ? loggedInPathId : null);
     const people = showMine ? [] : _chPeople(c);
-    const avatars = people.map(id => {
-        const p = pathologists.find(x => x.id === id);
-        return `<span class="split-avatar ch-av" style="--c:${p.color}" title="${escapeHtml(_shortPathName(id))}" aria-hidden="true">${escapeHtml(p.initials)}</span>`;
-    }).join('');
+    const avatars = people.map(id => _chAvatar(id, true)).join('');
     const who = people.map(id => _shortPathName(id)).join(' and ');
-    let detail = '';
-    if (on) {
-        const day = c.date || c.startDate || (Object.keys(c.moves || {}).length ? _chMoves(c, showMine ? loggedInPathId : null)[0].d : null);
-        const actions = (_chgRequestFor(c) ? '<button type="button" data-chact="request">Open the request</button>' : '')
-            + (day && !isLakeForest() ? `<button type="button" class="primary" data-chact="goto" data-day="${escapeHtml(day)}">Show on the calendar</button>` : '');
-        detail = `<div class="ch-row-detail">
-            ${c.kind === 'recompute' ? _chMovesHtml(c, showMine ? loggedInPathId : null) : ''}
-            ${actions ? `<div class="split-actions cf-item-actions" data-key="${escapeHtml(key)}">${actions}</div>` : ''}
-          </div>`;
-    }
+    const request = on && _chgRequestFor(c)
+        ? `<div class="split-actions cf-item-actions ch-row-actions" data-key="${escapeHtml(key)}"><button type="button" data-chact="request">Open the request</button></div>`
+        : '';
     return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
         <button type="button" class="ch-row-main" data-chpick="${escapeHtml(key)}" aria-pressed="${on}"
           aria-label="${escapeHtml([CH_TAGS[line.tag], who, line.what, line.dates].filter(Boolean).join(', '))}">
@@ -5698,7 +5809,44 @@ function _chRowHtml(key, c, showMine) {
           <span class="ch-text">${avatars ? `<span class="ch-avs">${avatars}</span>` : ''}<b>${escapeHtml(line.what)}</b>${line.dates ? `<span class="ch-dates"> · ${escapeHtml(line.dates)}</span>` : ''}</span>
           ${_chgIsNew(c) ? '<span class="split-new">New</span>' : ''}
         </button>
-        ${detail}
+        ${request}
+      </div>`;
+}
+
+// A day's before/after table: every date its changes touched.
+function _chTableHtml(list, showMine) {
+    let rows = [];
+    list.forEach(([, c]) => { rows = rows.concat(_chDiffRows(c)); });
+    if (showMine) rows = rows.filter(r => r.who === loggedInPathId);
+    rows = _chMergeRows(rows);
+    if (!rows.length) return '<p class="ch-note ch-table-empty">No before/after recorded for these changes.</p>';
+    const whoCol = !showMine;
+    return `<table class="ch-table">
+        <thead><tr><th scope="col">Date</th>${whoCol ? '<th scope="col">Who</th>' : ''}<th scope="col">Before</th><th scope="col">After</th></tr></thead>
+        <tbody>${rows.map(r => `<tr>
+            <td class="ch-t-date">${escapeHtml(r.label)}</td>
+            ${whoCol ? `<td class="ch-t-who">${r.who != null ? _chAvatar(r.who, true) : ''}</td>` : ''}
+            <td class="ch-t-before">${escapeHtml(r.before)}</td>
+            <td class="ch-t-after">${escapeHtml(r.after)}</td>
+          </tr>`).join('')}</tbody>
+      </table>`;
+}
+
+// One day the changes were made: a header that opens the before/after
+// table, then its changes.
+function _chDayGroupHtml(dayKey, label, list, showMine) {
+    const open = !!_chOpenDays.closed[dayKey];   // the store's flag = open
+    const n = list.length;
+    return `<div class="ch-daygrp${open ? ' is-open' : ''}">
+        <h4 class="ch-day-h">
+          <button type="button" class="ch-day" data-chday="${escapeHtml(dayKey)}" aria-expanded="${open}">
+            <svg class="cf-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="ch-day-label">${escapeHtml(label)}</span>
+            <span class="ch-day-count">${n} change${n === 1 ? '' : 's'}</span>
+          </button>
+        </h4>
+        ${list.map(([k, c]) => _chRowHtml(k, c, showMine)).join('')}
+        ${open ? `<div class="ch-table-wrap">${_chTableHtml(list, showMine)}</div>` : ''}
       </div>`;
 }
 
@@ -5779,18 +5927,27 @@ function renderChangesPage() {
                 : '<span class="split-empty-headline">Nothing yet.</span>Schedule changes will appear here as they happen.'}</div>`);
         return;
     }
-    // Under the day each change was made, newest first.
-    let html = '';
-    let day = null;
+    // Sections by how long ago; within each, the days changes were made.
+    const sections = CH_SECTIONS.map(s => ({ id: s.id, label: s.label, days: [], count: 0 }));
     entries.forEach(([k, c]) => {
-        const label = c.at ? _chDayLabel(c.at) : 'Earlier';
-        if (label !== day) {
-            day = label;
-            html += `<h3 class="ch-day">${escapeHtml(label)}</h3>`;
+        const sec = sections.find(s => s.id === (c.at ? _chSectionOf(c.at) : 'older'));
+        const dayKey = c.at ? fmt(new Date(c.at)) : 'unknown';
+        let day = sec.days[sec.days.length - 1];
+        if (!day || day.key !== dayKey) {
+            day = { key: dayKey, label: c.at ? _chDayLabel(c.at) : 'Earlier', list: [] };
+            sec.days.push(day);
         }
-        html += _chRowHtml(k, c, showMine);
+        day.list.push([k, c]);
+        sec.count++;
     });
-    _tlSetHtml(listEl, html);
+    _tlSetHtml(listEl, _tlSectionsHtml(sections
+        .filter(s => s.id !== 'older' || s.count)
+        .map(s => ({
+            id: s.id,
+            label: s.label,
+            count: s.count,
+            items: s.days.map(d => _chDayGroupHtml(d.key, d.label, d.list, showMine)),
+        })), _chStore));
 }
 
 // Pick a day (calendar or date picker): select the newest change touching it.
@@ -5818,6 +5975,19 @@ window.__renderChangesPage = renderChangesPage;
     const listEl = document.getElementById('chList');
     if (listEl) {
         listEl.addEventListener('click', e => {
+            const sec = e.target.closest('[data-cfsec]');
+            if (sec) {
+                _chStore.set(sec.dataset.cfsec, !_chStore.closed[sec.dataset.cfsec]);
+                renderChangesPage();
+                return;
+            }
+            const dayBtn = e.target.closest('[data-chday]');
+            if (dayBtn) {
+                const k = dayBtn.dataset.chday;
+                _chOpenDays.set(k, !_chOpenDays.closed[k]);
+                renderChangesPage();
+                return;
+            }
             const pick = e.target.closest('[data-chpick]');
             if (pick) {
                 _chSelect(pick.dataset.chpick);
@@ -5827,12 +5997,7 @@ window.__renderChangesPage = renderChangesPage;
             const btn = e.target.closest('button[data-chact]');
             if (!btn) return;
             const c = changes[btn.closest('.cf-item-actions').dataset.key];
-            if (!c) return;
-            if (btn.dataset.chact === 'goto') {
-                goToDay(parseDate(btn.dataset.day));
-            } else if (btn.dataset.chact === 'request') {
-                if (_chgRequestFor(c)) openRequestOnPage(c.requestKey);
-            }
+            if (c && btn.dataset.chact === 'request' && _chgRequestFor(c)) openRequestOnPage(c.requestKey);
         });
     }
 
@@ -12956,9 +13121,11 @@ async function saveServiceFromModal(choice) {
         const update = {};
         const cleared = new Set();
         const lines = [];
+        const before = {};   // what each changed person was on (before/after table)
         touched.forEach(r => {
             const who = _chgShortName(parseInt(r.pid, 10));
             if (r.sidChanged) {
+                if (r.initialSid) before[r.pid] = r.initialSid;
                 if (r.sid) {
                     update[r.pid] = r.sid;
                     lines.push(`${who} → ${_chgServiceName(r.sid)}${r.wantLock ? ' (locked)' : ''}`);
@@ -12980,6 +13147,7 @@ async function saveServiceFromModal(choice) {
                 scope: scope,
                 assignments: update,
                 cleared: Array.from(cleared),
+                before,
             }, _chgSummaryServiceBulk(activeSvcDayKey, scope, lines)));
         }
 

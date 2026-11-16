@@ -8624,30 +8624,11 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 }
 .mc-day.mc-today::after { background: #fff; }
 
-/* Requests page: the requester's row on their requested days, and a count
-   of requests beside the date. */
+/* Requests and Changes pages: the people a request or change touches,
+   outlined on its days. */
 .month-view .day .wd-row.rq-mark { border-color: color-mix(in srgb, var(--tl-sel, var(--accent)) 55%, transparent); }
 /* The selected item's rows (set by _tlRenderMonth without rebuilding). */
 .month-view .day .wd-row.is-sel { border-color: var(--tl-sel, var(--accent)); box-shadow: 0 0 0 1px var(--tl-sel, var(--accent)); }
-.rq-flag {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 15px;
-    height: 15px;
-    margin-left: 5px;
-    padding: 0 4px;
-    box-sizing: border-box;
-    border-radius: 999px;
-    font-family: var(--sans);
-    font-style: normal;
-    font-size: 9.5px;
-    font-weight: 700;
-    line-height: 1;
-    color: #fff;
-    background: var(--tl-sel, var(--accent));
-    vertical-align: middle;
-}
 .cf-item-title .split-avatar { width: 22px; height: 22px; font-size: 9px; margin-top: -1px; }
 .rq-item-note { color: var(--ink); }
 .rq-item-status.tone-warn { color: #8a5a00; font-weight: 500; }
@@ -8663,15 +8644,49 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .rq-item-card .req-card > .req-note { display: none; }   /* already on the item */
 .rq-item-card .req-card-actions { margin-top: 10px; justify-content: flex-start; }
 /* ── Changes page: a ledger, one line per change under the day it was made ── */
+/* The day header opens that day's before/after table. */
+.ch-day-h { margin: 0; }
 .ch-day {
-    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
     padding: 8px 14px 6px;
-    background: var(--paper);
-    border-bottom: 1px solid var(--rule-soft);
-    font-size: 12px;
+    border: 0;
+    border-bottom: 1px solid var(--rule-soft-2);
+    background: #fff;
+    cursor: pointer;
+    text-align: left;
+    font: inherit;
+    font-size: 12.5px;
     font-weight: 600;
     color: var(--ink-2);
 }
+.ch-day:hover { background: var(--paper); color: var(--ink); }
+.ch-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ch-day .cf-chev { transform: none; }
+.ch-daygrp.is-open .ch-day .cf-chev { transform: rotate(90deg); }
+.ch-day-label { flex: 1; }
+.ch-day-count { font-weight: 400; font-size: 12px; }
+/* The before/after table under an opened day. */
+.ch-table-wrap { padding: 8px 14px 12px; border-bottom: 1px solid var(--rule-soft-2); background: var(--paper); overflow-x: auto; }
+.ch-table { width: 100%; border-collapse: collapse; font-size: 12.5px; background: #fff; border: 1px solid var(--rule-soft); border-radius: 6px; }
+.ch-table th {
+    padding: 6px 10px;
+    text-align: left;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+    background: var(--paper-2);
+    border-bottom: 1px solid var(--rule-soft);
+}
+.ch-table td { padding: 6px 10px; border-top: 1px solid var(--rule-soft-2); white-space: nowrap; vertical-align: middle; }
+.ch-table tbody tr:first-child td { border-top: 0; }
+.ch-t-date { color: var(--ink); }
+.ch-t-who { width: 1%; }
+.ch-t-before { color: var(--ink-2); }
+.ch-t-after { font-weight: 600; color: var(--ink); }
+.ch-note { font-size: 12px; color: var(--ink-2); margin: 0; }
 .ch-row { border-bottom: 1px solid var(--rule-soft-2); }
 .ch-row.is-selected { background: var(--paper-2); box-shadow: inset 3px 0 0 var(--tl-sel, var(--accent)); }
 .ch-row-main {
@@ -8719,15 +8734,10 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .ch-avs { display: inline-flex; margin-right: 6px; vertical-align: -5px; }
 .split-avatar.ch-av { width: 20px; height: 20px; font-size: 8.5px; border: 1.5px solid #fff; box-sizing: border-box; }
 .ch-avs .ch-av + .ch-av { margin-left: -5px; }
-/* The selected row: a recompute's moves, then the actions. */
-.ch-row-detail { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 10px 132px; }
-.ch-moves { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
-.ch-move { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.ch-move-day { width: 82px; flex: none; color: var(--ink-2); }
-.ch-note { font-size: 12px; color: var(--ink-2); }
-.ch-row-detail .split-actions.cf-item-actions { padding: 0; }
+/* A selected change that came from a request: the way to open it. */
+.split-actions.cf-item-actions.ch-row-actions { padding: 0 14px 10px 132px; }
 @media (max-width: 800px) {
-    .ch-row-detail { padding-left: 14px; }
+    .split-actions.cf-item-actions.ch-row-actions { padding-left: 14px; }
 }
 /* The new-request buttons sit above the list. */
 .cf-side .requests-page-bar { justify-content: flex-start; margin: 0; }

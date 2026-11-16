@@ -8804,10 +8804,11 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 @media (max-width: 800px) {
     .split-actions.cf-item-actions.ch-row-actions { padding-left: 14px; }
 }
-/* Conflicts and Requests use the same ledger lines. Conflict kinds: */
-.ch-tag-cf-hard    { background: #f8e0dc; color: #8f2a1f; }   /* coverage: red */
-.ch-tag-cf-callpto { background: #fbe6d4; color: #8a3c12; }   /* on call during PTO: orange */
-.ch-tag-cf-soft    { background: #fdf1d6; color: #8a5a00; }   /* soft rule: amber */
+/* Conflicts and Requests use the same ledger lines; their tag names the
+   pathologist, in that person's light schedule colour. A coverage gap,
+   which is nobody's, keeps a red tag. */
+.ch-tag-path    { background: var(--c-bg, var(--paper-2)); color: var(--c, var(--ink)); font-weight: 600; }
+.ch-tag-cf-hard { background: #f8e0dc; color: #8f2a1f; }
 /* A request's status at the end of its line, only when it says something. */
 .ch-status { flex: none; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
 .ch-status.tone-warn { color: #8a5a00; font-weight: 600; }

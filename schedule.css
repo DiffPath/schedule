@@ -8662,14 +8662,10 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
     font-weight: 600;
     color: var(--ink-2);
 }
-.ch-day:hover { background: var(--paper); color: var(--ink); }
-.ch-day:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.ch-day .cf-chev { transform: none; }
-.ch-daygrp.is-open .ch-day .cf-chev { transform: rotate(90deg); }
+span.ch-day { box-sizing: border-box; cursor: default; }
 .ch-day-label { flex: 1; }
 .ch-day-count { font-weight: 400; font-size: 12px; }
-/* The before/after table under an opened day. */
-.ch-table-wrap { padding: 8px 14px 12px; border-bottom: 1px solid var(--rule-soft-2); background: var(--paper); overflow-x: auto; }
+/* The table under a selected line (and in the changes alert). */
 .ch-table { width: 100%; border-collapse: collapse; font-size: 12.5px; background: #fff; border: 1px solid var(--rule-soft); border-radius: 6px; }
 .ch-table th {
     padding: 6px 10px;
@@ -8717,7 +8713,7 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
     width: 108px;
     height: 21px;
     padding: 0 8px;
-    border-radius: 999px;
+    border-radius: 5px;   /* squared off, like the pathologist rows in the schedule */
     font-size: 11.5px;
     font-weight: 500;
     white-space: nowrap;
@@ -8753,6 +8749,8 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 }
 .ch-accept:hover { background: var(--paper); border-color: var(--ink-2); }
 .ch-accept:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The confirm panel (askConfirm): one plain sentence above the buttons. */
+.confirm-panel-body { margin: 0 0 4px; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
 /* The alert: "Changes to your schedule". */
 #chAlertBack .modal-stable { width: min(560px, 94vw); height: min(520px, 90vh); }
 .ch-alert-list { border: 1px solid var(--rule-soft); border-radius: 8px; overflow: hidden; }
@@ -8799,11 +8797,6 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .ch-avs { display: inline-flex; margin-right: 6px; vertical-align: -5px; }
 .split-avatar.ch-av { width: 20px; height: 20px; font-size: 8.5px; border: 1.5px solid #fff; box-sizing: border-box; }
 .ch-avs .ch-av + .ch-av { margin-left: -5px; }
-/* A selected change that came from a request: the way to open it. */
-.split-actions.cf-item-actions.ch-row-actions { padding: 0 14px 10px 132px; }
-@media (max-width: 800px) {
-    .split-actions.cf-item-actions.ch-row-actions { padding-left: 14px; }
-}
 /* Conflicts and Requests use the same ledger lines; their tag names the
    pathologist, in that person's light schedule colour. A coverage gap,
    which is nobody's, keeps a red tag. */
@@ -8815,16 +8808,16 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .ch-status.tone-ok { color: #2f6b3a; }
 .ch-status.tone-bad { color: #9b3b22; }
 .ch-row-main .split-new { flex: none; }
-/* Under the selected line: the explanation, then its actions (Conflicts),
-   or the request's card (Requests) — indented to the text, past the tag. */
-.ch-detail { display: grid; gap: 8px; padding: 0 14px 12px 132px; }
+/* Under the selected line, across the full width of the list (under the tag
+   too): its table, then its actions or the request's card. */
+.ch-detail { display: grid; gap: 10px; padding: 2px 14px 12px; min-width: 0; overflow-x: auto; }
 .ch-detail-text { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink-2); }
 .ch-detail .split-actions.cf-item-actions { padding: 0; }
-.ch-row .rq-item-card { padding: 0 14px 12px 132px; }
-@media (max-width: 800px) {
-    .ch-detail,
-    .ch-row .rq-item-card { padding-left: 14px; }
-}
+.ch-detail .ch-table { width: 100%; }
+.ch-row .rq-item-card { padding: 0; }
+/* The table already says what was asked; the card keeps status, note,
+   decision and buttons. */
+.rq-item-card.has-table .req-detail { display: none; }
 
 /* The new-request buttons: one group in the Requests header, styled like the
    Pending / History tabs beside it. */

@@ -2872,16 +2872,71 @@ function updateNavConflictsIndicator() {
     _setNavDot(dot, tone, unseen.length > 0);
 }
 
+// ── Confirm panel ── the app's own panel in place of the browser's
+// confirm(), in the day editor's style (× close, serif title, sub line,
+// bottom-bar button). Resolves true on the confirm button; false on ×,
+// Escape or a click outside. Built once, on first use.
+let _confirmResolve = null;
+
+function _confirmEl() {
+    let back = document.getElementById('confirmPanelBack');
+    if (back) return back;
+    back = document.createElement('div');
+    back.className = 'modal-back';
+    back.id = 'confirmPanelBack';
+    back.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmPanelTitle">
+        <h3 id="confirmPanelTitle"></h3>
+        <div class="sub" id="confirmPanelSub"></div>
+        <p class="confirm-panel-body" id="confirmPanelBody"></p>
+        <div class="modal-actions">
+          <button type="button" id="confirmPanelCancel">Cancel</button>
+          <button type="button" class="primary" id="confirmPanelOk"></button>
+        </div>
+      </div>`;
+    document.body.appendChild(back);
+    back.querySelector('#confirmPanelCancel').addEventListener('click', () => _closeConfirm(false));
+    back.querySelector('#confirmPanelOk').addEventListener('click', () => _closeConfirm(true));
+    back.addEventListener('click', e => { if (e.target === back) _closeConfirm(false); });
+    back.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { e.stopPropagation(); _closeConfirm(false); }
+    });
+    return back;
+}
+
+function askConfirm({ title, sub, body, confirmLabel }) {
+    const back = _confirmEl();
+    back.querySelector('#confirmPanelTitle').textContent = title;
+    back.querySelector('#confirmPanelSub').textContent = sub || '';
+    back.querySelector('#confirmPanelBody').textContent = body || '';
+    back.querySelector('#confirmPanelBody').hidden = !body;
+    back.querySelector('#confirmPanelOk').textContent = confirmLabel;
+    if (_confirmResolve) _confirmResolve(false);   // a stale panel counts as cancelled
+    back.classList.add('open');
+    setTimeout(() => back.querySelector('#confirmPanelOk').focus(), 0);
+    return new Promise(resolve => { _confirmResolve = resolve; });
+}
+
+function _closeConfirm(value) {
+    const back = document.getElementById('confirmPanelBack');
+    if (back) back.classList.remove('open');
+    const resolve = _confirmResolve;
+    _confirmResolve = null;
+    if (resolve) resolve(value);
+}
+
 // ── Accept / un-accept ──────────────────────────────────────────────────
 async function acceptConflict(key) {
     if (!isAdmin()) return;
     const c = getConflicts().find(x => x.key === key);
     if (!c) return;
-    const ok = confirm(
-        `Accept this conflict?\n\n${c.detail}\n\n`
-        + 'The schedule is not changed — this only takes it off the conflict '
-        + 'list. It comes back if the underlying assignment changes.'
-    );
+    const line = _cfLine(c);
+    const ok = await askConfirm({
+        title: 'Accept this conflict?',
+        sub: [line.who != null ? _drLastName(line.who) : '', line.what, line.when].filter(Boolean).join(' · '),
+        body: 'The schedule isn’t changed. Accepting only takes it off the open list. '
+            + 'It comes back on its own if the assignments behind it change.',
+        confirmLabel: 'Accept as is',
+    });
     if (!ok) return;
     try {
         await db.ref('scheduler/conflictAcks/' + key).set({
@@ -2993,10 +3048,11 @@ function _cfDayShort(d) {
 }
 
 // "Thu, Nov 12" / "Nov 16 – 18" / "Nov 30 – Dec 4".
+// "Nov 12–19" within a month; "Sep 25 – Jan 4" across months (spaced).
 function _tlRange(s, e) {
     if (sameDay(s, e)) return _cfDayShort(s);
     return s.getMonth() === e.getMonth() && s.getFullYear() === e.getFullYear()
-        ? `${MONTHS_SHORT[s.getMonth()]} ${s.getDate()} – ${e.getDate()}`
+        ? `${MONTHS_SHORT[s.getMonth()]} ${s.getDate()}–${e.getDate()}`
         : `${MONTHS_SHORT[s.getMonth()]} ${s.getDate()} – ${MONTHS_SHORT[e.getMonth()]} ${e.getDate()}`;
 }
 
@@ -3302,6 +3358,36 @@ function _cfDecorateDay(date, inMonth) {
     };
 }
 
+// A conflict as its list line words it: { who (pathId, or null for a
+// coverage gap), what ("On call during PTO", "Nobody on Bigs"), when }.
+function _cfLine(c) {
+    const who = c.kind !== 'hard' && c.pathId != null ? c.pathId : null;
+    const what = who == null ? _cfDescribe(c).title
+        : c.kind === 'callpto' ? `On call during ${timeOffName(timeOffOn(c.pathId, c.date))}`
+        : (s => s.charAt(0).toUpperCase() + s.slice(1))(c.detail.replace(/^[^:]+:\s*/, ''));
+    return { who, what, when: _conflictWhen(c) };
+}
+
+// A conflict as a Date / Conflict table: the days it covers and what's
+// wrong on each. A soft rule shows both days of the pattern (Bigs, then
+// PTO or Breast Bx/WFH the next workday).
+function _cfTableHtml(c) {
+    const rows = [];
+    if (c.kind === 'callpto') {
+        rows.push([_conflictWhen(c), `On call during ${timeOffName(timeOffOn(c.pathId, c.date))}`]);
+    } else if (c.kind === 'soft') {
+        const next = nextWorkday(c.date);
+        rows.push([_cfDayShort(c.date), 'On Bigs']);
+        rows.push([_cfDayShort(next), /PTO$/.test(c.detail) ? 'PTO' : 'On Breast Bx/WFH']);
+    } else {
+        rows.push([_conflictWhen(c), _cfDescribe(c).title]);
+    }
+    return `<table class="ch-table">
+        <thead><tr><th scope="col">Date</th><th scope="col">Conflict</th></tr></thead>
+        <tbody>${rows.map(([d, t]) => `<tr><td class="ch-t-date">${escapeHtml(d)}</td><td class="ch-t-after">${escapeHtml(t)}</td></tr>`).join('')}</tbody>
+      </table>`;
+}
+
 function _cfItemHtml(c, seen) {
     const meta = CONFLICT_KIND_META[c.kind] || { label: c.label, tone: 'low' };
     const on = c.key === _cfSel;
@@ -3327,19 +3413,17 @@ function _cfItemHtml(c, seen) {
     // wrong and when. The selected line opens the explanation and actions.
     // The tag names whose conflict it is; the line says what, without the
     // name again. A coverage gap belongs to nobody: it keeps a red tag.
-    const when = _conflictWhen(c);
-    const who = c.kind !== 'hard' && c.pathId != null;
-    const what = !who ? d.title
-        : c.kind === 'callpto' ? `On call during ${timeOffName(timeOffOn(c.pathId, c.date))}`
-        : (s => s.charAt(0).toUpperCase() + s.slice(1))(c.detail.replace(/^[^:]+:\s*/, ''));
+    const line = _cfLine(c);
+    const { what, when } = line;
+    const who = line.who != null;
     return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
-        <button type="button" class="ch-row-main" data-cfpick="${escapeHtml(c.key)}" aria-pressed="${on}"
+        <button type="button" class="ch-row-main" data-cfpick="${escapeHtml(c.key)}" aria-expanded="${on}"
           aria-label="${escapeHtml([who ? _shortPathName(c.pathId) : meta.label, what, when, isNew ? 'new' : ''].filter(Boolean).join(', '))}">
           ${who ? _pathTagHtml(c.pathId) : `<span class="ch-tag ch-tag-cf-hard">${escapeHtml(meta.label)}</span>`}
           <span class="ch-text"><b>${escapeHtml(what)}</b><span class="ch-dates"> · ${escapeHtml(when)}</span></span>
           ${isNew ? '<span class="split-new">New</span>' : ''}
         </button>
-        ${on ? `<div class="ch-detail">${d.body ? `<p class="ch-detail-text">${escapeHtml(d.body)}</p>` : ''}${note}${actions}</div>` : ''}
+        ${on ? `<div class="ch-detail">${_cfTableHtml(c)}${note}${actions}</div>` : ''}
       </div>`;
 }
 
@@ -3375,7 +3459,8 @@ function renderConflictsPage() {
     // The selected conflict went away (accepted, fixed) — keep its day.
     if (_cfSel && !pool.some(c => c.key === _cfSel)) _cfSel = null;
     // First visit: the soonest conflict.
-    if (!_cfMonth) _cfSelect(pool[0] || null, pool[0] ? null : fmt(today));
+    // First visit: everything closed, on this month.
+    if (!_cfMonth) { _cfSel = null; _cfDay = null; _cfMonth = new Date(today.getFullYear(), today.getMonth(), 1); }
 
     const selC = pool.find(c => c.key === _cfSel) || null;
     const selDays = new Set();
@@ -3423,6 +3508,8 @@ window.__renderConflictsPage = renderConflictsPage;
             }
             const pick = e.target.closest('[data-cfpick]');
             if (pick) {
+                // Clicking the open line closes it again.
+                if (pick.dataset.cfpick === _cfSel) { _cfSel = null; _cfDay = null; renderConflictsPage(); return; }
                 const c = _cfPool().find(x => x.key === pick.dataset.cfpick);
                 if (c) { _cfSelect(c); renderConflictsPage(); }
                 return;
@@ -3462,8 +3549,7 @@ window.__renderConflictsPage = renderConflictsPage;
             const btn = e.target.closest('.req-tab');
             if (!btn || btn.dataset.ctab === activeConflictsTab) return;
             activeConflictsTab = btn.dataset.ctab;
-            const pool = _cfPool();
-            _cfSelect(pool[0] || null, pool[0] ? null : fmt(today));
+            _cfSel = null; _cfDay = null;   // a new tab starts closed
             renderConflictsPage();
             const l = document.getElementById('cfList');
             if (l) l.scrollTop = 0;
@@ -4953,6 +5039,81 @@ function _requestWhatDates(r) {
     }
 }
 
+// A request as Date / Before / After rows. Approved: what the change log
+// recorded when it was applied. Otherwise: today's schedule against what was
+// asked. A sendout-dates ask has none.
+function _rqTableRows(key, r) {
+    if (r.status === 'approved') {
+        const logged = Object.entries(changes || {}).filter(([, c]) => c && c.requestKey === key && c.kind !== 'undo');
+        return logged.length ? _chNetRows(logged, r.requesterId).rows : [];
+    }
+    const pid = r.requesterId;
+    const p = r.payload || {};
+    const workdays = (s, e) => {
+        const out = [];
+        for (let d = parseDate(s); fmt(d) <= e; d = addDays(d, 1)) if (!isWeekend(d) && !getFederalHoliday(d)) out.push(fmt(d));
+        return out;
+    };
+    const now = k => {
+        const a = getDayAssignments(parseDate(k))[pid];
+        if (!a || a.type === 'blank') return '—';
+        if (a.type === 'pto') return 'PTO';
+        return a.service ? _chSvc(a.service.id) : 'Off';
+    };
+    const weekOf = k => getCallCycleStart(parseDate(k));
+    const rows = [];
+    const add = (k, before, after, label) => rows.push({ k, who: pid, before, after, label: label || null });
+    switch (r.type) {
+        case 'pto_add':
+            workdays(p.start, p.end || p.start).forEach(k => add(k, now(k), 'PTO'));
+            break;
+        case 'pto_remove':
+            if (p.start) workdays(p.start, p.end || p.start).forEach(k => add(k, 'PTO', 'Working'));
+            break;
+        case 'service_change': {
+            const days = p.scope === 'week' ? workdaysInCallCycle(parseDate(p.date)).map(fmt) : [p.date];
+            days.forEach(k => add(k, now(k), p.serviceId ? _chSvc(p.serviceId) : 'Rotation'));
+            break;
+        }
+        case 'service_lock':
+            add(p.date, now(p.date), `${_chSvc(p.serviceId)} · locked`);
+            break;
+        case 'oncall_change': {
+            if (p.scope === 'week') {
+                const cs = weekOf(p.date);
+                add(fmt(cs), _drLastName(onCallIdForCycle(cs)), _drLastName(p.newPathId), _callFmtWeek(cs));
+            } else {
+                add(p.date, _drLastName(onCallIdForDay(parseDate(p.date))), _drLastName(p.newPathId));
+            }
+            break;
+        }
+        case 'oncall_swap': {
+            const a = weekOf(p.aStart), b = weekOf(p.bStart);
+            add(fmt(a), _drLastName(p.aHolder), _drLastName(p.bHolder), _callFmtWeek(a));
+            add(fmt(b), _drLastName(p.bHolder), _drLastName(p.aHolder), _callFmtWeek(b));
+            break;
+        }
+        case 'lf_sendout': {
+            const off = p.action === 'remove';
+            if (p.scope === 'week') {
+                const cs = weekOf(p.date);
+                add(fmt(cs), off ? 'Sendout' : 'No sendout', off ? 'No sendout' : 'Sendout', _callFmtWeek(cs));
+            } else {
+                add(p.date, off ? 'Sendout' : 'No sendout', off ? 'No sendout' : 'Sendout');
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return _chMergeRows(rows);
+}
+
+function _rqTableHtml(key, r) {
+    const rows = _rqTableRows(key, r);
+    return rows.length ? _chRowsTableHtml(rows, false) : '';
+}
+
 // A short status at the end of the line, only when it says something the
 // tab doesn't: the request needs me, it's waiting on a colleague (a call
 // trade, Lake Forest), or how it was decided.
@@ -4977,13 +5138,13 @@ function _rqItemHtml(key, r) {
     const label = [_shortPathName(r.requesterId), _rqTypeLabel(r), wd.what, wd.dates,
         st ? st.text : '', r.note ? 'note: ' + r.note : ''].filter(Boolean).join(', ');
     return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
-        <button type="button" class="ch-row-main" data-rqpick="${escapeHtml(key)}" aria-pressed="${on}" aria-label="${escapeHtml(label)}">
+        <button type="button" class="ch-row-main" data-rqpick="${escapeHtml(key)}" aria-expanded="${on}" aria-label="${escapeHtml(label)}">
           ${_pathTagHtml(r.requesterId)}
           <span class="ch-text"><b>${escapeHtml(wd.what)}</b>${wd.dates ? `<span class="ch-dates"> · ${escapeHtml(wd.dates)}</span>` : ''}${r.note ? `<span class="ch-reason">“${escapeHtml(r.note)}”</span>` : ''}</span>
           ${st ? `<span class="ch-status${st.tone ? ' tone-' + st.tone : ''}">${escapeHtml(st.text)}</span>` : ''}
           ${_rqIsNew(r) ? '<span class="split-new">New</span>' : ''}
         </button>
-        ${on ? `<div class="rq-item-card" data-rqcard="${escapeHtml(key)}"></div>` : ''}
+        ${on ? (t => `<div class="ch-detail">${t}<div class="rq-item-card${t ? ' has-table' : ''}" data-rqcard="${escapeHtml(key)}"></div></div>`)(_rqTableHtml(key, r)) : ''}
       </div>`;
 }
 
@@ -5116,7 +5277,8 @@ function renderRequestsPage() {
     // The selected request moved tabs (decided, withdrawn) — keep its day.
     if (_rqSel && !pool.some(([k]) => k === _rqSel)) _rqSel = null;
     // First visit: the first request in the list.
-    if (!_rqMonth) _rqSelect(pool[0] ? pool[0][0] : null, pool[0] ? null : fmt(today));
+    // First visit: everything closed, on this month.
+    if (!_rqMonth) { _rqSel = null; _rqDay = null; _rqMonth = new Date(today.getFullYear(), today.getMonth(), 1); }
 
     const selR = _rqSel ? requests[_rqSel] : null;
     const selSpan = selR ? _requestSpan(selR) : null;
@@ -5190,7 +5352,9 @@ window.__renderRequestsPage = renderRequestsPage;
             }
             const pick = e.target.closest('[data-rqpick]');
             if (pick) {
-                _rqSelect(pick.dataset.rqpick);
+                // Clicking the open line closes it again.
+                if (pick.dataset.rqpick === _rqSel) { _rqSel = null; _rqDay = null; }
+                else _rqSelect(pick.dataset.rqpick);
                 renderRequestsPage();
             }
         });
@@ -5212,8 +5376,7 @@ window.__renderRequestsPage = renderRequestsPage;
             const btn = e.target.closest('.req-tab');
             if (!btn || btn.dataset.rtab === activeRequestsPageTab) return;
             activeRequestsPageTab = btn.dataset.rtab;
-            const pool = _rqPool();
-            _rqSelect(pool[0] ? pool[0][0] : null, pool[0] ? null : fmt(today));
+            _rqSel = null; _rqDay = null;   // a new tab starts closed
             renderRequestsPage();
             if (listEl) listEl.scrollTop = 0;
         });
@@ -5482,8 +5645,6 @@ let _chMonth = null;   // first of the month the calendar shows
 let _chSel = null;     // selected line key ('r:'/'h:'/'d:' + …)
 let _chDay = null;     // selected day (yyyy-mm-dd), with or without a change
 const _chStore = _tlStore('changeSectionsClosed');
-// Days opened to their before/after table (yyyy-mm-dd → true), per browser.
-const _chOpenDays = _tlStore('changeDaysOpen');
 
 const CH_SECTIONS = [
     { id: 'week', label: 'Within the last week', max: 6 },
@@ -5866,68 +6027,56 @@ function _chNetRows(entries, pid) {
 // "Nov 23 – 24, Dec 1": a few ranges listed, more shown as first – last.
 function _chLabels(rows) {
     const labels = [...new Set(rows.map(r => r.label))];
-    if (labels.length <= 3) return labels.join(', ');
+    if (labels.length <= 3) {
+        // Several: "Dec 2 and Dec 8" (weekdays dropped so commas stay clear).
+        const ls = labels.length > 1 ? labels.map(l => l.replace(/^[A-Z][a-z]{2}, /, '')) : labels;
+        return ls.length > 1 ? ls.slice(0, -1).join(', ') + ' and ' + ls[ls.length - 1] : ls[0];
+    }
     const ks = rows.map(r => r.k).sort();
     const es = rows.map(r => r.end).sort();
     return _chRange(ks[0], es[es.length - 1]);
 }
 
-// The short "what · dates" for one type's net rows.
+// The short line for one type's net rows: a verb and the dates ("Added Nov
+// 12–19", "Switched Nov 9–15 → Nov 2–8", "Adjusted Nov 12 – May 10"). The
+// tag already says what kind of change it is; the table under a selected
+// line has the details.
 function _chSummary(tag, net, entries, pid) {
     const rows = net.rows;
-    const n = net.days.size;
     const span = () => { const ks = [...net.days].sort(); return _chRange(ks[0], ks[ks.length - 1]); };
     const people = new Set(rows.map(r => r.who).filter(w => w != null));
+    const addRemove = (add, off) => {
+        if (add.length && !off.length) return { what: 'Added', dates: _chLabels(add) };
+        if (off.length && !add.length) return { what: 'Removed', dates: _chLabels(off) };
+        return { what: 'Added', dates: `${_chLabels(add)}, removed ${_chLabels(off)}` };
+    };
     switch (tag) {
-        case 'pto': {
-            const word = entries.some(([, c]) => /leave added|leave removed/i.test(c.summary || '')) ? 'Leave' : 'PTO';
-            const add = rows.filter(r => r.after === 'PTO');
-            const off = rows.filter(r => r.before === 'PTO');
-            if (add.length && !off.length) return { what: `${word} added`, dates: _chLabels(add) };
-            if (off.length && !add.length) return { what: `${word} removed`, dates: _chLabels(off) };
-            return { what: `${word} changed`, dates: `added ${_chLabels(add)}, removed ${_chLabels(off)}` };
-        }
+        case 'pto':
+            return addRemove(rows.filter(r => r.after === 'PTO'), rows.filter(r => r.before === 'PTO'));
         case 'call': {
             const on = rows.filter(r => r.after === 'On call');
             const off = rows.filter(r => r.after === 'Off call');
             if (pid != null || people.size <= 1) {
-                if (on.length && off.length) return { what: 'Call week moved', dates: `${_chLabels(off)} → ${_chLabels(on)}` };
-                if (on.length) return { what: 'On call', dates: _chLabels(on) };
-                if (off.length) return { what: 'Off call', dates: _chLabels(off) };
-                return { what: 'Call back to the rotation', dates: _chLabels(rows) };
+                if (on.length && off.length) return { what: 'Switched', dates: `${_chLabels(off)} → ${_chLabels(on)}` };
+                if (on.length) return { what: 'Added', dates: _chLabels(on) };
+                if (off.length) return { what: 'Removed', dates: _chLabels(off) };
+                return { what: 'Back to the rotation', dates: _chLabels(rows) };
             }
             const weeks = [...new Set(rows.map(r => r.label))];
-            if (weeks.length === 2 && on.length && off.length) return { what: 'Call weeks swapped', dates: weeks.join(' ↔ ') };
-            return { what: 'Call changed', dates: _chLabels(rows) };
+            if (weeks.length === 2 && on.length && off.length) return { what: 'Switched', dates: weeks.join(' ↔ ') };
+            return { what: 'Adjusted', dates: _chLabels(rows) };
         }
         case 'lock': {
             const locked = rows.filter(r => / · locked$/.test(r.after));
-            if (rows.length === 1) {
-                const r = rows[0];
-                return locked.length ? { what: `Locked on ${r.after.replace(/ · locked$/, '')}`, dates: r.label }
-                    : { what: 'Lock removed', dates: r.label };
-            }
-            if (locked.length === rows.length) return { what: `${n} days locked`, dates: span() };
-            if (!locked.length) return { what: 'Locks removed', dates: span() };
-            return { what: 'Locks changed', dates: span() };
+            const when = rows.length <= 3 ? _chLabels(rows) : span();
+            if (locked.length === rows.length) return { what: 'Locked', dates: when };
+            if (!locked.length) return { what: 'Unlocked', dates: when };
+            return { what: 'Adjusted', dates: when };
         }
-        case 'lf': {
-            const add = rows.filter(r => r.after === 'Sendout');
-            const off = rows.filter(r => r.after === 'No sendout');
-            if (add.length && !off.length) return { what: 'Sendout added', dates: _chLabels(add) };
-            if (off.length && !add.length) return { what: 'Sendout removed', dates: _chLabels(off) };
-            return { what: 'Sendouts changed', dates: _chLabels(rows) };
-        }
-        default: {
-            if (rows.length === 1) {
-                const r = rows[0];
-                if (r.after === 'Rotation') return { what: 'Back to the rotation', dates: r.label };
-                if (r.after === 'Adjusted') return { what: 'Adjusted before a change', dates: r.label };
-                if (r.before === '—') return { what: `Set to ${r.after}`, dates: r.label };
-                return { what: `${r.before} → ${r.after}`, dates: r.label };
-            }
-            return { what: n > 1 ? `${n} days changed` : `${rows.length} services changed`, dates: span() };
-        }
+        case 'lf':
+            return addRemove(rows.filter(r => r.after === 'Sendout'), rows.filter(r => r.after === 'No sendout'));
+        default:
+            return { what: 'Adjusted', dates: rows.length === 1 ? rows[0].label : span() };
     }
 }
 
@@ -5966,7 +6115,7 @@ function _chGroups(entries, byDay, pid, prefix) {
             s.days.forEach(d => { if (keep(d)) days.add(d); });
             s.cells.forEach(x => { if (keep(x.split('|')[0])) cells.add(x); });
         });
-        out.push(Object.assign(g, line, { people, requestKey: withReq ? withReq[1].requestKey : null, span: { days, cells } }));
+        out.push(Object.assign(g, line, { pid, people, requestKey: withReq ? withReq[1].requestKey : null, span: { days, cells } }));
     });
     return out;
 }
@@ -6070,8 +6219,9 @@ function _chSelect(key, dayKey, model) {
 // A line's tag and text (shared by the page and the alert).
 function _chLineInner(g) {
     const avatars = (g.people || []).map(id => _chAvatar(id, true)).join('');
+    // Plain text, no bold: "Added Nov 12–19".
     return `<span class="ch-tag ch-tag-${g.tag}">${CH_TAGS[g.tag]}</span>
-          <span class="ch-text">${avatars ? `<span class="ch-avs">${avatars}</span>` : ''}<b>${escapeHtml(g.what)}</b>${g.dates ? `<span class="ch-dates"> · ${escapeHtml(g.dates)}</span>` : ''}${g.reason ? `<span class="ch-reason">“${escapeHtml(g.reason)}”</span>` : ''}</span>`;
+          <span class="ch-text">${avatars ? `<span class="ch-avs">${avatars}</span>` : ''}${escapeHtml([g.what, g.dates].filter(Boolean).join(' '))}${g.reason ? `<span class="ch-reason">“${escapeHtml(g.reason)}”</span>` : ''}</span>`;
 }
 
 function _chLineLabel(g) {
@@ -6079,23 +6229,36 @@ function _chLineLabel(g) {
         g.reason ? 'reason: ' + g.reason : ''].filter(Boolean).join(', ');
 }
 
+// A line; selected, it opens its before/after table across the full width
+// of the list (under the tag too), then "Open the request" if it has one.
 function _chRowHtml(g) {
     const on = g.key === _chSel;
-    const request = on && g.requestKey
-        ? `<div class="split-actions cf-item-actions ch-row-actions"><button type="button" data-chreq="${escapeHtml(g.requestKey)}">Open the request</button></div>`
-        : '';
+    let detail = '';
+    if (on) {
+        const table = g.tag === 'deny'
+            ? (requests[g.requestKey] ? _rqTableHtml(g.requestKey, requests[g.requestKey]) : '')
+            : _chTableHtml(g.entries, g.pid);
+        const request = g.requestKey
+            ? `<div class="split-actions cf-item-actions"><button type="button" data-chreq="${escapeHtml(g.requestKey)}">Open the request</button></div>`
+            : '';
+        detail = `<div class="ch-detail">${table}${request}</div>`;
+    }
     return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
-        <button type="button" class="ch-row-main" data-chpick="${escapeHtml(g.key)}" aria-pressed="${on}"
+        <button type="button" class="ch-row-main" data-chpick="${escapeHtml(g.key)}" aria-expanded="${on}"
           aria-label="${escapeHtml(_chLineLabel(g))}">${_chLineInner(g)}</button>
-        ${request}
+        ${detail}
       </div>`;
 }
 
 // The net before/after table for some changes.
 function _chTableHtml(entries, pid) {
-    const rows = _chNetRows(entries, pid).rows;
-    if (!rows.length) return '<p class="ch-note ch-table-empty">No before/after recorded for these changes.</p>';
-    const whoCol = pid == null && rows.some(r => r.who != null);
+    return _chRowsTableHtml(_chNetRows(entries, pid).rows, pid == null);
+}
+
+// Date / (Who) / Before / After. whoCol: show whose row it is (team-wide).
+function _chRowsTableHtml(rows, whoCol) {
+    if (!rows.length) return '<p class="ch-note ch-table-empty">No before/after recorded for this.</p>';
+    whoCol = whoCol && rows.some(r => r.who != null);
     return `<table class="ch-table">
         <thead><tr><th scope="col">Date</th>${whoCol ? '<th scope="col">Who</th>' : ''}<th scope="col">Before</th><th scope="col">After</th></tr></thead>
         <tbody>${rows.map(r => `<tr>
@@ -6107,22 +6270,18 @@ function _chTableHtml(entries, pid) {
       </table>`;
 }
 
-// One day changes were made: a header that opens the day's before/after
-// table, then one line per type.
-function _chDayGroupHtml(day, pid) {
-    const open = !!_chOpenDays.closed[day.key];   // the store's flag = open
+// One day changes were made: its label, then one line per type. (Each
+// line opens its own table, so the day header is just a label.)
+function _chDayGroupHtml(day) {
     const n = day.lines.length;
-    const entries = [].concat(...day.lines.map(g => g.entries));
-    return `<div class="ch-daygrp${open ? ' is-open' : ''}">
+    return `<div class="ch-daygrp">
         <h4 class="ch-day-h">
-          <button type="button" class="ch-day" data-chday="${escapeHtml(day.key)}" aria-expanded="${open}">
-            <svg class="cf-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="ch-day">
             <span class="ch-day-label">${escapeHtml(day.label)}</span>
             <span class="ch-day-count">${n} change${n === 1 ? '' : 's'}</span>
-          </button>
+          </span>
         </h4>
         ${day.lines.map(_chRowHtml).join('')}
-        ${open ? `<div class="ch-table-wrap">${_chTableHtml(entries, pid)}</div>` : ''}
       </div>`;
 }
 
@@ -6205,7 +6364,8 @@ function renderChangesPage() {
 
     if (_chSel && !m.lines.some(g => g.key === _chSel)) _chSel = null;
     // First visit: the newest line.
-    if (!_chMonth) _chSelect(m.lines[0] ? m.lines[0].key : null, m.lines[0] ? null : fmt(today), m);
+    // First visit: everything closed, on this month.
+    if (!_chMonth) { _chSel = null; _chDay = null; _chMonth = new Date(today.getFullYear(), today.getMonth(), 1); }
 
     const selG = _chSel ? m.lines.find(g => g.key === _chSel) : null;
     const selDays = selG ? selG.span.days : new Set(_chDay ? [_chDay] : []);
@@ -6240,7 +6400,7 @@ function renderChangesPage() {
             id: s.id,
             label: s.label,
             count: s.count,
-            items: s.days.map(d => _chDayGroupHtml(d, m.pid)),
+            items: s.days.map(d => _chDayGroupHtml(d)),
         })), _chStore) : '';
     _tlSetHtml(listEl, (m.review.length ? _chReviewHtml(m.review) : '') + history);
 }
@@ -6280,16 +6440,11 @@ window.__renderChangesPage = renderChangesPage;
                 renderChangesPage();
                 return;
             }
-            const dayBtn = e.target.closest('[data-chday]');
-            if (dayBtn) {
-                const k = dayBtn.dataset.chday;
-                _chOpenDays.set(k, !_chOpenDays.closed[k]);
-                renderChangesPage();
-                return;
-            }
             const pick = e.target.closest('[data-chpick]');
             if (pick) {
-                _chSelect(pick.dataset.chpick);
+                // Clicking the open line closes it again.
+                if (pick.dataset.chpick === _chSel) { _chSel = null; _chDay = null; }
+                else _chSelect(pick.dataset.chpick);
                 renderChangesPage();
                 return;
             }
@@ -6315,8 +6470,7 @@ window.__renderChangesPage = renderChangesPage;
             if (scope !== 'mine' && scope !== 'all') return;
             if (scope === activeChangesScope) return;
             activeChangesScope = scope;
-            const m = _chModel();
-            _chSelect(m.lines[0] ? m.lines[0].key : null, m.lines[0] ? null : fmt(today), m);
+            _chSel = null; _chDay = null;   // a new tab starts closed
             renderChangesPage();
             if (listEl) listEl.scrollTop = 0;
         });

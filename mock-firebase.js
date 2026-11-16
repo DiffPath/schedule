@@ -447,6 +447,8 @@
     };
 
     // ── demo seed ───────────────────────────────────────────────────────
+    // The starting point (mock-activity.js then adds weeks of activity on
+    // the first sign-in, unless the address has ?plain).
     // Kept intentionally small. scheduler/pathologists is ABSENT so the
     // app's own "seed if empty" write path runs on first sign-in. Dates are
     // computed relative to today so the demo always looks current:
@@ -666,6 +668,18 @@
     } else {
         injectBanner();
     }
+
+    // Sample activity (mock-activity.js): on a fresh mock, the first sign-in
+    // fills in weeks of requests, changes and conflicts through the app's own
+    // code. Loaded after the app's scripts have run. ?plain skips it.
+    function loadActivity() {
+        if (/[?&]plain\b/.test(location.search)) return;
+        var s = document.createElement('script');
+        s.src = 'mock-activity.js';
+        document.body.appendChild(s);
+    }
+    if (document.readyState === 'complete') loadActivity();
+    else window.addEventListener('load', loadActivity);
 
     // ── debug handle ────────────────────────────────────────────────────
     window.MockScheduler = {

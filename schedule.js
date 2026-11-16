@@ -2559,10 +2559,11 @@ function updateNavChangesIndicator() {
     if (!dot) return;
 
     // Lake Forest guest: light the dot for unseen sendout entries.
+    // Same entries the page lists (no conference logging, nothing undone).
     if (isLakeForest()) {
         const ackTs = _getChangesAckTs();
-        const hasUnseen = Object.values(changes || {}).some(c =>
-            c && c.kind === 'lf_sendout'
+        const hasUnseen = _chVisibleEntries().some(([, c]) =>
+            c.kind === 'lf_sendout'
             && (c.at || 0) > ackTs
             && c.byPathId !== loggedInPathId
         );
@@ -2578,8 +2579,8 @@ function updateNavChangesIndicator() {
     }
 
     const ackTs = _getChangesAckTs();
-    const hasUnseen = Object.values(changes || {}).some(c =>
-        c && (c.at || 0) > ackTs
+    const hasUnseen = _chVisibleEntries().some(([, c]) =>
+        (c.at || 0) > ackTs
         && c.byPathId !== loggedInPathId
         && _chgAffectsUser(c, loggedInPathId)
     );
@@ -5355,7 +5356,10 @@ async function logChange(entry) {
             at: Date.now(),
             source: 'direct',
         }, entry);
-        await db.ref('scheduler/changes').push(payload);
+        // Return the new entry's key (Undo uses it to mark what it reverses).
+        const ref = db.ref('scheduler/changes').push(payload);
+        const res = await ref;
+        return (res && res.key) || ref.key || null;
     } catch (err) {
         console.error('logChange error:', err, entry);
     }
@@ -5586,16 +5590,28 @@ function _chgRequestFor(c) {
 // ── Changes page ────────────────────────────────────────────────────────
 // Laid out like Conflicts and Requests: the log on the left in collapsible
 // sections by when each change was made, and the month view on the right,
-// with the selected change's days ringed, the people it moved outlined, and
-// a count of changes beside each date.
+// with the selected change's days boxed and the people it moved outlined.
+//
+// The log is condensed before it's listed:
+//   • one listing per action — entries by the same person within a few
+//     minutes of each other, or tied to the same request, are combined
+//     (an approval, the recompute it triggered, a back-fix, the per-person
+//     lines of one day-editor save…), headed by the main change;
+//   • anything that was undone is left out, along with the "Undone — …"
+//     note itself;
+//   • conference / tumor-board logging is left out (the Tracking page
+//     has it — it isn't a schedule change).
 
 // The seen-time when the Changes page was opened, so this visit can still
 // mark which entries are new (the visit itself moves the seen-time on).
 let _changesVisitAck = null;
 let _chMonth = null;   // first of the month the calendar shows
-let _chSel = null;     // selected change key
+let _chSel = null;     // selected listing (its group key)
 let _chDay = null;     // selected day (yyyy-mm-dd), with or without a change
 const _chStore = _tlStore('changeSectionsClosed');
+
+// Entries this close together, by the same person, are one listing.
+const CH_GROUP_GAP_MS = 10 * 60 * 1000;
 
 const CH_SECTIONS = [
     { id: 'week', label: 'In the last week', max: 6 },
@@ -5613,9 +5629,9 @@ function _chgAgo(c) {
     return c.at ? -_tlDaysFromToday(new Date(c.at)) : Infinity;
 }
 
-function _chSectionOf(c) {
-    const ago = _chgAgo(c);
-    return CH_SECTIONS.find(s => ago <= s.max).id;
+// Follow-ups ride along with the change that caused them.
+function _chgIsFollowUp(c) {
+    return c.kind === 'recompute' || c.type === 'service_backfix';
 }
 
 // What a change touched: { days: Set of yyyy-mm-dd, cells: Set of
@@ -5647,6 +5663,8 @@ function _chgSpan(c) {
         const [s, e] = c.scope === 'week' ? week(c.date) : [c.date, c.date];
         addRange(s, e, c.type === 'oncall_swap' ? pids.slice(0, 1) : pids);
     }
+    // A back-fix's days (Firebase can hand an array back as an object).
+    Object.values(c.days || {}).forEach(k => { if (typeof k === 'string') days.add(k); });
     if (c.otherDate) {
         const [s, e] = week(c.otherDate);
         addRange(s, e, typeof c.otherPathId === 'number' ? [c.otherPathId] : []);
@@ -5654,102 +5672,182 @@ function _chgSpan(c) {
     return { days, cells };
 }
 
-// The entries this account sees on the current tab, newest first.
+// The log entries the page (and its nav dot) count, newest first: no
+// conference logging, nothing undone, no "Undone — …" notes.
+function _chVisibleEntries() {
+    const all = Object.entries(changes || {}).filter(([, c]) => !!c);
+    const hidden = new Set();
+    // Undo marks the entries it reversed (since Nov 2026)…
+    all.forEach(([k, c]) => { if (c.undone) hidden.add(k); });
+    // …older undo notes only carry a label: "Undone — <first summary>" or
+    // "Undone — <first summary> (+N more)". Hide the newest earlier entry by
+    // the same person with that summary — and, for "+N more", the entries
+    // they made right after it (one Undo reverses one action).
+    all.filter(([, u]) => u.kind === 'undo' && !u.marksUndone).forEach(([, u]) => {
+        const raw = String(u.summary || '').replace(/^Undone — /, '');
+        const more = / \(\+\d+ more\)$/.test(raw);
+        const label = raw.replace(/ \(\+\d+ more\)$/, '');
+        const target = all
+            .filter(([k, c]) => !hidden.has(k) && c.kind !== 'undo' && c.byPathId === u.byPathId
+                && c.summary === label && (c.at || 0) <= (u.at || 0) && (u.at || 0) - (c.at || 0) < 864e5)
+            .sort((a, b) => (b[1].at || 0) - (a[1].at || 0))[0];
+        if (!target) return;
+        hidden.add(target[0]);
+        if (more) {
+            const t0 = target[1].at || 0;
+            all.forEach(([k, c]) => {
+                if (c.kind !== 'undo' && c.byPathId === u.byPathId && (c.at || 0) >= t0
+                    && (c.at || 0) - t0 <= CH_GROUP_GAP_MS && (c.at || 0) <= (u.at || 0)) hidden.add(k);
+            });
+        }
+    });
+    return all
+        .filter(([k, c]) => !hidden.has(k) && c.kind !== 'undo' && c.kind !== 'conference')
+        .sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+}
+
+// Combine entries into one listing per action. entries: newest first.
+// Returns groups newest first: { key, items (oldest first), main, at, span }.
+function _chGroups(entries) {
+    const groups = [];
+    let cur = null;
+    entries.slice().reverse().forEach(([key, c]) => {
+        const at = c.at || 0;
+        const sameReq = cur && c.requestKey && cur.requestKeys.has(c.requestKey);
+        const sameRun = cur && c.byPathId != null && c.byPathId === cur.by && at - cur.lastAt <= CH_GROUP_GAP_MS;
+        if (cur && (sameReq || sameRun)) {
+            cur.items.push([key, c]);
+            cur.lastAt = at;
+        } else {
+            cur = { key, by: c.byPathId, lastAt: at, items: [[key, c]], requestKeys: new Set() };
+            groups.push(cur);
+        }
+        if (c.requestKey) cur.requestKeys.add(c.requestKey);
+    });
+    groups.forEach(g => {
+        g.main = g.items.find(([, c]) => !_chgIsFollowUp(c)) || g.items[0];
+        g.at = g.lastAt;
+        g.span = { days: new Set(), cells: new Set() };
+        g.items.forEach(([, c]) => {
+            const s = _chgSpan(c);
+            s.days.forEach(k => g.span.days.add(k));
+            s.cells.forEach(x => g.span.cells.add(x));
+        });
+    });
+    return groups.reverse();
+}
+
+// Both tabs' listings for the signed-in account.
 function _chPool() {
     const meIsPath = (typeof loggedInPathId === 'number');
     const lfGuest = isLakeForest();
-    const all = Object.entries(changes || {})
-        .filter(([, c]) => !!c)
-        .filter(([, c]) => !lfGuest || c.kind === 'lf_sendout')
-        .sort((a, b) => (b[1].at || 0) - (a[1].at || 0));
+    const all = _chVisibleEntries().filter(([, c]) => !lfGuest || c.kind === 'lf_sendout');
     const mine = meIsPath ? all.filter(([, c]) => _chgAffectsUser(c, loggedInPathId)) : [];
-    return { all, mine, showMine: activeChangesScope === 'mine' && meIsPath };
+    const showMine = activeChangesScope === 'mine' && meIsPath;
+    return { all, mine, showMine, entries: showMine ? mine : all };
 }
 
-function _chEntries() {
-    const p = _chPool();
-    return p.showMine ? p.mine : p.all;
+// The current tab's listings, and a lookup by key.
+let _chGroupsByKey = new Map();
+function _chCurrentGroups() {
+    const groups = _chGroups(_chPool().entries);
+    _chGroupsByKey = new Map(groups.map(g => [g.key, g]));
+    return groups;
 }
 
-// Select a change (or just a day), bring its first day's month into view
+function _chSectionOfGroup(g) {
+    const ago = g.at ? -_tlDaysFromToday(new Date(g.at)) : Infinity;
+    return CH_SECTIONS.find(s => ago <= s.max).id;
+}
+
+// Select a listing (or just a day), bring its first day's month into view
 // and make sure its section is open.
 function _chSelect(key, dayKey) {
-    const c = key ? changes[key] : null;
-    _chSel = c ? key : null;
-    const days = c ? [..._chgSpan(c).days].sort() : [];
+    if (!_chGroupsByKey.has(key)) _chCurrentGroups();
+    const g = key ? _chGroupsByKey.get(key) : null;
+    _chSel = g ? key : null;
+    const days = g ? [...g.span.days].sort() : [];
     _chDay = dayKey || days[0] || null;
-    const d = _chDay ? parseDate(_chDay) : (c && c.at ? new Date(c.at) : new Date(today));
+    const d = _chDay ? parseDate(_chDay) : (g && g.at ? new Date(g.at) : new Date(today));
     _chMonth = new Date(d.getFullYear(), d.getMonth(), 1);
-    if (c && _chStore.closed[_chSectionOf(c)]) _chStore.set(_chSectionOf(c), false);
+    if (g && _chStore.closed[_chSectionOfGroup(g)]) _chStore.set(_chSectionOfGroup(g), false);
 }
 
-function _chItemHtml(key, c, showMine) {
-    const on = key === _chSel;
-    const display = showMine
-        ? _chgDescribeForUser(c, loggedInPathId)
-        : { summary: c.summary || '', details: c.details || '' };
+function _chItemHtml(g, showMine) {
+    const on = g.key === _chSel;
+    const [, c] = g.main;
+    const describe = e => (showMine
+        ? _chgDescribeForUser(e, loggedInPathId)
+        : { summary: e.summary || '', details: e.details || '' });
+    const display = describe(c);
     const kind = c.kind || 'service';
-    const ago = _chgAgo(c);
-    const chip = ago === 0 && c.at
-        ? new Date(c.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+    const ago = g.at ? -_tlDaysFromToday(new Date(g.at)) : Infinity;
+    const chip = ago === 0 && g.at
+        ? new Date(g.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
         : _tlAgo(ago);
     const when = _chgWhenText(c);
     const lead = typeof c.forPathId === 'number' && pathologists.some(p => p.id === c.forPathId)
         ? splitAvatar(c.forPathId)
         : `<span class="split-dot kind-${escapeHtml(kind)}" aria-hidden="true"></span>`;
     const lines = (display.details || '').split('\n').map(s => s.trim()).filter(Boolean);
+    // The rest of the action: other edits, then what they triggered.
+    const others = g.items.filter(it => it !== g.main).map(([, e]) => describe(e).summary).filter(Boolean);
+    const SHOW = 2;
+    const shown = on ? others : others.slice(0, SHOW);
+    const more = others.length - shown.length;
+    const isNew = g.items.some(([, e]) => _chgIsNew(e));
     const by = c.byName ? 'By ' + c.byName.replace(/^Dr\. /, '') : '';
     let detail = '';
     if (on) {
-        const sourceNote = CHANGE_SOURCE_NOTE[c.source] || '';
+        const notes = [...new Set(g.items.map(([, e]) => CHANGE_SOURCE_NOTE[e.source]).filter(Boolean))];
+        const withMoves = g.items.filter(([, e]) => Object.keys(e.moves || {}).length);
         const day = c.date || c.startDate;
-        const actions = (_chgRequestFor(c) ? '<button type="button" data-chact="request">Open the request</button>' : '')
+        const hasRequest = g.items.some(([, e]) => _chgRequestFor(e));
+        const actions = (hasRequest ? '<button type="button" data-chact="request">Open the request</button>' : '')
             + (day && !isLakeForest() ? '<button type="button" class="primary" data-chact="goto">Show on the calendar</button>' : '');
         detail = `<div class="ch-item-detail">
-            ${_chgMovesHtml(c, showMine ? loggedInPathId : null, _chMonth)}
-            ${sourceNote ? `<p class="split-note">${escapeHtml(sourceNote)}</p>` : ''}
-            ${actions ? `<div class="split-actions cf-item-actions" data-key="${escapeHtml(key)}">${actions}</div>` : ''}
+            ${withMoves.map(([, e]) => _chgMovesHtml(e, showMine ? loggedInPathId : null, _chMonth)).join('')}
+            ${notes.map(n => `<p class="split-note">${escapeHtml(n)}</p>`).join('')}
+            ${actions ? `<div class="split-actions cf-item-actions" data-key="${escapeHtml(g.key)}">${actions}</div>` : ''}
           </div>`;
     }
+    const count = g.items.length > 1 ? `${g.items.length} changes` : '';
     return `<div class="cf-item${on ? ' is-selected' : ''}">
-        <button type="button" class="cf-item-main" data-chpick="${escapeHtml(key)}" aria-pressed="${on}">
+        <button type="button" class="cf-item-main" data-chpick="${escapeHtml(g.key)}" aria-pressed="${on}">
           <span class="cf-item-meta">
             <span class="cf-countdown">${escapeHtml(chip)}</span>
-            <span>${escapeHtml([when, CHANGE_KIND_LABEL[kind] || kind].filter(Boolean).join(' · '))}</span>
-            ${_chgIsNew(c) ? '<span class="split-new">New</span>' : ''}
+            <span>${escapeHtml([when, CHANGE_KIND_LABEL[kind] || kind, count].filter(Boolean).join(' · '))}</span>
+            ${isNew ? '<span class="split-new">New</span>' : ''}
           </span>
           <span class="cf-item-title">${lead}<span>${escapeHtml(display.summary)}</span></span>
           ${lines.length ? `<span class="cf-item-body ch-item-lines">${lines.map(l => `<span>${escapeHtml(l)}</span>`).join('')}</span>` : ''}
+          ${shown.length ? `<span class="cf-item-body ch-item-also">${shown.map(s => `<span>${escapeHtml(s)}</span>`).join('')}${more ? `<span class="ch-item-more">and ${more} more</span>` : ''}</span>` : ''}
           ${by ? `<span class="cf-item-body">${escapeHtml(by)}</span>` : ''}
         </button>
         ${detail}
       </div>`;
 }
 
-// Each day: the people a change moved outlined (the selected change's are
+// Each day: the people a change moved outlined (the selected listing's are
 // made stronger afterwards, by _tlRenderMonth).
-function _chDecorator(entries) {
+function _chDecorator(groups) {
     const byDay = new Map();
-    entries.forEach(([, c]) => {
-        const span = _chgSpan(c);
-        span.days.forEach(k => {
-            if (!byDay.has(k)) byDay.set(k, { list: [], people: new Set() });
-            byDay.get(k).list.push(c);
+    groups.forEach(g => {
+        g.span.days.forEach(k => {
+            if (!byDay.has(k)) byDay.set(k, { n: 0, people: new Set() });
+            byDay.get(k).n++;
         });
-        span.cells.forEach(cell => {
+        g.span.cells.forEach(cell => {
             const [k, p] = cell.split('|');
             if (byDay.has(k)) byDay.get(k).people.add(Number(p));
         });
     });
-    return (date, inMonth) => {
-        const k = fmt(date);
-        const hit = byDay.get(k);
+    return (date) => {
+        const hit = byDay.get(fmt(date));
         if (!hit) return {};
-        // No count badge beside the date here (the user found them noisy);
-        // the outlined rows show what changed.
         return {
             rowDec: p => ({ cls: hit.people.has(p.id) ? 'rq-mark' : '' }),
-            ariaExtra: `, ${hit.list.length} change${hit.list.length === 1 ? '' : 's'}`,
+            ariaExtra: `, ${hit.n} change${hit.n === 1 ? '' : 's'}`,
         };
     };
 }
@@ -5771,9 +5869,10 @@ function renderChangesPage() {
     if (tabsWrap) tabsWrap.style.display = lfGuest ? 'none' : '';
 
     const { all, mine, showMine } = _chPool();
+    const groups = _chCurrentGroups();
     const setText = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
-    setText('changesTabCountMine', String(mine.length));
-    setText('changesTabCountAll', String(all.length));
+    setText('changesTabCountMine', String(showMine ? groups.length : _chGroups(mine).length));
+    setText('changesTabCountAll', String(showMine ? _chGroups(all).length : groups.length));
     document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
         btn.classList.toggle('active', btn.getAttribute('data-ctab') === activeChangesScope);
     });
@@ -5786,19 +5885,18 @@ function renderChangesPage() {
         mineTab.title = meIsPath ? '' : 'Sign in as a pathologist to see your personal changes';
     }
 
-    const entries = showMine ? mine : all;
-    if (_chSel && !entries.some(([k]) => k === _chSel)) _chSel = null;
-    // First visit: the newest change.
-    if (!_chMonth) _chSelect(entries[0] ? entries[0][0] : null, entries[0] ? null : fmt(today));
+    if (_chSel && !_chGroupsByKey.has(_chSel)) _chSel = null;
+    // First visit: the newest listing.
+    if (!_chMonth) _chSelect(groups[0] ? groups[0].key : null, groups[0] ? null : fmt(today));
 
-    const selC = _chSel ? changes[_chSel] : null;
-    const selDays = selC ? _chgSpan(selC).days : new Set(_chDay ? [_chDay] : []);
+    const selG = _chSel ? _chGroupsByKey.get(_chSel) : null;
+    const selDays = selG ? selG.span.days : new Set(_chDay ? [_chDay] : []);
 
     _tlPeriodLabel(document.getElementById('chPeriod'), _chMonth);
-    // The selected change's days are ringed and the people it moved outlined.
-    _tlRenderMonth(monthEl, _chMonth, _chDecorator(entries), { days: selDays, cells: selC ? _chgSpan(selC).cells : new Set() });
+    // The selected listing's days are boxed and the people it moved outlined.
+    _tlRenderMonth(monthEl, _chMonth, _chDecorator(groups), { days: selDays, cells: selG ? selG.span.cells : new Set() });
 
-    if (entries.length === 0) {
+    if (groups.length === 0) {
         _tlSetHtml(listEl, `<div class="cf-empty">${lfGuest
             ? '<span class="split-empty-headline">No sendout updates yet.</span>Lake Forest sendout changes will appear here as they happen.'
             : showMine
@@ -5808,16 +5906,16 @@ function renderChangesPage() {
         _tlSetHtml(listEl, _tlSectionsHtml(CH_SECTIONS.map(s => ({
             id: s.id,
             label: s.label,
-            items: entries.filter(([, c]) => _chSectionOf(c) === s.id).map(([k, c]) => _chItemHtml(k, c, showMine)),
+            items: groups.filter(g => _chSectionOfGroup(g) === s.id).map(g => _chItemHtml(g, showMine)),
         })), _chStore));
     }
 }
 
-// Pick a day (calendar or date picker): select the newest change touching it.
+// Pick a day (calendar or date picker): select the newest listing touching it.
 function _chPickDay(date) {
     const k = fmt(date);
-    const hit = _chEntries().find(([, c]) => _chgSpan(c).days.has(k));
-    _chSelect(hit ? hit[0] : null, k);
+    const hit = _chCurrentGroups().find(g => g.span.days.has(k));
+    _chSelect(hit ? hit.key : null, k);
     renderChangesPage();
     _tlReveal(document.getElementById('chList'));
 }
@@ -5851,13 +5949,14 @@ window.__renderChangesPage = renderChangesPage;
             }
             const btn = e.target.closest('button[data-chact]');
             if (!btn) return;
-            const c = changes[btn.closest('.cf-item-actions').dataset.key];
-            if (!c) return;
+            const g = _chGroupsByKey.get(btn.closest('.cf-item-actions').dataset.key);
+            if (!g) return;
+            const [, c] = g.main;
             if (btn.dataset.chact === 'goto') {
                 goToDay(parseDate(c.date || c.startDate));
             } else if (btn.dataset.chact === 'request') {
-                if (!_chgRequestFor(c)) return;
-                openRequestOnPage(c.requestKey);
+                const withReq = g.items.find(([, x]) => _chgRequestFor(x));
+                if (withReq) openRequestOnPage(withReq[1].requestKey);
             }
         });
     }
@@ -5867,7 +5966,7 @@ window.__renderChangesPage = renderChangesPage;
         renderChangesPage();
     }, () => {
         const days = new Set();
-        _chEntries().forEach(([, c]) => _chgSpan(c).days.forEach(k => days.add(k)));
+        _chCurrentGroups().forEach(g => g.span.days.forEach(k => days.add(k)));
         return { month: _chMonth || today, pick: _chPickDay, mark: d => (days.has(fmt(d)) ? 'mc-ch' : '') };
     });
 
@@ -5879,8 +5978,8 @@ window.__renderChangesPage = renderChangesPage;
             if (scope !== 'mine' && scope !== 'all') return;
             if (scope === activeChangesScope) return;
             activeChangesScope = scope;
-            const entries = _chEntries();
-            _chSelect(entries[0] ? entries[0][0] : null, entries[0] ? null : fmt(today));
+            const groups = _chCurrentGroups();
+            _chSelect(groups[0] ? groups[0].key : null, groups[0] ? null : fmt(today));
             renderChangesPage();
             if (listEl) listEl.scrollTop = 0;
         });

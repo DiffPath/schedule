@@ -3325,12 +3325,18 @@ function _cfItemHtml(c, seen) {
     }
     // A ledger line like the Changes page's: the kind's tag, then what's
     // wrong and when. The selected line opens the explanation and actions.
+    // The tag names whose conflict it is; the line says what, without the
+    // name again. A coverage gap belongs to nobody: it keeps a red tag.
     const when = _conflictWhen(c);
+    const who = c.kind !== 'hard' && c.pathId != null;
+    const what = !who ? d.title
+        : c.kind === 'callpto' ? `On call during ${timeOffName(timeOffOn(c.pathId, c.date))}`
+        : (s => s.charAt(0).toUpperCase() + s.slice(1))(c.detail.replace(/^[^:]+:\s*/, ''));
     return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
         <button type="button" class="ch-row-main" data-cfpick="${escapeHtml(c.key)}" aria-pressed="${on}"
-          aria-label="${escapeHtml([meta.label, d.title, when, isNew ? 'new' : ''].filter(Boolean).join(', '))}">
-          <span class="ch-tag ch-tag-cf-${escapeHtml(c.kind)}">${escapeHtml(meta.label)}</span>
-          <span class="ch-text"><b>${escapeHtml(d.title)}</b><span class="ch-dates"> · ${escapeHtml(when)}</span></span>
+          aria-label="${escapeHtml([who ? _shortPathName(c.pathId) : meta.label, what, when, isNew ? 'new' : ''].filter(Boolean).join(', '))}">
+          ${who ? _pathTagHtml(c.pathId) : `<span class="ch-tag ch-tag-cf-hard">${escapeHtml(meta.label)}</span>`}
+          <span class="ch-text"><b>${escapeHtml(what)}</b><span class="ch-dates"> · ${escapeHtml(when)}</span></span>
           ${isNew ? '<span class="split-new">New</span>' : ''}
         </button>
         ${on ? `<div class="ch-detail">${d.body ? `<p class="ch-detail-text">${escapeHtml(d.body)}</p>` : ''}${note}${actions}</div>` : ''}
@@ -4910,17 +4916,15 @@ function _rqSelect(key, dayKey) {
     if (r && _rqStore.closed[_rqSectionOf(r)]) _rqStore.set(_rqSectionOf(r), false);
 }
 
-// The ledger tag for a request, in the Changes page's colours.
-const RQ_TAGS = {
-    pto_add: { tag: 'pto', label: 'PTO request' },
-    pto_remove: { tag: 'pto', label: 'PTO request' },
-    oncall_change: { tag: 'call', label: 'Call change' },
-    oncall_swap: { tag: 'call', label: 'Call trade' },
-    service_change: { tag: 'svc', label: 'Service change' },
-    service_lock: { tag: 'lock', label: 'Service lock' },
-    lf_sendout: { tag: 'lf', label: 'LF sendout' },
-    lf_dates_request: { tag: 'lf', label: 'LF dates' },
-};
+// A ledger tag naming whose request or conflict it is ("Dr. Raouf"), in the
+// pathologist's light schedule colour (as on their rows in the calendar).
+// Lake Forest gets its purple sendout tag.
+function _pathTagHtml(pid) {
+    const p = pathologists.find(x => x.id === pid);
+    if (!p) return `<span class="ch-tag ch-tag-lf">${pid === LAKE_FOREST_ID ? 'Lake Forest' : escapeHtml(_pathName(pid))}</span>`;
+    const bg = pathBgColor(p.color);
+    return `<span class="ch-tag ch-tag-path" style="--c:${p.color}${bg ? `; --c-bg:${bg}` : ''}">${escapeHtml(_drLastName(pid))}</span>`;
+}
 
 // What was asked and its dates, for a ledger line: { what, dates }.
 function _requestWhatDates(r) {
@@ -4968,16 +4972,14 @@ function _rqLineStatus(r) {
 
 function _rqItemHtml(key, r) {
     const on = key === _rqSel;
-    const tg = RQ_TAGS[r.type] || { tag: 'svc', label: _rqTypeLabel(r) };
     const wd = _requestWhatDates(r);
     const st = _rqLineStatus(r);
-    const other = r.requesterId !== loggedInPathId;
-    const label = [tg.label, other ? _shortPathName(r.requesterId) : '', wd.what, wd.dates,
+    const label = [_shortPathName(r.requesterId), _rqTypeLabel(r), wd.what, wd.dates,
         st ? st.text : '', r.note ? 'note: ' + r.note : ''].filter(Boolean).join(', ');
     return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
         <button type="button" class="ch-row-main" data-rqpick="${escapeHtml(key)}" aria-pressed="${on}" aria-label="${escapeHtml(label)}">
-          <span class="ch-tag ch-tag-${tg.tag}">${escapeHtml(tg.label)}</span>
-          <span class="ch-text">${other ? `<span class="ch-avs">${_chAvatar(r.requesterId, true)}</span>` : ''}<b>${escapeHtml(wd.what)}</b>${wd.dates ? `<span class="ch-dates"> · ${escapeHtml(wd.dates)}</span>` : ''}${r.note ? `<span class="ch-reason">“${escapeHtml(r.note)}”</span>` : ''}</span>
+          ${_pathTagHtml(r.requesterId)}
+          <span class="ch-text"><b>${escapeHtml(wd.what)}</b>${wd.dates ? `<span class="ch-dates"> · ${escapeHtml(wd.dates)}</span>` : ''}${r.note ? `<span class="ch-reason">“${escapeHtml(r.note)}”</span>` : ''}</span>
           ${st ? `<span class="ch-status${st.tone ? ' tone-' + st.tone : ''}">${escapeHtml(st.text)}</span>` : ''}
           ${_rqIsNew(r) ? '<span class="split-new">New</span>' : ''}
         </button>

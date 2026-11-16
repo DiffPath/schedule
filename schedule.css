@@ -8727,6 +8727,71 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .ch-tag-svc  { background: #dcefe1; color: #1f6b34; }   /* green */
 .ch-tag-lock { background: #f8e0dc; color: #8f2a1f; }   /* red */
 .ch-tag-lf   { background: #ece3f6; color: #5b2d86; }   /* purple */
+.ch-tag-deny { background: #fdf1d6; color: #8a5a00; }   /* amber */
+/* A denial's reason, exactly as the director typed it. */
+.ch-reason { display: block; margin-top: 2px; color: var(--ink-2); font-style: italic; overflow-wrap: anywhere; }
+/* To review: the unaccepted changes, above the history, with Accept. */
+.ch-review { border-bottom: 2px solid var(--rule-soft); }
+.ch-review-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px 8px 16px;
+    background: #f1f8f3;
+}
+.ch-review-title { flex: 1; margin: 0; font: inherit; font-size: 13px; font-weight: 600; color: var(--ink); }
+.ch-accept {
+    padding: 5px 11px;
+    border: 1px solid var(--ink-3);
+    border-radius: 5px;
+    background: #fff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink);
+    cursor: pointer;
+}
+.ch-accept:hover { background: var(--paper); border-color: var(--ink-2); }
+.ch-accept:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* The alert: "Changes to your schedule". */
+#chAlertBack .modal-stable { width: min(560px, 94vw); height: min(520px, 90vh); }
+.ch-alert-list { border: 1px solid var(--rule-soft); border-radius: 8px; overflow: hidden; }
+.ch-alert-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    box-sizing: border-box;
+    padding: 8px 12px;
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--ink);
+    border-top: 1px solid var(--rule-soft-2);
+}
+.ch-alert-row:first-child { border-top: 0; }
+.ch-alert-row:has(.ch-reason),
+.ch-row-main:has(.ch-reason) { align-items: flex-start; }
+.ch-alert-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 12px 0 8px;
+    padding: 4px 6px 4px 2px;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+    cursor: pointer;
+}
+.ch-alert-toggle:hover { color: var(--ink); }
+.ch-alert-toggle .cf-chev { transform: none; }
+.ch-alert-toggle[aria-expanded="true"] .cf-chev { transform: rotate(90deg); }
+.ch-alert-table { overflow-x: auto; }
+@media (max-width: 800px) {
+    #chAlertBack .modal-stable { height: 88vh; }
+}
 /* Wraps to a second line in a narrow list rather than cutting the dates off. */
 .ch-text { flex: 1; min-width: 0; }
 .ch-text b { font-weight: 600; }

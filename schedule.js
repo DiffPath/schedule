@@ -2020,6 +2020,13 @@ regListener('scheduler/requests', snap => {
         && typeof renderRequestsPage === 'function') {
         renderRequestsPage();
     }
+    // A denied request is part of the changes to review.
+    if (_appEl && _appEl.getAttribute('data-page') === 'changes'
+        && typeof renderChangesPage === 'function') {
+        renderChangesPage();
+    }
+    if (typeof updateNavChangesIndicator === 'function') updateNavChangesIndicator();
+    if (typeof _chMaybeAlert === 'function') _chMaybeAlert();
 }, err => {
     console.error('Firebase requests error:', err);
 });
@@ -2391,10 +2398,18 @@ function userSeenSignedIn(id) {
         if (typeof updateNavRequestsIndicator === 'function') updateNavRequestsIndicator();
         if (typeof updateNavChangesIndicator === 'function') updateNavChangesIndicator();
         if (typeof updateNavConflictsIndicator === 'function') updateNavConflictsIndicator();
+        // Accepted on another device: To review empties here too.
+        const _appEl = document.getElementById('app');
+        if (_appEl && _appEl.getAttribute('data-page') === 'changes'
+            && typeof renderChangesPage === 'function') renderChangesPage();
+        if (typeof _chMaybeAlert === 'function') _chMaybeAlert();
     }, err => console.warn('userSeen read failed; using this device\'s copy.', err));
+    // A new sign-in is a new app open: the changes alert may show again.
+    if (typeof _chAlertSnooze !== 'undefined') _chAlertSnooze = 0;
 }
 
 function userSeenSignedOut() {
+    if (typeof _chCloseAlert === 'function') _chCloseAlert();
     if (_userSeenRef) { try { _userSeenRef.off(); } catch (_) {} }
     _userSeenRef = null;
     _userSeenId = null;
@@ -2545,10 +2560,10 @@ function markRequestsPageSeen() {
 }
 
 // ────────────── CHANGES NAV DOT INDICATOR ──────────────
-// Blue dot on "Changes": an unseen change affecting the signed-in
-// pathologist's schedule has landed. Visiting the page stamps
-// chgSeenAck_{pathId} in localStorage; older changes count as seen.
-// Changes the user made themselves never light the dot.
+// Dot on "Changes": something on the signed-in pathologist's schedule (or,
+// for Lake Forest, a sendout) changed and hasn't been accepted yet — the
+// same lines the alert and To review show. Visiting the page doesn't clear
+// it; Accept does (it stamps the synced changes seen-time).
 function _getChangesAckTs() {
     if (loggedInPathId === null) return Date.now();
     return _seenTime('changes');
@@ -2557,47 +2572,12 @@ function _getChangesAckTs() {
 function updateNavChangesIndicator() {
     const dot = document.getElementById('navChangesBadge');
     if (!dot) return;
-
-    // Lake Forest guest: light the dot for unseen sendout entries.
-    // Same entries the page lists (no conference logging, nothing undone).
-    if (isLakeForest()) {
-        const ackTs = _getChangesAckTs();
-        const hasUnseen = _chVisibleEntries().some(([, c]) =>
-            c.kind === 'lf_sendout'
-            && (c.at || 0) > ackTs
-            && c.byPathId !== loggedInPathId
-        );
-        if (hasUnseen) _setNavDot(dot, 'tone-changed', true);
-        else dot.style.display = 'none';
-        return;
-    }
-
-    // Otherwise only pathologist accounts can be change targets.
-    if (typeof loggedInPathId !== 'number') {
+    if (typeof _chCanReview !== 'function' || !_chCanReview()) {
         dot.style.display = 'none';
         return;
     }
-
-    const ackTs = _getChangesAckTs();
-    const hasUnseen = _chVisibleEntries().some(([, c]) =>
-        (c.at || 0) > ackTs
-        && c.byPathId !== loggedInPathId
-        && _chgAffectsUser(c, loggedInPathId)
-    );
-
-    if (hasUnseen) {
-        _setNavDot(dot, 'tone-changed', true);
-    } else {
-        dot.style.display = 'none';
-    }
-}
-
-// Stamp the visit time so later updateNavChangesIndicator() calls know
-// which changes are "new".
-function markChangesPageSeen() {
-    if (typeof loggedInPathId !== 'number' && !isLakeForest()) return;
-    _markSeenTime('changes', Date.now());
-    updateNavChangesIndicator();
+    if (_chReviewLines().lines.length) _setNavDot(dot, 'tone-changed', true);
+    else dot.style.display = 'none';
 }
 
 // ══════════ CONFLICTS (admin) ══════════
@@ -5204,17 +5184,15 @@ regListener('scheduler/changes', snap => {
     changes = snap.exists() ? snap.val() : {};
     changesReady = true;
 
-    // If the Changes page is the active page, refresh it live — and count
-    // the new entries as seen, since the user is looking right at them.
+    // Refresh the Changes page live when it's showing. New entries stay
+    // "to review" until accepted, so the nav dot and alert follow.
     const _appEl = document.getElementById('app');
     if (_appEl && _appEl.getAttribute('data-page') === 'changes'
         && typeof renderChangesPage === 'function') {
         renderChangesPage();
-        markChangesPageSeen();
-    } else {
-        // Otherwise light the nav dot if something new affects this user
-        updateNavChangesIndicator();
     }
+    updateNavChangesIndicator();
+    if (typeof _chMaybeAlert === 'function') _chMaybeAlert();
 }, err => {
     console.error('Firebase changes error:', err);
 });
@@ -5425,11 +5403,13 @@ function _chgRequestFor(c) {
 // Left out: anything that was undone (and Undo's own notes), and
 // conference / tumor-board logging (the Tracking page has it).
 
-// The seen-time when the Changes page was opened, so this visit can still
-// mark which entries are new (the visit itself moves the seen-time on).
-let _changesVisitAck = null;
+// Review: a pathologist sees what changed on their schedule since they last
+// accepted, in an alert when the app opens (and when a change lands mid-
+// session) and in "To review" at the top of Affecting me. Changes of one
+// type are merged into one net line; Accept files them into the history,
+// where they merge with that day's other changes of the same type.
 let _chMonth = null;   // first of the month the calendar shows
-let _chSel = null;     // selected change key
+let _chSel = null;     // selected line key ('r:'/'h:'/'d:' + …)
 let _chDay = null;     // selected day (yyyy-mm-dd), with or without a change
 const _chStore = _tlStore('changeSectionsClosed');
 // Days opened to their before/after table (yyyy-mm-dd → true), per browser.
@@ -5449,12 +5429,8 @@ const CH_TAGS = {
     svc: 'Service change',
     lock: 'Service lock',
     lf: 'LF sendout',
+    deny: 'Request denied',
 };
-
-function _chgIsNew(c) {
-    return _changesVisitAck !== null && (c.at || 0) > _changesVisitAck
-        && c.byPathId !== loggedInPathId;
-}
 
 // What someone is on that day — a service id, 'pto', or '' — for the
 // before half of a change's before/after.
@@ -5773,54 +5749,271 @@ function _chSelSpan(c, showMine) {
     return { days: new Set([...mine].map(x => x.split('|')[0])), cells: mine };
 }
 
-// Select a change (or just a day), bring its first day's month into view
-// and make sure its section is open.
-function _chSelect(key, dayKey) {
-    const c = key ? changes[key] : null;
-    _chSel = c ? key : null;
-    const days = c ? [..._chSelSpan(c, _chPool().showMine).days].sort() : [];
-    _chDay = dayKey || days[0] || null;
-    const d = _chDay ? parseDate(_chDay) : (c && c.at ? new Date(c.at) : new Date(today));
-    _chMonth = new Date(d.getFullYear(), d.getMonth(), 1);
-    if (c && c.at) {
-        const sec = _chSectionOf(c.at);
-        if (_chStore.closed[sec]) _chStore.set(sec, false);
-    }
-}
-
 function _chSectionOf(ts) {
     const ago = -_tlDaysFromToday(new Date(ts));
     return CH_SECTIONS.find(s => ago <= s.max).id;
 }
 
-function _chRowHtml(key, c, showMine) {
-    const on = key === _chSel;
-    const line = _chLine(c, showMine ? loggedInPathId : null);
-    const people = showMine ? [] : _chPeople(c);
-    const avatars = people.map(id => _chAvatar(id, true)).join('');
-    const who = people.map(id => _shortPathName(id)).join(' and ');
-    const request = on && _chgRequestFor(c)
-        ? `<div class="split-actions cf-item-actions ch-row-actions" data-key="${escapeHtml(key)}"><button type="button" data-chact="request">Open the request</button></div>`
+// ── Merging: one net line per type ──
+function _chTagOf(c) {
+    if (c.kind === 'pto') return 'pto';
+    if (c.kind === 'oncall') return 'call';
+    if (c.kind === 'lf_sendout') return 'lf';
+    if (c.kind === 'service' && (c.type === 'service_lock' || c.type === 'service_unlock')) return 'lock';
+    return 'svc';
+}
+
+// The net before/after of several changes: per type, date and person, the
+// first before and the last after (in the order they were made); a date
+// that ends where it started drops out. pid narrows to one pathologist's
+// rows (and rows that name nobody). { rows: merged rows, raw: how many rows
+// the log had, days: Set of the net rows' dates }.
+function _chNetRows(entries, pid) {
+    const net = new Map();
+    let raw = 0;
+    entries.slice().sort((a, b) => (a[1].at || 0) - (b[1].at || 0)).forEach(([, c]) => {
+        const tag = _chTagOf(c);
+        _chDiffRows(c).forEach(r => {
+            if (pid != null && r.who != null && r.who !== pid) return;
+            raw++;
+            const key = tag + '|' + r.k + '|' + r.who + '|' + (r.label || '');
+            const hit = net.get(key);
+            if (hit) hit.after = r.after;
+            else net.set(key, Object.assign({}, r));
+        });
+    });
+    const kept = [...net.values()].filter(r => r.before !== r.after);
+    return { rows: _chMergeRows(kept), raw, days: new Set(kept.map(r => r.k)) };
+}
+
+// "Nov 23 – 24, Dec 1": a few ranges listed, more shown as first – last.
+function _chLabels(rows) {
+    const labels = [...new Set(rows.map(r => r.label))];
+    if (labels.length <= 3) return labels.join(', ');
+    const ks = rows.map(r => r.k).sort();
+    const es = rows.map(r => r.end).sort();
+    return _chRange(ks[0], es[es.length - 1]);
+}
+
+// The short "what · dates" for one type's net rows.
+function _chSummary(tag, net, entries, pid) {
+    const rows = net.rows;
+    const n = net.days.size;
+    const span = () => { const ks = [...net.days].sort(); return _chRange(ks[0], ks[ks.length - 1]); };
+    const people = new Set(rows.map(r => r.who).filter(w => w != null));
+    switch (tag) {
+        case 'pto': {
+            const word = entries.some(([, c]) => /leave added|leave removed/i.test(c.summary || '')) ? 'Leave' : 'PTO';
+            const add = rows.filter(r => r.after === 'PTO');
+            const off = rows.filter(r => r.before === 'PTO');
+            if (add.length && !off.length) return { what: `${word} added`, dates: _chLabels(add) };
+            if (off.length && !add.length) return { what: `${word} removed`, dates: _chLabels(off) };
+            return { what: `${word} changed`, dates: _chLabels(rows) };
+        }
+        case 'call': {
+            const on = rows.filter(r => r.after === 'On call');
+            const off = rows.filter(r => r.after === 'Off call');
+            if (pid != null || people.size <= 1) {
+                if (on.length && off.length) return { what: 'Call week moved', dates: `${_chLabels(off)} → ${_chLabels(on)}` };
+                if (on.length) return { what: 'On call', dates: _chLabels(on) };
+                if (off.length) return { what: 'Off call', dates: _chLabels(off) };
+                return { what: 'Call back to the rotation', dates: _chLabels(rows) };
+            }
+            const weeks = [...new Set(rows.map(r => r.label))];
+            if (weeks.length === 2 && on.length && off.length) return { what: 'Call weeks swapped', dates: weeks.join(' ↔ ') };
+            return { what: 'Call changed', dates: _chLabels(rows) };
+        }
+        case 'lock': {
+            const locked = rows.filter(r => / · locked$/.test(r.after));
+            if (rows.length === 1) {
+                const r = rows[0];
+                return locked.length ? { what: `Locked on ${r.after.replace(/ · locked$/, '')}`, dates: r.label }
+                    : { what: 'Lock removed', dates: r.label };
+            }
+            if (locked.length === rows.length) return { what: `${n} days locked`, dates: span() };
+            if (!locked.length) return { what: 'Locks removed', dates: span() };
+            return { what: 'Locks changed', dates: span() };
+        }
+        case 'lf': {
+            const add = rows.filter(r => r.after === 'Sendout');
+            const off = rows.filter(r => r.after === 'No sendout');
+            if (add.length && !off.length) return { what: 'Sendout added', dates: _chLabels(add) };
+            if (off.length && !add.length) return { what: 'Sendout removed', dates: _chLabels(off) };
+            return { what: 'Sendouts changed', dates: _chLabels(rows) };
+        }
+        default: {
+            if (rows.length === 1) {
+                const r = rows[0];
+                if (r.after === 'Rotation') return { what: 'Back to the rotation', dates: r.label };
+                if (r.after === 'Adjusted') return { what: 'Adjusted before a change', dates: r.label };
+                if (r.before === '—') return { what: `Set to ${r.after}`, dates: r.label };
+                return { what: `${r.before} → ${r.after}`, dates: r.label };
+            }
+            return { what: n > 1 ? `${n} days changed` : `${rows.length} services changed`, dates: span() };
+        }
+    }
+}
+
+// Merged lines: changes of one type (for the history, also made on one
+// day), newest first. Each line: { key, tag, day, at, entries, what, dates,
+// people, requestKey, span }. A group whose edits cancelled out is left out.
+function _chGroups(entries, byDay, pid, prefix) {
+    const map = new Map();
+    entries.forEach(([k, c]) => {
+        const day = c.at ? fmt(new Date(c.at)) : 'unknown';
+        const tag = _chTagOf(c);
+        const key = prefix + (byDay ? day + '|' : '') + tag;
+        if (!map.has(key)) map.set(key, { key, tag, day, at: c.at || 0, entries: [] });
+        map.get(key).entries.push([k, c]);
+    });
+    const out = [];
+    map.forEach(g => {
+        const net = _chNetRows(g.entries, pid);
+        let line;
+        if (net.rows.length) line = _chSummary(g.tag, net, g.entries, pid);
+        else if (net.raw) return;   // back where it started
+        else { const l = _chLine(g.entries[0][1], pid); line = { what: l.what, dates: l.dates }; }
+        let people = [];
+        if (pid == null) {
+            people = [...new Set(net.rows.map(r => r.who).filter(w => w != null))];
+            if (!people.length) g.entries.forEach(([, c]) => _chPeople(c).forEach(p => { if (!people.includes(p)) people.push(p); }));
+            people = people.slice(0, 3);
+        }
+        const withReq = g.entries.find(([, c]) => _chgRequestFor(c));
+        const days = new Set();
+        const cells = new Set();
+        g.entries.forEach(([, c]) => {
+            const s = _chSelSpan(c, pid != null);
+            s.days.forEach(d => days.add(d));
+            s.cells.forEach(x => cells.add(x));
+        });
+        out.push(Object.assign(g, line, { people, requestKey: withReq ? withReq[1].requestKey : null, span: { days, cells } }));
+    });
+    return out;
+}
+
+// A denied request, as a line: what was asked and the reason as typed.
+function _chDeniedLines(denied) {
+    return denied.map(([k, r]) => {
+        const sp = _requestSpan(r);
+        const days = sp ? sp.days : new Set();
+        return {
+            key: 'd:' + k, tag: 'deny', at: r.decisionAt || 0, entries: [], people: [],
+            what: _requestShortWhat(r), dates: '', reason: r.decisionNote || '',
+            requestKey: k, span: { days, cells: new Set([...days].map(d => d + '|' + r.requesterId)) },
+        };
+    });
+}
+
+// ── Review state ──
+// "Reviewed up to" is the synced changes seen-time (userSeen/<id>/changes);
+// only Accept moves it. A first-ever sign-in starts it now, so old history
+// stays quiet. Lake Forest reviews sendout entries.
+// (var: sign-in code above may touch these before this line has run.)
+var _chAlertSnooze = 0;   // newest change the alert has already shown this session
+var _chAlertMax = 0;      // newest change in the alert as it shows now
+var _chAlertTableOpen = false;
+
+function _chCanReview() {
+    return typeof loggedInPathId === 'number' || isLakeForest();
+}
+
+// Waiting for review: { entries (newest first), denied ([key, request]),
+// maxTs, ts }. My own changes and decisions never count.
+function _chUnreviewed() {
+    if (!_chCanReview()) return { entries: [], denied: [], maxTs: 0, ts: 0 };
+    const ts = _getChangesAckTs();
+    const { all, mine } = _chPool();
+    const entries = (isLakeForest() ? all : mine)
+        .filter(([, c]) => (c.at || 0) > ts && c.byPathId !== loggedInPathId);
+    const denied = Object.entries(requests || {})
+        .filter(([, r]) => r && r.status === 'denied' && r.requesterId === loggedInPathId
+            && (r.decisionAt || 0) > ts && r.decisionBy !== loggedInPathId)
+        .sort((a, b) => (b[1].decisionAt || 0) - (a[1].decisionAt || 0));
+    let maxTs = 0;
+    entries.forEach(([, c]) => { maxTs = Math.max(maxTs, c.at || 0); });
+    denied.forEach(([, r]) => { maxTs = Math.max(maxTs, r.decisionAt || 0); });
+    return { entries, denied, maxTs, ts };
+}
+
+// The unreviewed changes as merged lines (changes, then denied requests).
+function _chReviewLines() {
+    const u = _chUnreviewed();
+    const pid = isLakeForest() ? null : loggedInPathId;
+    const lines = _chGroups(u.entries, false, pid, 'r:').concat(_chDeniedLines(u.denied));
+    return { u, pid, lines };
+}
+
+// Accept: everything up to `upTo` counts as reviewed.
+function _chAccept(upTo) {
+    if (!_chCanReview()) return;
+    if (upTo > _getChangesAckTs()) _markSeenTime('changes', upTo);
+    _chAlertSnooze = Math.max(_chAlertSnooze, upTo);
+    _chCloseAlert();
+    updateNavChangesIndicator();
+    const app = document.getElementById('app');
+    if (app && app.getAttribute('data-page') === 'changes') renderChangesPage();
+}
+
+// ── The page ──
+// Everything the current tab shows: To review (Affecting me, and Lake
+// Forest), then the history by day and type.
+function _chModel() {
+    const pool = _chPool();
+    const reviewing = pool.showMine || isLakeForest();
+    const pid = pool.showMine ? loggedInPathId : null;
+    const rv = reviewing ? _chReviewLines() : null;
+    const pending = new Set(rv ? rv.u.entries.map(([k]) => k) : []);
+    const review = rv ? rv.lines : [];
+    const history = _chGroups(pool.entries.filter(([k]) => !pending.has(k)), true, pid, 'h:');
+    return { pool, pid, review, history, lines: review.concat(history) };
+}
+
+// Select a line (or just a day), bring its first day's month into view
+// and make sure its section is open.
+function _chSelect(key, dayKey, model) {
+    const m = model || _chModel();
+    const g = key ? m.lines.find(x => x.key === key) : null;
+    _chSel = g ? key : null;
+    const days = g ? [...g.span.days].sort() : [];
+    _chDay = dayKey || days[0] || null;
+    const d = _chDay ? parseDate(_chDay) : (g && g.at ? new Date(g.at) : new Date(today));
+    _chMonth = new Date(d.getFullYear(), d.getMonth(), 1);
+    if (g && g.key.startsWith('h:') && g.at) {
+        const sec = _chSectionOf(g.at);
+        if (_chStore.closed[sec]) _chStore.set(sec, false);
+    }
+}
+
+// A line's tag and text (shared by the page and the alert).
+function _chLineInner(g) {
+    const avatars = (g.people || []).map(id => _chAvatar(id, true)).join('');
+    return `<span class="ch-tag ch-tag-${g.tag}">${CH_TAGS[g.tag]}</span>
+          <span class="ch-text">${avatars ? `<span class="ch-avs">${avatars}</span>` : ''}<b>${escapeHtml(g.what)}</b>${g.dates ? `<span class="ch-dates"> · ${escapeHtml(g.dates)}</span>` : ''}${g.reason ? `<span class="ch-reason">“${escapeHtml(g.reason)}”</span>` : ''}</span>`;
+}
+
+function _chLineLabel(g) {
+    return [CH_TAGS[g.tag], (g.people || []).map(id => _shortPathName(id)).join(' and '), g.what, g.dates,
+        g.reason ? 'reason: ' + g.reason : ''].filter(Boolean).join(', ');
+}
+
+function _chRowHtml(g) {
+    const on = g.key === _chSel;
+    const request = on && g.requestKey
+        ? `<div class="split-actions cf-item-actions ch-row-actions"><button type="button" data-chreq="${escapeHtml(g.requestKey)}">Open the request</button></div>`
         : '';
     return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
-        <button type="button" class="ch-row-main" data-chpick="${escapeHtml(key)}" aria-pressed="${on}"
-          aria-label="${escapeHtml([CH_TAGS[line.tag], who, line.what, line.dates].filter(Boolean).join(', '))}">
-          <span class="ch-tag ch-tag-${line.tag}">${CH_TAGS[line.tag]}</span>
-          <span class="ch-text">${avatars ? `<span class="ch-avs">${avatars}</span>` : ''}<b>${escapeHtml(line.what)}</b>${line.dates ? `<span class="ch-dates"> · ${escapeHtml(line.dates)}</span>` : ''}</span>
-          ${_chgIsNew(c) ? '<span class="split-new">New</span>' : ''}
-        </button>
+        <button type="button" class="ch-row-main" data-chpick="${escapeHtml(g.key)}" aria-pressed="${on}"
+          aria-label="${escapeHtml(_chLineLabel(g))}">${_chLineInner(g)}</button>
         ${request}
       </div>`;
 }
 
-// A day's before/after table: every date its changes touched.
-function _chTableHtml(list, showMine) {
-    let rows = [];
-    list.forEach(([, c]) => { rows = rows.concat(_chDiffRows(c)); });
-    if (showMine) rows = rows.filter(r => r.who === loggedInPathId);
-    rows = _chMergeRows(rows);
+// The net before/after table for some changes.
+function _chTableHtml(entries, pid) {
+    const rows = _chNetRows(entries, pid).rows;
     if (!rows.length) return '<p class="ch-note ch-table-empty">No before/after recorded for these changes.</p>';
-    const whoCol = !showMine;
+    const whoCol = pid == null && rows.some(r => r.who != null);
     return `<table class="ch-table">
         <thead><tr><th scope="col">Date</th>${whoCol ? '<th scope="col">Who</th>' : ''}<th scope="col">Before</th><th scope="col">After</th></tr></thead>
         <tbody>${rows.map(r => `<tr>
@@ -5832,35 +6025,48 @@ function _chTableHtml(list, showMine) {
       </table>`;
 }
 
-// One day the changes were made: a header that opens the before/after
-// table, then its changes.
-function _chDayGroupHtml(dayKey, label, list, showMine) {
-    const open = !!_chOpenDays.closed[dayKey];   // the store's flag = open
-    const n = list.length;
+// One day changes were made: a header that opens the day's before/after
+// table, then one line per type.
+function _chDayGroupHtml(day, pid) {
+    const open = !!_chOpenDays.closed[day.key];   // the store's flag = open
+    const n = day.lines.length;
+    const entries = [].concat(...day.lines.map(g => g.entries));
     return `<div class="ch-daygrp${open ? ' is-open' : ''}">
         <h4 class="ch-day-h">
-          <button type="button" class="ch-day" data-chday="${escapeHtml(dayKey)}" aria-expanded="${open}">
+          <button type="button" class="ch-day" data-chday="${escapeHtml(day.key)}" aria-expanded="${open}">
             <svg class="cf-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span class="ch-day-label">${escapeHtml(label)}</span>
+            <span class="ch-day-label">${escapeHtml(day.label)}</span>
             <span class="ch-day-count">${n} change${n === 1 ? '' : 's'}</span>
           </button>
         </h4>
-        ${list.map(([k, c]) => _chRowHtml(k, c, showMine)).join('')}
-        ${open ? `<div class="ch-table-wrap">${_chTableHtml(list, showMine)}</div>` : ''}
+        ${day.lines.map(_chRowHtml).join('')}
+        ${open ? `<div class="ch-table-wrap">${_chTableHtml(entries, pid)}</div>` : ''}
       </div>`;
 }
 
-// Each day: the people a change moved outlined (the selected change's are
-// made stronger afterwards, by _tlRenderMonth).
-function _chDecorator(entries, showMine) {
+// To review: the unreviewed changes, merged by type, with Accept.
+function _chReviewHtml(lines) {
+    const n = lines.length;
+    return `<section class="cf-sec ch-review">
+        <div class="cf-sec-head ch-review-head">
+          <h3 class="ch-review-title">To review</h3>
+          <span class="cf-sec-count">${n} change${n === 1 ? '' : 's'}</span>
+          <button type="button" class="ch-accept" data-chaccept>Accept changes</button>
+        </div>
+        <div class="cf-sec-body">${lines.map(_chRowHtml).join('')}</div>
+      </section>`;
+}
+
+// Each day: the people a line moved outlined (the selected line's are made
+// stronger afterwards, by _tlRenderMonth).
+function _chDecorator(lines) {
     const byDay = new Map();
-    entries.forEach(([, c]) => {
-        const span = _chSelSpan(c, showMine);
-        span.days.forEach(k => {
+    lines.forEach(g => {
+        g.span.days.forEach(k => {
             if (!byDay.has(k)) byDay.set(k, { n: 0, people: new Set() });
             byDay.get(k).n++;
         });
-        span.cells.forEach(cell => {
+        g.span.cells.forEach(cell => {
             const [k, p] = cell.split('|');
             if (byDay.has(k)) byDay.get(k).people.add(Number(p));
         });
@@ -5873,6 +6079,13 @@ function _chDecorator(entries, showMine) {
             ariaExtra: `, ${hit.n} change${hit.n === 1 ? '' : 's'}`,
         };
     };
+}
+
+// How many lines a tab shows.
+function _chTabCount(scope) {
+    const was = activeChangesScope;
+    activeChangesScope = scope;
+    try { return _chModel().lines.length; } finally { activeChangesScope = was; }
 }
 
 function renderChangesPage() {
@@ -5891,10 +6104,11 @@ function renderChangesPage() {
     const tabsWrap = document.getElementById('changesPageTabs');
     if (tabsWrap) tabsWrap.style.display = lfGuest ? 'none' : '';
 
-    const { all, mine, showMine, entries } = _chPool();
+    const m = _chModel();
+    const showMine = m.pool.showMine;
     const setText = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
-    setText('changesTabCountMine', String(mine.length));
-    setText('changesTabCountAll', String(all.length));
+    setText('changesTabCountMine', String(meIsPath ? (showMine ? m.lines.length : _chTabCount('mine')) : 0));
+    setText('changesTabCountAll', String(showMine ? _chTabCount('all') : m.lines.length));
     document.querySelectorAll('#changesPageTabs .req-tab').forEach(btn => {
         btn.classList.toggle('active', btn.getAttribute('data-ctab') === activeChangesScope);
     });
@@ -5907,19 +6121,18 @@ function renderChangesPage() {
         mineTab.title = meIsPath ? '' : 'Sign in as a pathologist to see your personal changes';
     }
 
-    if (_chSel && !entries.some(([k]) => k === _chSel)) _chSel = null;
-    // First visit: the newest change.
-    if (!_chMonth) _chSelect(entries[0] ? entries[0][0] : null, entries[0] ? null : fmt(today));
+    if (_chSel && !m.lines.some(g => g.key === _chSel)) _chSel = null;
+    // First visit: the newest line.
+    if (!_chMonth) _chSelect(m.lines[0] ? m.lines[0].key : null, m.lines[0] ? null : fmt(today), m);
 
-    const selC = _chSel ? changes[_chSel] : null;
-    const selSpan = selC ? _chSelSpan(selC, showMine) : null;
-    const selDays = selSpan ? selSpan.days : new Set(_chDay ? [_chDay] : []);
+    const selG = _chSel ? m.lines.find(g => g.key === _chSel) : null;
+    const selDays = selG ? selG.span.days : new Set(_chDay ? [_chDay] : []);
 
     _tlPeriodLabel(document.getElementById('chPeriod'), _chMonth);
-    // The selected change's days are boxed and the people it moved outlined.
-    _tlRenderMonth(monthEl, _chMonth, _chDecorator(entries, showMine), { days: selDays, cells: selSpan ? selSpan.cells : new Set() });
+    // The selected line's days are boxed and the people it moved outlined.
+    _tlRenderMonth(monthEl, _chMonth, _chDecorator(m.lines), { days: selDays, cells: selG ? selG.span.cells : new Set() });
 
-    if (entries.length === 0) {
+    if (m.lines.length === 0) {
         _tlSetHtml(listEl, `<div class="cf-empty">${lfGuest
             ? '<span class="split-empty-headline">No sendout updates yet.</span>Lake Forest sendout changes will appear here as they happen.'
             : showMine
@@ -5929,33 +6142,33 @@ function renderChangesPage() {
     }
     // Sections by how long ago; within each, the days changes were made.
     const sections = CH_SECTIONS.map(s => ({ id: s.id, label: s.label, days: [], count: 0 }));
-    entries.forEach(([k, c]) => {
-        const sec = sections.find(s => s.id === (c.at ? _chSectionOf(c.at) : 'older'));
-        const dayKey = c.at ? fmt(new Date(c.at)) : 'unknown';
+    m.history.forEach(g => {
+        const sec = sections.find(s => s.id === (g.at ? _chSectionOf(g.at) : 'older'));
         let day = sec.days[sec.days.length - 1];
-        if (!day || day.key !== dayKey) {
-            day = { key: dayKey, label: c.at ? _chDayLabel(c.at) : 'Earlier', list: [] };
+        if (!day || day.key !== g.day) {
+            day = { key: g.day, label: g.at ? _chDayLabel(g.at) : 'Earlier', lines: [] };
             sec.days.push(day);
         }
-        day.list.push([k, c]);
+        day.lines.push(g);
         sec.count++;
     });
-    _tlSetHtml(listEl, _tlSectionsHtml(sections
+    const history = m.history.length ? _tlSectionsHtml(sections
         .filter(s => s.id !== 'older' || s.count)
         .map(s => ({
             id: s.id,
             label: s.label,
             count: s.count,
-            items: s.days.map(d => _chDayGroupHtml(d.key, d.label, d.list, showMine)),
-        })), _chStore));
+            items: s.days.map(d => _chDayGroupHtml(d, m.pid)),
+        })), _chStore) : '';
+    _tlSetHtml(listEl, (m.review.length ? _chReviewHtml(m.review) : '') + history);
 }
 
-// Pick a day (calendar or date picker): select the newest change touching it.
+// Pick a day (calendar or date picker): select the newest line touching it.
 function _chPickDay(date) {
     const k = fmt(date);
-    const { entries, showMine } = _chPool();
-    const hit = entries.find(([, c]) => _chSelSpan(c, showMine).days.has(k));
-    _chSelect(hit ? hit[0] : null, k);
+    const m = _chModel();
+    const hit = m.lines.find(g => g.span.days.has(k));
+    _chSelect(hit ? hit.key : null, k, m);
     renderChangesPage();
     _tlReveal(document.getElementById('chList'));
 }
@@ -5975,6 +6188,10 @@ window.__renderChangesPage = renderChangesPage;
     const listEl = document.getElementById('chList');
     if (listEl) {
         listEl.addEventListener('click', e => {
+            if (e.target.closest('[data-chaccept]')) {
+                _chAccept(_chUnreviewed().maxTs);
+                return;
+            }
             const sec = e.target.closest('[data-cfsec]');
             if (sec) {
                 _chStore.set(sec.dataset.cfsec, !_chStore.closed[sec.dataset.cfsec]);
@@ -5994,10 +6211,8 @@ window.__renderChangesPage = renderChangesPage;
                 renderChangesPage();
                 return;
             }
-            const btn = e.target.closest('button[data-chact]');
-            if (!btn) return;
-            const c = changes[btn.closest('.cf-item-actions').dataset.key];
-            if (c && btn.dataset.chact === 'request' && _chgRequestFor(c)) openRequestOnPage(c.requestKey);
+            const req = e.target.closest('[data-chreq]');
+            if (req && requests[req.dataset.chreq]) openRequestOnPage(req.dataset.chreq);
         });
     }
 
@@ -6005,9 +6220,8 @@ window.__renderChangesPage = renderChangesPage;
         _chMonth = new Date(_chMonth.getFullYear(), _chMonth.getMonth() + n, 1);
         renderChangesPage();
     }, () => {
-        const { entries, showMine } = _chPool();
         const days = new Set();
-        entries.forEach(([, c]) => _chSelSpan(c, showMine).days.forEach(k => days.add(k)));
+        _chModel().lines.forEach(g => g.span.days.forEach(k => days.add(k)));
         return { month: _chMonth || today, pick: _chPickDay, mark: d => (days.has(fmt(d)) ? 'mc-ch' : '') };
     });
 
@@ -6019,23 +6233,109 @@ window.__renderChangesPage = renderChangesPage;
             if (scope !== 'mine' && scope !== 'all') return;
             if (scope === activeChangesScope) return;
             activeChangesScope = scope;
-            const { entries } = _chPool();
-            _chSelect(entries[0] ? entries[0][0] : null, entries[0] ? null : fmt(today));
+            const m = _chModel();
+            _chSelect(m.lines[0] ? m.lines[0].key : null, m.lines[0] ? null : fmt(today), m);
             renderChangesPage();
             if (listEl) listEl.scrollTop = 0;
         });
     });
-
-    // Nav click: mark changes seen so the nav dot clears as the page appears,
-    // but keep the old seen-time so this visit can still mark the new rows.
-    // This runs before the page switcher's own handler, which draws the page.
-    document.querySelectorAll('.nav-item[data-page="changes"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            _changesVisitAck = _getChangesAckTs();
-            markChangesPageSeen();
-        });
-    });
 })();
+
+// ── The alert: "Changes to your schedule" ──
+// An in-app panel in the day editor's style. It opens when the app opens
+// (and when a change lands mid-session) if something is waiting, and only
+// when no other panel is open — otherwise it waits for that one to close.
+// Review later closes it until the next app open or a newer change; the
+// nav dot and To review stay.
+function _chAlertEl() {
+    let back = document.getElementById('chAlertBack');
+    if (back) return back;
+    back = document.createElement('div');
+    back.className = 'modal-back';
+    back.id = 'chAlertBack';
+    back.innerHTML = `<div class="modal modal-stable ch-alert" role="dialog" aria-modal="true" aria-labelledby="chAlertTitle">
+        <button type="button" class="modal-close-x" aria-label="Close" title="Close">&times;</button>
+        <h3 id="chAlertTitle">Changes to your schedule</h3>
+        <div class="sub" id="chAlertSub"></div>
+        <div class="modal-scroll">
+          <div class="ch-alert-list" id="chAlertList"></div>
+          <div id="chAlertMore"></div>
+        </div>
+        <div class="modal-actions">
+          <button type="button" id="chAlertLater">Review later</button>
+          <button type="button" class="primary" id="chAlertAccept">Accept changes</button>
+        </div>
+      </div>`;
+    document.body.appendChild(back);
+    back.querySelector('.modal-close-x').addEventListener('click', _chCloseAlert);
+    back.querySelector('#chAlertLater').addEventListener('click', _chCloseAlert);
+    back.querySelector('#chAlertAccept').addEventListener('click', () => _chAccept(_chAlertMax));
+    back.addEventListener('click', e => {
+        if (e.target === back) { _chCloseAlert(); return; }
+        if (e.target.closest('[data-chalert-table]')) {
+            _chAlertTableOpen = !_chAlertTableOpen;
+            _chFillAlert(_chReviewLines());
+        }
+    });
+    back.addEventListener('keydown', e => {
+        if (e.key === 'Escape') { e.stopPropagation(); _chCloseAlert(); }
+    });
+    return back;
+}
+
+function _chFillAlert(rv) {
+    const back = _chAlertEl();
+    const n = rv.lines.length;
+    back.querySelector('#chAlertTitle').textContent = isLakeForest() ? 'Changes to your sendouts' : 'Changes to your schedule';
+    back.querySelector('#chAlertSub').textContent = `Since you last reviewed · ${n} change${n === 1 ? '' : 's'}`;
+    back.querySelector('#chAlertList').innerHTML = rv.lines.map(g =>
+        `<div class="ch-alert-row" aria-label="${escapeHtml(_chLineLabel(g))}">${_chLineInner(g)}</div>`).join('');
+    back.querySelector('#chAlertMore').innerHTML = rv.u.entries.length
+        ? `<button type="button" class="ch-alert-toggle" data-chalert-table aria-expanded="${_chAlertTableOpen}">
+             <svg class="cf-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+             Before / after</button>
+           ${_chAlertTableOpen ? `<div class="ch-alert-table">${_chTableHtml(rv.u.entries, rv.pid)}</div>` : ''}`
+        : '';
+    _chAlertMax = rv.u.maxTs;
+    _chAlertSnooze = Math.max(_chAlertSnooze, rv.u.maxTs);
+}
+
+function _chCloseAlert() {
+    const back = document.getElementById('chAlertBack');
+    if (back) back.classList.remove('open');
+}
+
+function _chMaybeAlert() {
+    if (!_chCanReview()) return;
+    if (!pathologistsReady || !vacationsReady || !changesReady || !requestsReady) return;
+    // Wait for the synced review time, so another device's Accept counts.
+    if (!_userSeen || String(loggedInPathId) !== _userSeenId) return;
+    const back = document.getElementById('chAlertBack');
+    const open = !!back && back.classList.contains('open');
+    const rv = _chReviewLines();
+    if (open) {
+        if (rv.lines.length) _chFillAlert(rv);
+        else _chCloseAlert();
+        return;
+    }
+    if (!rv.lines.length || rv.u.maxTs <= _chAlertSnooze) return;
+    if (document.querySelector('.modal-back.open')) return;
+    const login = document.getElementById('loginOverlay');
+    if (login && login.style.display !== 'none') return;
+    _chAlertTableOpen = false;
+    _chFillAlert(rv);
+    _chAlertEl().classList.add('open');
+    setTimeout(() => { const b = document.getElementById('chAlertAccept'); if (b) b.focus(); }, 0);
+}
+
+// When another panel closes, a waiting alert can show.
+let _chAlertRetry = null;
+new MutationObserver(muts => {
+    if (!muts.some(m => m.target.classList && m.target.classList.contains('modal-back')
+        && m.target.id !== 'chAlertBack' && !m.target.classList.contains('open'))) return;
+    clearTimeout(_chAlertRetry);
+    _chAlertRetry = setTimeout(_chMaybeAlert, 300);
+}).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
 
 // ════ CONFERENCE TRACKER SUBSYSTEM ════
 // Counts conference presentations per pathologist. scheduler/conferenceLog

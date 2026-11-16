@@ -2572,7 +2572,10 @@ function _getChangesAckTs() {
 function updateNavChangesIndicator() {
     const dot = document.getElementById('navChangesBadge');
     if (!dot) return;
-    if (typeof _chCanReview !== 'function' || !_chCanReview()) {
+    // Like the alert, wait for the synced review time, so a change accepted
+    // on another device never flashes the dot here.
+    if (typeof _chCanReview !== 'function' || !_chCanReview()
+        || !_userSeen || String(loggedInPathId) !== _userSeenId) {
         dot.style.display = 'none';
         return;
     }
@@ -3307,7 +3310,7 @@ function _cfItemHtml(c, seen) {
     const by = c.ack && c.ack.byName ? ' by ' + String(c.ack.byName).replace(/^Dr\. /, '') : '';
     const at = c.ack && c.ack.at ? ' on ' + _cfDayShort(new Date(c.ack.at)) : '';
     const note = c.accepted
-        ? `<span class="cf-item-note">Accepted${escapeHtml(by + at)}. The schedule wasn't changed.</span>` : '';
+        ? `<p class="ch-detail-text">Accepted${escapeHtml(by + at)}. The schedule wasn't changed.</p>` : '';
     let actions = '';
     if (on) {
         actions = c.accepted
@@ -3320,18 +3323,17 @@ function _cfItemHtml(c, seen) {
                 : '<button type="button" class="primary" data-cact="goto">Open day</button>');
         actions = `<div class="split-actions cf-item-actions" data-key="${escapeHtml(c.key)}">${actions}</div>`;
     }
-    return `<div class="cf-item${on ? ' is-selected' : ''}">
-        <button type="button" class="cf-item-main" data-cfpick="${escapeHtml(c.key)}" aria-pressed="${on}">
-          <span class="cf-item-meta">
-            <span class="cf-countdown">${_tlCountdown(_cfDaysUntil(c))}</span>
-            <span>${escapeHtml(_conflictWhen(c))} · ${escapeHtml(meta.label)}</span>
-            ${isNew ? '<span class="split-new">New</span>' : ''}
-          </span>
-          <span class="cf-item-title"><span class="split-dot tone-${meta.tone}" aria-hidden="true"></span><span>${escapeHtml(d.title)}</span></span>
-          <span class="cf-item-body">${escapeHtml(d.body)}</span>
-          ${note}
+    // A ledger line like the Changes page's: the kind's tag, then what's
+    // wrong and when. The selected line opens the explanation and actions.
+    const when = _conflictWhen(c);
+    return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
+        <button type="button" class="ch-row-main" data-cfpick="${escapeHtml(c.key)}" aria-pressed="${on}"
+          aria-label="${escapeHtml([meta.label, d.title, when, isNew ? 'new' : ''].filter(Boolean).join(', '))}">
+          <span class="ch-tag ch-tag-cf-${escapeHtml(c.kind)}">${escapeHtml(meta.label)}</span>
+          <span class="ch-text"><b>${escapeHtml(d.title)}</b><span class="ch-dates"> · ${escapeHtml(when)}</span></span>
+          ${isNew ? '<span class="split-new">New</span>' : ''}
         </button>
-        ${actions}
+        ${on ? `<div class="ch-detail">${d.body ? `<p class="ch-detail-text">${escapeHtml(d.body)}</p>` : ''}${note}${actions}</div>` : ''}
       </div>`;
 }
 
@@ -4908,26 +4910,76 @@ function _rqSelect(key, dayKey) {
     if (r && _rqStore.closed[_rqSectionOf(r)]) _rqStore.set(_rqSectionOf(r), false);
 }
 
+// The ledger tag for a request, in the Changes page's colours.
+const RQ_TAGS = {
+    pto_add: { tag: 'pto', label: 'PTO request' },
+    pto_remove: { tag: 'pto', label: 'PTO request' },
+    oncall_change: { tag: 'call', label: 'Call change' },
+    oncall_swap: { tag: 'call', label: 'Call trade' },
+    service_change: { tag: 'svc', label: 'Service change' },
+    service_lock: { tag: 'lock', label: 'Service lock' },
+    lf_sendout: { tag: 'lf', label: 'LF sendout' },
+    lf_dates_request: { tag: 'lf', label: 'LF dates' },
+};
+
+// What was asked and its dates, for a ledger line: { what, dates }.
+function _requestWhatDates(r) {
+    const p = r.payload || {};
+    const day = k => { const d = parseDate(k); return `${DOW[d.getDay()]}, ${MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`; };
+    const when = () => (p.scope === 'week' ? 'week of ' + _callFmtWeek(getCallCycleStart(parseDate(p.date))) : day(p.date));
+    switch (r.type) {
+        case 'pto_add':
+            return { what: p.callTrade ? 'Add PTO with a call trade' : 'Add PTO', dates: _reqRangeLabel(r) };
+        case 'pto_remove':
+            return { what: 'Remove PTO', dates: p.start ? _reqRangeLabel(r) : '' };
+        case 'oncall_change':
+            return { what: `${_shortPathName(p.newPathId)} on call`, dates: when() };
+        case 'oncall_swap':
+            return { what: 'Trade call weeks', dates: `${_callFmtWeek(parseDate(p.aStart))} ↔ ${_callFmtWeek(parseDate(p.bStart))}` };
+        case 'service_change':
+            return { what: p.serviceId ? `Set to ${_chgServiceName(p.serviceId)}` : 'Back to the rotation', dates: when() };
+        case 'service_lock':
+            return { what: `Lock ${_chgServiceName(p.serviceId)}`, dates: day(p.date) };
+        case 'lf_sendout':
+            return { what: p.action === 'remove' ? 'Remove sendout' : 'Add sendout', dates: when() };
+        case 'lf_dates_request':
+            return { what: 'Sendout dates', dates: p.start && p.end ? _reqDateRange(p.start, p.end) : '' };
+        default:
+            return { what: r.type, dates: '' };
+    }
+}
+
+// A short status at the end of the line, only when it says something the
+// tab doesn't: the request needs me, it's waiting on a colleague (a call
+// trade, Lake Forest), or how it was decided.
+function _rqLineStatus(r) {
+    if (isOpenRequest(r)) {
+        const ids = _requestWaitingOn(r);
+        if (ids.includes(loggedInPathId)) {
+            return isAdmin() && r.status === 'pending' ? null : { text: 'Needs you', tone: 'warn' };
+        }
+        const dir = pathologists.find(p => isAdmin(p.id));
+        if (!ids.length || (dir && ids.length === 1 && ids[0] === dir.id)) return null;
+        return { text: _requestWaitingText(r), tone: '' };
+    }
+    if (r.status === 'approved') return { text: r.type === 'lf_dates_request' ? 'Completed' : 'Approved', tone: 'ok' };
+    return { text: 'Denied', tone: 'bad' };
+}
+
 function _rqItemHtml(key, r) {
     const on = key === _rqSel;
-    const span = _requestSpan(r);
-    const pending = isOpenRequest(r);
-    const chip = pending
-        ? (span ? _tlCountdown(_tlDaysFromToday(span.start)) : 'Open')
-        : _tlAgo(_rqDecidedAgo(r));
-    const when = span ? _tlRange(span.start, span.end) : '';
-    const st = _requestRowStatus(r);
-    const note = r.note ? `<span class="cf-item-body rq-item-note">“${escapeHtml(r.note)}”</span>` : '';
-    return `<div class="cf-item${on ? ' is-selected' : ''}">
-        <button type="button" class="cf-item-main" data-rqpick="${escapeHtml(key)}" aria-pressed="${on}">
-          <span class="cf-item-meta">
-            <span class="cf-countdown">${escapeHtml(chip)}</span>
-            <span>${escapeHtml([when, _rqTypeLabel(r)].filter(Boolean).join(' · '))}</span>
-            ${_rqIsNew(r) ? '<span class="split-new">New</span>' : ''}
-          </span>
-          <span class="cf-item-title">${splitAvatar(r.requesterId)}<span>${escapeHtml(_shortPathName(r.requesterId))}: ${escapeHtml(_requestShortWhat(r))}</span></span>
-          ${note}
-          <span class="cf-item-body rq-item-status${st.tone ? ' tone-' + st.tone : ''}">${escapeHtml(st.text)}</span>
+    const tg = RQ_TAGS[r.type] || { tag: 'svc', label: _rqTypeLabel(r) };
+    const wd = _requestWhatDates(r);
+    const st = _rqLineStatus(r);
+    const other = r.requesterId !== loggedInPathId;
+    const label = [tg.label, other ? _shortPathName(r.requesterId) : '', wd.what, wd.dates,
+        st ? st.text : '', r.note ? 'note: ' + r.note : ''].filter(Boolean).join(', ');
+    return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
+        <button type="button" class="ch-row-main" data-rqpick="${escapeHtml(key)}" aria-pressed="${on}" aria-label="${escapeHtml(label)}">
+          <span class="ch-tag ch-tag-${tg.tag}">${escapeHtml(tg.label)}</span>
+          <span class="ch-text">${other ? `<span class="ch-avs">${_chAvatar(r.requesterId, true)}</span>` : ''}<b>${escapeHtml(wd.what)}</b>${wd.dates ? `<span class="ch-dates"> · ${escapeHtml(wd.dates)}</span>` : ''}${r.note ? `<span class="ch-reason">“${escapeHtml(r.note)}”</span>` : ''}</span>
+          ${st ? `<span class="ch-status${st.tone ? ' tone-' + st.tone : ''}">${escapeHtml(st.text)}</span>` : ''}
+          ${_rqIsNew(r) ? '<span class="split-new">New</span>' : ''}
         </button>
         ${on ? `<div class="rq-item-card" data-rqcard="${escapeHtml(key)}"></div>` : ''}
       </div>`;
@@ -4956,31 +5008,42 @@ function _rqDecorator(pool) {
     };
 }
 
-// The page's button row (New PTO request, call / service / lock requests,
-// Request LF sendout dates), at the top of the list column. Made once.
+// The page's new-request buttons (PTO, call, service, lock — or the
+// director's "Ask LF for sendout dates"), grouped in the header beside the
+// Pending / History tabs. Made once.
 function _requestsPageBar() {
     let bar = document.getElementById('requestsPageBar');
     if (bar) return bar;
-    const side = document.getElementById('rqSide');
+    const header = document.querySelector('#requestsPage .tl-header');
     bar = document.createElement('div');
     bar.id = 'requestsPageBar';
     bar.className = 'requests-page-bar';
-    side.insertBefore(bar, side.firstChild);
+    header.insertBefore(bar, document.getElementById('requestsPageTabs'));
     const group = document.createElement('div');
     group.id = 'requestsPageBtns';
     group.className = 'req-new-group';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'New request');
+    const label = document.createElement('span');
+    label.className = 'req-new-label';
+    label.id = 'requestsPageBtnsLabel';
+    label.textContent = 'New request';
+    group.appendChild(label);
     bar.appendChild(group);
     return bar;
 }
 
-// One button in the Requests page's button group.
-function _requestsPageButton(id, label, onClick) {
+// One button in the group: a short label, with the full action for screen
+// readers and the tooltip.
+function _requestsPageButton(id, label, full, onClick) {
     _requestsPageBar();
     const btn = document.createElement('button');
     btn.id = id;
     btn.type = 'button';
     btn.className = 'req-new-btn';
     btn.textContent = label;
+    btn.title = full;
+    btn.setAttribute('aria-label', full);
     btn.addEventListener('click', onClick);
     document.getElementById('requestsPageBtns').appendChild(btn);
     return btn;
@@ -5001,24 +5064,27 @@ function renderRequestsPage() {
     // today (or the next workday), each with its own date picker.
     let newBtn = document.getElementById('requestsPageNewBtn');
     if (!newBtn) {
-        newBtn = _requestsPageButton('requestsPageNewBtn', 'New PTO request', () => {
+        newBtn = _requestsPageButton('requestsPageNewBtn', 'PTO', 'New PTO request', () => {
             // Lake Forest requests sendout days; everyone else requests PTO.
             if (isLakeForest()) { openLfRequestModal(today); return; }
             const addBtn = document.getElementById('addPtoBtn');
             if (addBtn) addBtn.click();
         });
-        _requestsPageButton('requestsPageCallBtn', 'Request call change',
+        _requestsPageButton('requestsPageCallBtn', 'Call', 'Request a call change',
             () => openCallRequestModal(new Date(today)));
-        _requestsPageButton('requestsPageSvcBtn', 'Request service change',
+        _requestsPageButton('requestsPageSvcBtn', 'Service', 'Request a service change',
             () => openServiceModal(_requestDefaultWorkday()));
-        _requestsPageButton('requestsPageLockBtn', 'Request service lock',
+        _requestsPageButton('requestsPageLockBtn', 'Lock', 'Request a service lock',
             () => openServiceModal(_requestDefaultWorkday(), 'lock'));
     }
     // Pathologists request PTO, call, service and lock changes here; Lake
     // Forest requests sendouts. Nobody else (Kathleen, gross room,
     // histology) gets the buttons.
     newBtn.style.display = (!admin && (canUsePto() || isLakeForest())) ? 'inline-flex' : 'none';
-    newBtn.textContent = isLakeForest() ? 'New sendout request' : 'New PTO request';
+    newBtn.textContent = isLakeForest() ? 'Sendout' : 'PTO';
+    const newFull = isLakeForest() ? 'New sendout request' : 'New PTO request';
+    newBtn.title = newFull;
+    newBtn.setAttribute('aria-label', newFull);
     const showSchedReq = !admin && canRequestScheduleChange();
     ['requestsPageCallBtn', 'requestsPageSvcBtn', 'requestsPageLockBtn'].forEach(id => {
         document.getElementById(id).style.display = showSchedReq ? 'inline-flex' : 'none';
@@ -5028,10 +5094,12 @@ function renderRequestsPage() {
     // for their sendout dates (files an lf_dates_request aimed at LF).
     let askLfBtn = document.getElementById('requestsPageAskLfBtn');
     if (!askLfBtn) {
-        askLfBtn = _requestsPageButton('requestsPageAskLfBtn', 'Request LF sendout dates',
-            () => openLfAskModal());
+        askLfBtn = _requestsPageButton('requestsPageAskLfBtn', 'Ask LF for sendout dates',
+            'Ask Lake Forest for their sendout dates', () => openLfAskModal());
     }
     askLfBtn.style.display = admin ? 'inline-flex' : 'none';
+    // The director's single button says what it does; no "New request" label.
+    document.getElementById('requestsPageBtnsLabel').hidden = admin;
     _requestsPageBar().hidden = !Array.from(document.querySelectorAll('#requestsPageBtns .req-new-btn'))
         .some(b => b.style.display !== 'none');
 
@@ -5783,7 +5851,14 @@ function _chNetRows(entries, pid) {
         });
     });
     const kept = [...net.values()].filter(r => r.before !== r.after);
-    return { rows: _chMergeRows(kept), raw, days: new Set(kept.map(r => r.k)) };
+    // Calendar days the net rows cover (a call-week row covers its week).
+    const covered = new Set();
+    kept.forEach(r => {
+        if (!r.label) { covered.add(r.k); return; }
+        const cs = getCallCycleStart(parseDate(r.k));
+        for (let d = cs; d <= getCallCycleEnd(cs); d = addDays(d, 1)) covered.add(fmt(d));
+    });
+    return { rows: _chMergeRows(kept), raw, days: new Set(kept.map(r => r.k)), covered };
 }
 
 // "Nov 23 – 24, Dec 1": a few ranges listed, more shown as first – last.
@@ -5808,7 +5883,7 @@ function _chSummary(tag, net, entries, pid) {
             const off = rows.filter(r => r.before === 'PTO');
             if (add.length && !off.length) return { what: `${word} added`, dates: _chLabels(add) };
             if (off.length && !add.length) return { what: `${word} removed`, dates: _chLabels(off) };
-            return { what: `${word} changed`, dates: _chLabels(rows) };
+            return { what: `${word} changed`, dates: `added ${_chLabels(add)}, removed ${_chLabels(off)}` };
         }
         case 'call': {
             const on = rows.filter(r => r.after === 'On call');
@@ -5882,10 +5957,12 @@ function _chGroups(entries, byDay, pid, prefix) {
         const withReq = g.entries.find(([, c]) => _chgRequestFor(c));
         const days = new Set();
         const cells = new Set();
+        // Days an edit touched but that ended where they started aren't marked.
+        const keep = d => !net.rows.length || net.covered.has(d);
         g.entries.forEach(([, c]) => {
             const s = _chSelSpan(c, pid != null);
-            s.days.forEach(d => days.add(d));
-            s.cells.forEach(x => cells.add(x));
+            s.days.forEach(d => { if (keep(d)) days.add(d); });
+            s.cells.forEach(x => { if (keep(x.split('|')[0])) cells.add(x); });
         });
         out.push(Object.assign(g, line, { people, requestKey: withReq ? withReq[1].requestKey : null, span: { days, cells } }));
     });
@@ -5897,9 +5974,12 @@ function _chDeniedLines(denied) {
     return denied.map(([k, r]) => {
         const sp = _requestSpan(r);
         const days = sp ? sp.days : new Set();
+        // Worded as on the Requests page: "Set to Huntley · Fri, Dec 4".
+        const wd = _requestWhatDates(r);
         return {
             key: 'd:' + k, tag: 'deny', at: r.decisionAt || 0, entries: [], people: [],
-            what: _requestShortWhat(r), dates: '', reason: r.decisionNote || '',
+            what: wd.what, dates: wd.dates,
+            reason: r.decisionNote || '',
             requestKey: k, span: { days, cells: new Set([...days].map(d => d + '|' + r.requesterId)) },
         };
     });

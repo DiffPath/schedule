@@ -8662,20 +8662,73 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .rq-item-card .req-card .req-detail { font-size: 13px; }
 .rq-item-card .req-card > .req-note { display: none; }   /* already on the item */
 .rq-item-card .req-card-actions { margin-top: 10px; justify-content: flex-start; }
-/* Changes page: a change's detail lines, one per line; the selected change's
-   moves table, source note and actions under it. */
-.ch-item-lines { display: flex; flex-direction: column; gap: 1px; }
-/* The rest of a combined listing: other edits from the same action, and the
-   recompute or back-fix it triggered — one line each, the first two shown. */
-.ch-item-also { display: flex; flex-direction: column; gap: 2px; }
-.ch-item-also > span { position: relative; padding-left: 12px; }
-.ch-item-also > span::before { content: '+'; position: absolute; left: 0; color: var(--ink-3); }
-.ch-item-also > .ch-item-more { color: var(--accent); font-weight: 500; }
-.ch-item-also > .ch-item-more::before { content: none; }
-.ch-item-detail { display: flex; flex-direction: column; gap: 10px; padding: 0 16px 4px 46px; }
-.ch-item-detail .split-moves td { padding: 6px 10px; }
-.ch-item-detail .split-moves th { padding: 6px 10px; }
-.ch-item-detail .split-actions.cf-item-actions { padding: 0 0 10px; }
+/* ── Changes page: a ledger, one line per change under the day it was made ── */
+.ch-day {
+    margin: 0;
+    padding: 8px 14px 6px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule-soft);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--ink-2);
+}
+.ch-row { border-bottom: 1px solid var(--rule-soft-2); }
+.ch-row.is-selected { background: var(--paper-2); box-shadow: inset 3px 0 0 var(--tl-sel, var(--accent)); }
+.ch-row-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 40px;
+    padding: 8px 14px;
+    border: 0;
+    background: none;
+    text-align: left;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--ink);
+    cursor: pointer;
+}
+.ch-row:not(.is-selected) .ch-row-main:hover { background: var(--paper); }
+.ch-row-main:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* The tag: same width for every kind, in the app's soft pill style. */
+.ch-tag {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 108px;
+    height: 21px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.ch-tag-pto  { background: #fbe6d4; color: #8a3c12; }   /* orange */
+.ch-tag-call { background: #dde9f7; color: #1a4f8a; }   /* blue */
+.ch-tag-svc  { background: #dcefe1; color: #1f6b34; }   /* green */
+.ch-tag-lock { background: #f8e0dc; color: #8f2a1f; }   /* red */
+.ch-tag-lf   { background: #ece3f6; color: #5b2d86; }   /* purple */
+/* Wraps to a second line in a narrow list rather than cutting the dates off. */
+.ch-text { flex: 1; min-width: 0; }
+.ch-text b { font-weight: 600; }
+.ch-dates { color: var(--ink-2); }
+.ch-avs { display: inline-flex; margin-right: 6px; vertical-align: -5px; }
+.split-avatar.ch-av { width: 20px; height: 20px; font-size: 8.5px; border: 1.5px solid #fff; box-sizing: border-box; }
+.ch-avs .ch-av + .ch-av { margin-left: -5px; }
+/* The selected row: a recompute's moves, then the actions. */
+.ch-row-detail { display: flex; flex-direction: column; gap: 8px; padding: 0 14px 10px 132px; }
+.ch-moves { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+.ch-move { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.ch-move-day { width: 82px; flex: none; color: var(--ink-2); }
+.ch-note { font-size: 12px; color: var(--ink-2); }
+.ch-row-detail .split-actions.cf-item-actions { padding: 0; }
+@media (max-width: 800px) {
+    .ch-row-detail { padding-left: 14px; }
+}
 /* The new-request buttons sit above the list. */
 .cf-side .requests-page-bar { justify-content: flex-start; margin: 0; }
 .cf-side .requests-page-bar .req-new-group { justify-content: flex-start; }

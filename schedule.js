@@ -3219,6 +3219,75 @@ function _tlWireNav(prefix, stepMonth, pickerOpts) {
     }
 }
 
+// ── Phones: the page's name in the top bar, and List | Calendar ─────────
+// On a phone, Conflicts, Requests and Changes show either the list or the
+// month (not one under the other). The top bar beside the menu button names
+// the page and holds the switch. The view lives on .app[data-tl-view].
+const TL_PAGES = { conflicts: 'conflictsPage', requests: 'requestsPage', changes: 'changesPage' };
+const _tlPhone = window.matchMedia('(max-width: 800px)');
+
+function _tlSetView(view) {
+    const app = document.querySelector('.app');
+    if (app) app.dataset.tlView = view;
+    document.querySelectorAll('#tlViewToggle [data-tlview]').forEach(b => {
+        const on = b.dataset.tlview === view;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', String(on));
+    });
+}
+
+// Name the page in the top bar (its own title: "Requests" / "My Requests").
+function _tlSyncMobileBar() {
+    const app = document.querySelector('.app');
+    const titleEl = document.getElementById('tlMobileTitle');
+    if (!app || !titleEl) return;
+    const pg = document.getElementById(TL_PAGES[app.dataset.page] || '');
+    const t = pg && pg.querySelector('.tl-title');
+    titleEl.textContent = t ? t.textContent : '';
+}
+
+(function wireTlMobileBar() {
+    const bar = document.getElementById('scheduleToolbar');
+    const app = document.querySelector('.app');
+    if (!bar || !app) return;
+    const title = document.createElement('h1');
+    title.id = 'tlMobileTitle';
+    title.className = 'tl-mobile-title';
+    const toggle = document.createElement('div');
+    toggle.id = 'tlViewToggle';
+    toggle.className = 'req-tabs tl-view-toggle';
+    toggle.setAttribute('role', 'group');
+    toggle.setAttribute('aria-label', 'Show');
+    toggle.innerHTML = `<button type="button" class="req-tab" data-tlview="list">List</button>
+        <button type="button" class="req-tab" data-tlview="cal">Calendar</button>`;
+    bar.appendChild(title);
+    bar.appendChild(toggle);
+    toggle.addEventListener('click', e => {
+        const b = e.target.closest('[data-tlview]');
+        if (!b || b.dataset.tlview === app.dataset.tlView) return;
+        _tlSetView(b.dataset.tlview);
+        window.scrollTo(0, 0);
+    });
+    _tlSetView('list');
+
+    // Each visit starts on the list, under the page's name.
+    new MutationObserver(() => { _tlSetView('list'); _tlSyncMobileBar(); })
+        .observe(app, { attributes: true, attributeFilter: ['data-page'] });
+
+    // Tapping a day on the phone's calendar: when that picks an item, go
+    // back to the list with it open. (Runs after the page's own handler.)
+    document.addEventListener('click', e => {
+        if (!_tlPhone.matches || app.dataset.tlView !== 'cal') return;
+        if (!e.target.closest('.cf-month-host .day[data-date]')) return;
+        const pg = document.getElementById(TL_PAGES[app.dataset.page] || '');
+        const item = pg && pg.querySelector('.cf-list .cf-item.is-selected');
+        if (!item) return;
+        _tlSetView('list');
+        item.scrollIntoView({ block: 'start' });
+        window.scrollBy(0, -70);   // clear of the top bar
+    });
+})();
+
 // ── Conflicts page ──────────────────────────────────────────────────────
 // The list ordered by time until the conflict (within a week / month /
 // 3 months / year) beside the month view, each day marked with its open
@@ -4857,19 +4926,29 @@ let _rqSel = null;        // selected request key
 let _rqDay = null;        // selected day (yyyy-mm-dd), with or without a request
 let _rqVisitAck = null;   // the "seen" stamp from before this visit, for New
 const _rqStore = _tlStore('requestSectionsClosed');
+// How the list is ordered: 'made' (when the request was made, newest first,
+// under the day it was made) or 'occurs' (when its dates come up). Kept per
+// browser.
+let _rqSort = (() => { try { return localStorage.getItem('requestSort') === 'occurs' ? 'occurs' : 'made'; } catch (_) { return 'made'; } })();
 
-const RQ_SECTIONS_PENDING = [
+// Sort by when made: how long ago, as on the Changes page.
+const RQ_SECTIONS_MADE = [
+    { id: 'm-week', label: 'Within the last week', max: 6 },
+    { id: 'm-month', label: 'Within the last month', max: 30 },
+    { id: 'm-quarter', label: 'Within the last 3 months', max: 91 },
+    { id: 'm-year', label: 'Within the last year', max: 365 },
+    { id: 'm-older', label: 'Over a year ago', max: Infinity },
+];
+// Sort by when it occurs: how far off the dates are. "In the past" only
+// fills on History (a pending request whose dates have begun stays at the
+// top, under "Within a week").
+const RQ_SECTIONS_OCCURS = [
     { id: 'week', label: 'Within a week', max: 6 },
     { id: 'month', label: 'Within a month', max: 30 },
     { id: 'quarter', label: 'Within 3 months', max: 91 },
     { id: 'year', label: 'Within a year', max: 365 },
     { id: 'later', label: 'More than a year out', max: Infinity },
-];
-const RQ_SECTIONS_HISTORY = [
-    { id: 'h-week', label: 'Decided in the last week', max: 6 },
-    { id: 'h-month', label: 'In the last month', max: 30 },
-    { id: 'h-quarter', label: 'In the last 3 months', max: 91 },
-    { id: 'h-older', label: 'Earlier', max: Infinity },
+    { id: 'past', label: 'In the past', max: -1 },
 ];
 
 const RQ_TYPE_LABEL = {
@@ -4952,28 +5031,97 @@ function _requestSpan(r) {
 
 function _rqIsPending() { return activeRequestsPageTab === 'pending'; }
 
-// Pending: soonest dates first. History: most recently decided first.
-function _rqPool() {
-    const entries = visibleRequestEntries(activeRequestsPageTab);
-    if (_rqIsPending()) {
-        const at = r => { const s = _requestSpan(r); return s ? s.start.getTime() : today.getTime(); };
-        return entries.sort((a, b) => (at(a[1]) - at(b[1])) || ((a[1].createdAt || 0) - (b[1].createdAt || 0)));
-    }
-    return entries.sort((a, b) => ((b[1].decisionAt || b[1].createdAt || 0) - (a[1].decisionAt || a[1].createdAt || 0)));
+// When the request's dates start (today for one without dates).
+function _rqStartsAt(r) {
+    const s = _requestSpan(r);
+    return s ? s.start.getTime() : today.getTime();
 }
 
-function _rqDecidedAgo(r) {
-    return -_tlDaysFromToday(new Date(r.decisionAt || r.createdAt || Date.now()));
+// By when made: newest first. By when it occurs: soonest dates first, and
+// dates already past (History) most recent first.
+function _rqPool() {
+    const entries = visibleRequestEntries(activeRequestsPageTab);
+    const made = r => r.createdAt || 0;
+    if (_rqSort === 'made') return entries.sort((a, b) => made(b[1]) - made(a[1]));
+    const now = today.getTime();
+    return entries.sort((a, b) => {
+        const ta = _rqStartsAt(a[1]), tb = _rqStartsAt(b[1]);
+        if (!_rqIsPending() && ta < now && tb < now) return (tb - ta) || (made(b[1]) - made(a[1]));
+        return (ta - tb) || (made(a[1]) - made(b[1]));
+    });
 }
 
 function _rqSectionOf(r) {
-    if (_rqIsPending()) {
-        const s = _requestSpan(r);
-        const d = s ? _tlDaysFromToday(s.start) : 0;
-        return RQ_SECTIONS_PENDING.find(x => d <= x.max).id;
+    if (_rqSort === 'made') {
+        if (!r.createdAt) return 'm-older';
+        const ago = -_tlDaysFromToday(new Date(r.createdAt));
+        return RQ_SECTIONS_MADE.find(x => ago <= x.max).id;
     }
-    const ago = _rqDecidedAgo(r);
-    return RQ_SECTIONS_HISTORY.find(x => ago <= x.max).id;
+    const s = _requestSpan(r);
+    const d = s ? _tlDaysFromToday(s.start) : 0;
+    if (d < 0) return _rqIsPending() ? 'week' : 'past';
+    return RQ_SECTIONS_OCCURS.find(x => x.max >= 0 && d <= x.max).id;
+}
+
+// The list's sections. By when made, each section holds the days requests
+// were made ("Today", "Yesterday", "Monday, Nov 9"), as on Changes.
+function _rqSectionsHtml(pool) {
+    if (_rqSort === 'occurs') {
+        return _tlSectionsHtml(RQ_SECTIONS_OCCURS
+            .map(s => ({ id: s.id, label: s.label, items: pool.filter(([, r]) => _rqSectionOf(r) === s.id).map(([k, r]) => _rqItemHtml(k, r)) }))
+            // The far-off and past sections show only when something is there.
+            .filter(s => (s.id !== 'later' && s.id !== 'past') || s.items.length), _rqStore);
+    }
+    const sections = RQ_SECTIONS_MADE.map(s => ({ id: s.id, label: s.label, days: [], count: 0 }));
+    pool.forEach(([k, r]) => {
+        const sec = sections.find(s => s.id === _rqSectionOf(r));
+        const dayKey = r.createdAt ? fmt(new Date(r.createdAt)) : '';
+        let day = sec.days[sec.days.length - 1];
+        if (!day || day.key !== dayKey) {
+            day = { key: dayKey, label: r.createdAt ? _chDayLabel(r.createdAt) : 'Earlier', items: [] };
+            sec.days.push(day);
+        }
+        day.items.push(_rqItemHtml(k, r));
+        sec.count++;
+    });
+    return _tlSectionsHtml(sections
+        .filter(s => s.id !== 'm-older' || s.count)
+        .map(s => ({ id: s.id, label: s.label, count: s.count, items: s.days.map(d => `<div class="ch-daygrp">
+            <h4 class="ch-day-h"><span class="ch-day">
+              <span class="ch-day-label">${escapeHtml(d.label)}</span>
+              <span class="ch-day-count">${d.items.length} request${d.items.length === 1 ? '' : 's'}</span>
+            </span></h4>${d.items.join('')}</div>`) })), _rqStore);
+}
+
+// The "Sort by" switch above the list (made once).
+function _rqSortBar() {
+    let bar = document.getElementById('rqSort');
+    if (bar) return bar;
+    const side = document.getElementById('rqSide');
+    if (!side) return null;
+    bar = document.createElement('div');
+    bar.id = 'rqSort';
+    bar.className = 'rq-sort';
+    bar.innerHTML = `<span class="rq-sort-label" id="rqSortLabel">Sort by</span>
+        <div class="req-tabs rq-sort-tabs" role="group" aria-labelledby="rqSortLabel">
+          <button type="button" class="req-tab" data-rqsort="made">When made</button>
+          <button type="button" class="req-tab" data-rqsort="occurs">When it happens</button>
+        </div>`;
+    side.insertBefore(bar, side.firstChild);
+    bar.addEventListener('click', e => {
+        const btn = e.target.closest('[data-rqsort]');
+        if (!btn || btn.dataset.rqsort === _rqSort) return;
+        _rqSort = btn.dataset.rqsort;
+        try { localStorage.setItem('requestSort', _rqSort); } catch (_) {}
+        // Keep the open request open, in its section under the new order.
+        if (_rqSel && requests[_rqSel] && _rqStore.closed[_rqSectionOf(requests[_rqSel])]) {
+            _rqStore.set(_rqSectionOf(requests[_rqSel]), false);
+        }
+        renderRequestsPage();
+        const list = document.getElementById('rqList');
+        if (_rqSel) _tlReveal(list); else if (list) list.scrollTop = 0;
+    });
+    return bar;
 }
 
 // New since the last visit: an ask that landed for me, or a decision on
@@ -5221,6 +5369,7 @@ function renderRequestsPage() {
     const titleEl = document.getElementById('requestsPageTitle');
     const admin = (typeof isAdmin === 'function') ? isAdmin() : false;
     if (titleEl) titleEl.textContent = admin ? 'Requests' : 'My Requests';
+    _tlSyncMobileBar();
 
     // Inject (once) the non-admin "new request" buttons: PTO opens the same
     // PTO panel flow; call, service and lock open their request panels on
@@ -5274,6 +5423,15 @@ function renderRequestsPage() {
     });
 
     const pool = _rqPool();
+    const sortBar = _rqSortBar();
+    if (sortBar) {
+        sortBar.hidden = pool.length === 0;
+        sortBar.querySelectorAll('[data-rqsort]').forEach(b => {
+            const on = b.dataset.rqsort === _rqSort;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-pressed', String(on));
+        });
+    }
     // The selected request moved tabs (decided, withdrawn) — keep its day.
     if (_rqSel && !pool.some(([k]) => k === _rqSel)) _rqSel = null;
     // First visit: the first request in the list.
@@ -5296,11 +5454,7 @@ function renderRequestsPage() {
                 : '<span class="split-empty-headline">Nothing pending.</span>You have no requests awaiting a decision.')
             : '<span class="split-empty-headline">No history yet.</span>Approved and denied requests will appear here.'}</div>`);
     } else {
-        const secs = _rqIsPending() ? RQ_SECTIONS_PENDING : RQ_SECTIONS_HISTORY;
-        _tlSetHtml(listEl, _tlSectionsHtml(secs
-            .map(s => ({ id: s.id, label: s.label, items: pool.filter(([, r]) => _rqSectionOf(r) === s.id).map(([k, r]) => _rqItemHtml(k, r)) }))
-            // Pending shows "More than a year out" only when something is there.
-            .filter(s => s.id !== 'later' || s.items.length), _rqStore));
+        _tlSetHtml(listEl, _rqSectionsHtml(pool));
         // The card is filled in after the list HTML, so refresh it every time
         // (offers, decisions) even when the list itself didn't change.
         const cardEl = listEl.querySelector('[data-rqcard]');
@@ -10171,8 +10325,12 @@ function _wireCallDrag(main) {
 // ────────────── DAY DETAIL MODAL ──────────────
 let activeDayDate = null;
 
+// Only the schedule's own days (in #main): the month views on Conflicts,
+// Requests and Changes pick a day themselves instead of opening the editor.
 function attachDayClickHandlers() {
-    document.querySelectorAll('[data-date]').forEach(el => {
+    const main = document.getElementById('main');
+    if (!main) return;
+    main.querySelectorAll('[data-date]').forEach(el => {
         el.addEventListener('click', () => {
             const ds = el.dataset.date;
             if (!ds) return;

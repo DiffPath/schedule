@@ -8520,6 +8520,13 @@ button.consult-rot-chip { cursor: pointer; font: inherit; font-family: var(--mon
 .month-view .day .wd-row.cf-miss { justify-content: center; background: #fff; border: 1px dashed #b92a2a; }
 .wd-row.cf-miss .svc { flex: none; color: #9b2c22; font-weight: 600; }
 
+/* Requests: "Sort by  When made | When it happens" above the list. */
+.rq-sort { display: flex; align-items: center; gap: 8px; flex: none; }
+.rq-sort[hidden] { display: none; }
+.rq-sort-label { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; }
+.rq-sort .req-tabs { margin: 0; }
+.rq-sort .req-tab { padding: 5px 12px; white-space: nowrap; }
+
 .cf-list {
     min-width: 0;
     background: #fff;
@@ -8913,6 +8920,48 @@ span.ch-day { box-sizing: border-box; cursor: default; }
 @media (min-width: 1024px) {
     .cf-month .day.cf-many .wd-rows { gap: 1px; padding: 1px 3px 2px; }
     .cf-month .day.cf-many .wd-row { padding: 0.15em 0.5em; line-height: 1.15; }
+}
+
+/* Phones: the top bar names the page and switches List | Calendar (made
+   by wireTlMobileBar); only one of the two shows. Hidden on desktop. */
+.tl-mobile-title, .tl-view-toggle { display: none; }
+@media (max-width: 800px) {
+    .app[data-page="conflicts"] .schedule-toolbar > .tl-mobile-title,
+    .app[data-page="requests"] .schedule-toolbar > .tl-mobile-title,
+    .app[data-page="changes"] .schedule-toolbar > .tl-mobile-title {
+        display: block !important;
+        flex: 1 1 auto;
+        min-width: 0;
+        margin: 0 12px;
+        font-family: var(--serif);
+        font-size: 22px;
+        font-weight: 500;
+        line-height: 1.1;
+        letter-spacing: -0.01em;
+        color: var(--ink);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .app[data-page="conflicts"] .schedule-toolbar > .tl-view-toggle,
+    .app[data-page="requests"] .schedule-toolbar > .tl-view-toggle,
+    .app[data-page="changes"] .schedule-toolbar > .tl-view-toggle {
+        display: flex !important;
+        flex: none;
+        margin: 0 0 0 auto;
+    }
+    .tl-view-toggle .req-tab { padding: 6px 11px; white-space: nowrap; }
+    /* The top bar says the page's name, so the big title goes. The header
+       (tabs) scrolls away under it — the global `header { position: sticky }`
+       otherwise slid it up under the top bar. */
+    .tl-page .tl-title { display: none; }
+    .tl-page .tl-header { position: static; }
+    .tl-page .tl-header:not(:has(> :not(.tl-title):not([hidden]))) { display: none; }
+    .app .page-shell.tl-page { padding-top: 14px; }
+    .tl-page .tl-content { padding-top: 0; }
+    /* One at a time: the list, or the month. */
+    .app:not([data-tl-view="cal"]) .tl-page .cf-cal { display: none; }
+    .app[data-tl-view="cal"] .tl-page .cf-side { display: none; }
 }
 
 @media (max-width: 800px) {

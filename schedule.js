@@ -3279,6 +3279,10 @@ function _tlSyncMobileBar() {
     document.addEventListener('click', e => {
         if (!_tlPhone.matches || app.dataset.tlView !== 'cal') return;
         if (!e.target.closest('.cf-month-host .day[data-date]')) return;
+        // The tap opened the day's panel (a pathologist on Requests): stay
+        // on the calendar underneath it.
+        const dayModal = document.getElementById('dayModalBack');
+        if (dayModal && dayModal.classList.contains('open')) return;
         const pg = document.getElementById(TL_PAGES[app.dataset.page] || '');
         const item = pg && pg.querySelector('.cf-list .cf-item.is-selected');
         if (!item) return;
@@ -5491,7 +5495,13 @@ window.__renderRequestsPage = renderRequestsPage;
     if (monthEl) {
         monthEl.addEventListener('click', e => {
             const day = e.target.closest('.day[data-date]');
-            if (day) _rqPickDay(parseDate(day.dataset.date));
+            if (!day) return;
+            const date = parseDate(day.dataset.date);
+            _rqPickDay(date);
+            // Pathologists file requests from the day, as on the main
+            // calendar: its panel offers PTO, call, service and lock. The
+            // director (who decides them) and Lake Forest just pick the day.
+            if (!isAdmin() && !isLakeForest() && canRequestScheduleChange()) openDayDetail(date);
         });
     }
 

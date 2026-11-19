@@ -2967,17 +2967,12 @@ async function unacceptConflict(key) {
     }
 }
 
-// Jump the calendar to a day and open it for editing.
-function goToDay(date) {
-    cursor = new Date(date);
-    if (typeof window.__setPage === 'function') window.__setPage('schedule');
-    renderMain();
-    openDayDetail(new Date(date));
-}
-
+// Open a conflict's day in the day editor right on the Conflicts page (no
+// trip to the schedule). Saving redraws the page, so a fixed conflict
+// leaves the list.
 function goToConflict(key) {
     const c = getConflicts().find(x => x.key === key);
-    if (c) goToDay(c.date);
+    if (c) openDayDetail(new Date(c.date));
 }
 
 // ────────────── Small helpers for the list pages ──────────────
@@ -3566,7 +3561,12 @@ window.__renderConflictsPage = renderConflictsPage;
     if (monthEl) {
         monthEl.addEventListener('click', e => {
             const day = e.target.closest('.day[data-date]');
-            if (day) _cfPickDay(parseDate(day.dataset.date));
+            if (!day) return;
+            const date = parseDate(day.dataset.date);
+            _cfPickDay(date);
+            // Fix it here: the day's editor opens over the page, as on the
+            // main calendar (the page is the director's alone).
+            openDayDetail(date);
         });
     }
 

@@ -1828,6 +1828,7 @@ auth.onAuthStateChanged(user => {
         stopDataListeners();
         if (typeof procOptionsSignedOut === 'function') procOptionsSignedOut();
         if (typeof outlookSignedOut === 'function') outlookSignedOut();
+        if (typeof cdSignedOut === 'function') cdSignedOut();
         userSeenSignedOut();
         hideLoading();
         if (typeof showLoginOverlay === 'function') showLoginOverlay();
@@ -2070,6 +2071,15 @@ function renderSidebar() {
 
     // Changes nav dot (depends on who is signed in)
     updateNavChangesIndicator();
+
+    // Case distribution — director only for now.
+    const casesNav = document.querySelector('.nav-item[data-page="cases"]');
+    if (casesNav) casesNav.style.display = admin ? '' : 'none';
+    const _casesApp = document.getElementById('app');
+    if (_casesApp && _casesApp.getAttribute('data-page') === 'cases') {
+        if (!admin && loggedInPathId !== null && typeof window.__setPage === 'function') window.__setPage('schedule');
+        else if (typeof renderCasesPage === 'function') renderCasesPage();
+    }
 
     // Conflicts nav dot + page (admin only)
     updateNavConflictsIndicator();
@@ -15182,7 +15192,7 @@ document.getElementById('exportDownload').addEventListener('click', () => {
 // Requests / Export / Recompute.
 
 (function initPageNavigation() {
-    const VALID_PAGES = ['schedule', 'conflicts', 'requests', 'changes', 'tracking', 'settings'];
+    const VALID_PAGES = ['schedule', 'conflicts', 'requests', 'changes', 'tracking', 'cases', 'settings'];
     let currentPage = 'schedule';
 
     const app = document.getElementById('app');
@@ -15194,6 +15204,8 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         if (isLakeForest() && page === 'tracking') page = 'schedule'; // LF guest: no tracking page
         // Kathleen / gross room / histology: no Requests page (once signed in).
         if (page === 'requests' && loggedInPathId !== null && !canSeeRequestsPage()) page = 'schedule';
+        // Case distribution is the director's alone (for now).
+        if (page === 'cases' && loggedInPathId !== null && !isAdmin()) page = 'schedule';
         if (!VALID_PAGES.includes(page)) page = 'schedule';
         currentPage = page;
 
@@ -15211,6 +15223,7 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         const cflPg = document.getElementById('conflictsPage');
         const chgPg = document.getElementById('changesPage');
         const trkPg = document.getElementById('trackingPage');
+        const casesPg = document.getElementById('casesPage');
         const settingsPg = document.getElementById('settingsPage');
 
         if (mainEl) mainEl.hidden = (page !== 'schedule');
@@ -15218,6 +15231,7 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         if (cflPg) cflPg.hidden = (page !== 'conflicts');
         if (chgPg) chgPg.hidden = (page !== 'changes');
         if (trkPg) trkPg.hidden = (page !== 'tracking');
+        if (casesPg) casesPg.hidden = (page !== 'cases');
         if (settingsPg) settingsPg.hidden = (page !== 'settings');
 
         // When switching to schedule, re-render the calendar to make sure the
@@ -15240,6 +15254,10 @@ document.getElementById('exportDownload').addEventListener('click', () => {
 
         if (page === 'changes' && typeof renderChangesPage === 'function') {
             try { renderChangesPage(); } catch (_) { /* ignore */ }
+        }
+
+        if (page === 'cases' && typeof renderCasesPage === 'function') {
+            try { renderCasesPage(); } catch (err) { console.error(err); }
         }
 
         // When switching to settings, re-apply settings so toggles reflect

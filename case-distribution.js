@@ -1336,76 +1336,80 @@ function cdListCard() {
 }
 
 // ── Case types ──
-// Grouped by how they route; each line opens to its settings.
-function cdTypeTag(t) {
-    const tiers = cdServiceTiers(t.services);
-    if (tiers) {
-        const s = SERVICE_BY_ID[[...tiers[0]][0]];
-        return s ? `<span class="ch-tag cd-svc-tag" style="--c:var(${s.cssVar});">${escapeHtml(s.short)}</span>` : '<span class="ch-tag ch-tag-svc">Service</span>';
-    }
-    const r = cdSetOf(t.readers);
-    if (r) return `<span class="ch-tag ch-tag-lf">${r.size} reader${r.size === 1 ? '' : 's'}</span>`;
-    return '<span class="ch-tag ch-tag-call">Shared</span>';
+// A table edited in place (the director's ask, Nov 2026): one row per type
+// with its columns aligned, in collapsible sections by how it routes, A–Z
+// by name unless a column heading says otherwise. The defaults and Add
+// case type sit in a strip above; explanations are hover tips.
+let cdTypeSort = { key: 'name', dir: 1 };
+
+const CD_TYPE_COLS = [
+    { key: 'name', label: 'Case type', sort: true, tip: 'Hover a name for where its minutes come from (RCPath G107 time bands)' },
+    { key: 'match', label: 'Recognized by', tip: 'Words in the specimen’s name, separated by ; — whole words; the longest match wins' },
+    { key: 'minutes', label: 'First', sort: true, num: true, tip: 'Minutes for the first unit (container, core, polyp)' },
+    { key: 'addMinutes', label: 'Each more', sort: true, num: true, tip: 'Minutes for each additional unit' },
+    { key: 'slides', label: 'Slides', sort: true, num: true, tip: 'Usual slides per unit: more slides take a little longer, fewer a little less (−25% to +50%). Blank: not adjusted' },
+    { key: 'services', label: 'Goes to', tip: 'Sent to whoever is on these services. Click a service once for first choice, again for backup (2nd), again to clear' },
+    { key: 'readers', label: 'Read by', tip: 'Only these pathologists read it (bone marrows)' },
+    { key: 'del', label: '' },
+];
+
+function cdTypeNum(t, key) {
+    if (key === 'addMinutes') return Number.isFinite(Number(t.addMinutes)) && t.addMinutes !== undefined ? Number(t.addMinutes) : (Number(t.minutes) || 0);
+    if (key === 'slides') return t.slides === undefined || t.slides === null || t.slides === '' ? null : Number(t.slides);
+    return Number(t.minutes) || 0;
 }
 
-function cdTypeText(t) {
-    const min = Number(t.minutes) || 0;
-    const add = Number.isFinite(Number(t.addMinutes)) && t.addMinutes !== undefined ? Number(t.addMinutes) : min;
-    const slides = t.slides === undefined || t.slides === null || t.slides === '' ? null : Number(t.slides);
-    return `<b>${escapeHtml(t.name || 'Untitled')}</b><span class="ch-dates"> · ${cdNum(min)} min${add !== min ? `, +${cdNum(add)} each more` : ''}`
-        + `${slides !== null ? ` · ${cdNum(slides)} slide${slides === 1 ? '' : 's'}` : ''}</span>`;
+function cdTypeOrder(a, b) {
+    const byName = String(a.name || '').localeCompare(String(b.name || ''));
+    if (cdTypeSort.key === 'name') return cdTypeSort.dir * byName;
+    const va = cdTypeNum(a, cdTypeSort.key), vb = cdTypeNum(b, cdTypeSort.key);
+    return cdTypeSort.dir * ((va ?? -1) - (vb ?? -1)) || byName;
 }
 
-function cdTypeDetail(t) {
-    const num = v => cdNum(Number(v) || 0);
-    const add = Number.isFinite(Number(t.addMinutes)) && t.addMinutes !== undefined ? Number(t.addMinutes) : (Number(t.minutes) || 0);
-    return `<div class="cd-form">
-        <label for="cdtn-${t.id}">Name</label>
-        <input type="text" class="cd-input" id="cdtn-${t.id}" data-cd-field="name" data-cd-type="${t.id}" value="${escapeHtml(t.name || '')}">
-        <label for="cdtm-${t.id}">Recognized by</label>
-        <input type="text" class="cd-input" id="cdtm-${t.id}" data-cd-field="match" data-cd-type="${t.id}" value="${escapeHtml(t.match || '')}" placeholder="words in the specimen name; separate with ;">
-        <label>Minutes</label>
-        <span><input type="number" class="cd-input cd-input-min" data-cd-field="minutes" data-cd-type="${t.id}" min="0" max="600" step="0.5" value="${num(t.minutes)}" aria-label="Minutes for the first"> for the first,
-          <input type="number" class="cd-input cd-input-min" data-cd-field="addMinutes" data-cd-type="${t.id}" min="0" max="600" step="0.5" value="${cdNum(add)}" aria-label="Minutes for each more"> each more</span>
-        <label>Usual slides</label>
-        <span><input type="number" class="cd-input cd-input-min" data-cd-field="slides" data-cd-type="${t.id}" min="0" max="500" step="0.5" placeholder="off" value="${t.slides === undefined || t.slides === null || t.slides === '' ? '' : num(t.slides)}" aria-label="Usual slides"> per unit <span class="cd-muted">(blank: not adjusted for slides)</span></span>
-        <label>Goes to</label><span>${cdChips('services', t.id, t.services)}</span>
-        <label>Read by</label><span>${cdChips('readers', t.id, t.readers)}</span>
-      </div>
-      <div class="cd-detail-actions">
-        ${t.basis ? `<span>${escapeHtml(t.basis)}</span>` : ''}
+function cdTypeRow(t) {
+    const slides = cdTypeNum(t, 'slides');
+    return `<div class="cd-trow" role="row">
+        <input type="text" class="cd-input cd-t-name" id="cdtn-${t.id}" data-cd-field="name" data-cd-type="${t.id}" value="${escapeHtml(t.name || '')}"
+            aria-label="Case type name" title="${escapeHtml((t.name || '') + (t.basis ? ' — ' + t.basis : ''))}">
+        <input type="text" class="cd-input cd-t-match" data-cd-field="match" data-cd-type="${t.id}" value="${escapeHtml(t.match || '')}"
+            placeholder="words in the specimen name; separate with ;" aria-label="Recognized by" title="${escapeHtml(t.match || '')}">
+        <input type="number" class="cd-input cd-t-num" data-cd-field="minutes" data-cd-type="${t.id}" min="0" max="600" step="0.5" value="${cdNum(cdTypeNum(t, 'minutes'))}" aria-label="Minutes for the first">
+        <input type="number" class="cd-input cd-t-num" data-cd-field="addMinutes" data-cd-type="${t.id}" min="0" max="600" step="0.5" value="${cdNum(cdTypeNum(t, 'addMinutes'))}" aria-label="Minutes for each more">
+        <input type="number" class="cd-input cd-t-num" data-cd-field="slides" data-cd-type="${t.id}" min="0" max="500" step="0.5" placeholder="off" value="${slides === null ? '' : cdNum(slides)}" aria-label="Usual slides">
+        <span class="cd-t-chips">${cdChips('services', t.id, t.services)}</span>
+        <span class="cd-t-chips">${cdChips('readers', t.id, t.readers)}</span>
         <button type="button" class="cd-btn cd-btn-sm cd-del" data-cd-del="${t.id}">Delete</button>
       </div>`;
 }
 
 function cdTypesViewHtml() {
-    const list = cdTypeList();
+    const list = cdTypeList().sort(cdTypeOrder);
     const routed = list.filter(t => cdServiceTiers(t.services));
     const readers = list.filter(t => !cdServiceTiers(t.services) && cdSetOf(t.readers));
     const shared = list.filter(t => !cdServiceTiers(t.services) && !cdSetOf(t.readers));
-    const lines = ts => ts.map(t => cdLineHtml('types', t.id, cdTypeTag(t), cdTypeText(t), null, () => cdTypeDetail(t), t.name));
+    const head = `<div class="cd-trow cd-thead" role="row">${CD_TYPE_COLS.map(c => {
+        if (!c.sort) return `<span class="cd-th${c.num ? ' num' : ''}"${c.tip ? ` title="${escapeHtml(c.tip)}"` : ''}>${c.label}</span>`;
+        const on = cdTypeSort.key === c.key;
+        return `<button type="button" class="cd-th cd-th-sort${c.num ? ' num' : ''}${on ? ' is-on' : ''}" data-cd-tsort="${c.key}" title="${escapeHtml(c.tip)}"
+            aria-sort="${on ? (cdTypeSort.dir > 0 ? 'ascending' : 'descending') : 'none'}">${c.label}<span class="cd-sort-arrow">${on ? (cdTypeSort.dir > 0 ? '▲' : '▼') : '↕'}</span></button>`;
+    }).join('')}</div>`;
     const secs = [
-        cdSecHtml('t-routed', 'Sent to a service', routed.length, lines(routed), 'None'),
-        cdSecHtml('t-readers', 'Only some pathologists read', readers.length, lines(readers), 'None'),
-        cdSecHtml('t-shared', 'Shared to even out the day', shared.length, lines(shared), 'None'),
+        cdSecHtml('t-routed', 'Sent to a service', routed.length, routed.map(cdTypeRow), 'None'),
+        cdSecHtml('t-readers', 'Only some pathologists read', readers.length, readers.map(cdTypeRow), 'None'),
+        cdSecHtml('t-shared', 'Shared to even out the day', shared.length, shared.map(cdTypeRow), 'None'),
     ].join('');
-    const panel = `<div class="cd-panel">
-        <section class="cd-card">
-          <h3 class="cd-card-h">Defaults</h3>
-          <div class="cd-form cd-form-narrow">
-            <label for="cdDefaultMin">No case type</label>
-            <span><input type="number" class="cd-input cd-input-min" id="cdDefaultMin" min="0" max="600" step="0.5" value="${cdNum(cdDefaultMinutes())}"> min, when the CPT code isn’t known either</span>
-            <label for="cdSlideEffect">Slides</label>
-            <span><input type="number" class="cd-input cd-input-min" id="cdSlideEffect" min="0" max="100" step="1" value="${cdSlideEffectPct(cdSlideEffect())}"> % more time for twice the usual slides</span>
-            <label for="cdFnaCbMin">FNA with a cell block</label>
-            <span><input type="number" class="cd-input cd-input-min" id="cdFnaCbMin" min="0" max="600" step="0.5" value="${cdNum(cdFnaCellBlockMinutes())}"> min more</span>
-          </div>
-          <div class="cd-card-actions"><button type="button" class="cd-btn primary" id="cdAddType">Add case type</button></div>
-        </section>
-        <section class="cd-card"><p class="cd-help-text">Each specimen in a case is matched to the case type whose words appear in its name (the longest match wins): its minutes for the first, plus each more for every additional unit. A specimen no type matches is estimated from its CPT code. Starting minutes are the midpoints of the Royal College of Pathologists’ sign-out time bands (G107, 2015). A case with more slides than usual takes a little longer, fewer a little less (−25% to +50%); stains don’t count.</p></section>
+    const strip = `<div class="cd-tstrip">
+        <label title="A specimen no case type recognizes is estimated from its CPT code; this is for one whose code isn’t known either">No case type
+          <input type="number" class="cd-input cd-t-num" id="cdDefaultMin" min="0" max="600" step="0.5" value="${cdNum(cdDefaultMinutes())}"> min</label>
+        <label title="How much longer a case with twice its usual slides takes (0 = ignore slides)">Twice the usual slides
+          <input type="number" class="cd-input cd-t-num" id="cdSlideEffect" min="0" max="100" step="1" value="${cdSlideEffectPct(cdSlideEffect())}"> % longer</label>
+        <label title="Moves an FNA with a cell block from the RCPath 11–20 min band to 21–30 min">FNA with a cell block
+          <input type="number" class="cd-input cd-t-num" id="cdFnaCbMin" min="0" max="600" step="0.5" value="${cdNum(cdFnaCellBlockMinutes())}"> min more</label>
+        <button type="button" class="cd-btn primary" id="cdAddType">Add case type</button>
       </div>`;
-    return `<div class="cf-body"><div class="cf-side"><div class="cf-list" aria-label="Case types">${secs}</div></div>
-        <section class="cf-cal" aria-label="Defaults">${panel}</section></div>`;
+    return `<div class="cf-body cd-full">
+        <div class="cf-side">${strip}<div class="cf-list cd-types" role="table" aria-label="Case types" style="--cd-readers:${pathologists.filter(p => typeof p.id === 'number').length}">${head}${secs}</div></div>
+      </div>`;
 }
 
 // ── Pathologists ──
@@ -1759,8 +1763,9 @@ function cdAddType(fromText, code) {
                 cdTab = 'types';
                 cdSel.types = ref.key;
                 renderCasesPage();
+                if (cdSecStore.closed['t-shared']) { cdSecStore.set('t-shared', false); renderCasesPage(); }
                 const el = document.getElementById('cdtn-' + ref.key);
-                if (el) { el.focus(); el.select(); }
+                if (el) { el.scrollIntoView({ block: 'center' }); el.focus(); el.select(); }
             }
         })
         .catch(err => showToast('Could not add the case type: ' + err.message, { type: 'error' }));
@@ -1874,6 +1879,11 @@ function cdAfterSettingsChange() {
             const head = root.querySelector(`[data-cd-sec="${id}"]`);
             const list = root.querySelector('.cf-list');
             if (head && list) list.scrollTop = head.closest('.cf-sec').offsetTop - list.offsetTop;
+        } else if (d.cdTsort) {
+            // Same column flips; a new one starts A–Z, or largest first for numbers.
+            const key = d.cdTsort;
+            cdTypeSort = cdTypeSort.key === key ? { key, dir: -cdTypeSort.dir } : { key, dir: key === 'name' ? 1 : -1 };
+            renderCasesPage();
         } else if (t.id === 'cdPasteBtn') cdOpenPaste();
         else if (t.id === 'cdExportAhk') cdExportAhk();
         else if (t.id === 'cdRecord') cdRecord();

@@ -9437,7 +9437,7 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
     display: grid;
     /* Fixed tracks, so every row (its own grid) lines up with the headings.
        --cd-readers: how many pathologists, set on the table. */
-    grid-template-columns: minmax(170px, 1.3fr) minmax(160px, 1.7fr) 64px 64px 64px 196px calc(var(--cd-readers, 4) * 36px) 64px;
+    grid-template-columns: minmax(170px, 1.3fr) minmax(160px, 1.7fr) 80px 80px 80px 196px calc(var(--cd-readers, 4) * 36px) 64px;
     align-items: center;
     gap: 10px;
     padding: 6px 14px;
@@ -9456,11 +9456,20 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
 .cd-trow > .cd-input { border-color: transparent; background: transparent; }
 .cd-trow:hover > .cd-input { border-color: var(--rule-soft); background: var(--paper); }
 .cd-trow > .cd-input:focus { border-color: var(--ink-3); background: #fff; }
-.cd-trow .cd-t-num::-webkit-inner-spin-button { opacity: 0; }
+/* No spinner arrows: they kept room at the right of every number (even
+   hidden), so the numbers never lined up with their headings. Arrow keys
+   still step the value. */
+.cd-trow > .cd-t-num { -moz-appearance: textfield; appearance: textfield; }
+.cd-trow > .cd-t-num::-webkit-inner-spin-button,
+.cd-trow > .cd-t-num::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+/* Headings over fields start where the fields' text does (the fields'
+   padding + border); number headings end where the numbers end, their sort
+   arrow on the left. */
+.cd-thead > :nth-child(-n+5) { box-sizing: border-box; width: 100%; padding-left: 9px; padding-right: 9px; }
+.cd-th-sort.num { flex-direction: row-reverse; justify-content: flex-start; }
 .cd-trow > .cd-del { opacity: 0; }
 .cd-trow:hover > .cd-del, .cd-trow > .cd-del:focus, .cd-trow > .cd-del.armed { opacity: 1; }
 @media (hover: none) { .cd-trow > .cd-del { opacity: 1; } }
-.cd-trow:hover .cd-t-num::-webkit-inner-spin-button { opacity: 1; }
 .cd-thead {
     position: sticky; top: 0; z-index: 2;
     padding-top: 8px; padding-bottom: 8px;
@@ -9471,7 +9480,6 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
 .cd-th { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--ink-2); text-align: left; cursor: default; white-space: nowrap; }
 .cd-th.num { text-align: right; }
 .cd-th-sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; font-family: inherit; cursor: pointer; }
-.cd-th-sort.num { justify-content: flex-end; }
 .cd-th-sort:hover, .cd-th-sort.is-on { color: var(--ink); }
 .cd-sort-arrow { font-size: 9px; color: var(--ink-4); }
 .cd-th-sort.is-on .cd-sort-arrow { color: var(--ink-2); }

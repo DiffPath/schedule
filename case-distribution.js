@@ -379,7 +379,6 @@ let cdCols = null;             // { id, type, extra } column indexes (-1 = none)
 let cdCases = [];              // built from cdTable; see cdBuildCases()
 let cdRecordedKey = null;      // ledger batch written for the current distribution
 let cdRecordedDirty = false;   // reassigned since it was recorded
-const cdExcluded = {};         // { dateKey: Set(pathId) } — left out for that day
 
 // ── Firebase ─────────────────────────────────────────────────────────────
 // Attached the first time the director opens the page, detached on sign-out.
@@ -642,7 +641,8 @@ function cdDailyShare(pid, date) {
 
 // ── Who is working ───────────────────────────────────────────────────────
 // Pathologists on a rotation service that day (PTO, off, off-site and
-// freetext assignments don't read cases), minus anyone left out by hand.
+// freetext assignments don't read cases). The schedule alone decides: to
+// change who reads, change the schedule (the director's call, Nov 2026).
 function cdScheduled(date) {
     if (!date || isWeekend(date) || getFederalHoliday(date)) return [];
     const day = getDayAssignments(date);
@@ -659,14 +659,8 @@ function cdScheduled(date) {
         });
 }
 
-function cdExcludedSet() {
-    const k = fmt(cdDate);
-    return cdExcluded[k] || (cdExcluded[k] = new Set());
-}
-
 function cdWorking() {
-    const ex = cdExcludedSet();
-    return cdScheduled(cdDate).filter(w => !ex.has(String(w.p.id)));
+    return cdScheduled(cdDate);
 }
 
 // Running surplus (+) or deficit (−) in minutes this fiscal year, from the
@@ -1306,19 +1300,17 @@ function cdWorkloadCard(t) {
 
 function cdWorkingCard() {
     const sched = cdScheduled(cdDate);
-    const ex = cdExcludedSet();
     const { bal } = cdBalances(cdDate, cdRecordedKey);
     return `<section class="cd-card">
-        <h3 class="cd-card-h">Working <span>${sched.length ? 'click to leave someone out' : ''}</span></h3>
+        <h3 class="cd-card-h">Working <span>from the schedule</span></h3>
         <div class="cd-working">${sched.length ? sched.map(w => {
-            const out = ex.has(String(w.p.id));
             const b = bal[w.p.id] || 0;
             const balTxt = Math.abs(b) < 1 ? 'even' : (b > 0 ? cdFmtMin(b) + ' ahead' : cdFmtMin(-b) + ' behind');
-            return `<button type="button" class="cd-person${out ? ' is-out' : ''}" data-cd-toggle="${w.p.id}" title="${out ? 'Left out today — click to include' : 'Click to leave out today'}">
+            return `<span class="cd-person">
                 <span class="cd-dot" style="--c:${w.p.color};"></span>
                 <span class="cd-person-name">${escapeHtml(cdShortName(w.p))}</span>${cdSvcPill(w.svc)}
-                <span class="cd-person-meta">${out ? 'left out' : (w.share < 1 ? 'share ' + w.share.toFixed(2) + ' · ' : '') + balTxt}</span>
-              </button>`;
+                <span class="cd-person-meta">${(w.share < 1 ? 'share ' + w.share.toFixed(2) + ' · ' : '') + balTxt}</span>
+              </span>`;
         }).join('') : '<span class="cd-muted">No one is on a service this day.</span>'}</div>
       </section>`;
 }
@@ -1456,25 +1448,36 @@ function cdPeopleViewHtml() {
 function renderCasesPage() {
     const root = document.getElementById('cdRoot');
     if (!root) return;
-    if (!isAdmin()) { root.innerHTML = ''; return; }
+    if (!isAdmin()) { cdSetRoot(root, ''); return; }
     cdEnsureListener();
     if (!cdDate) cdDate = cdDefaultDate();
-    if (!cdLoaded) { root.innerHTML = cdHeaderHtml() + '<div class="cd-empty">Loading…</div>'; return; }
+    if (!cdLoaded) { cdSetRoot(root, cdHeaderHtml() + '<div class="cd-empty">Loading…</div>'); return; }
 
     // Don't yank an input out from under the director mid-edit; the commit
     // that ends the edit re-renders.
     const active = document.activeElement;
     if (active && root.contains(active) && active.matches('input[type="text"], input[type="number"], textarea')) return;
 
+    const html = cdHeaderHtml() + (cdTab === 'types' ? cdTypesViewHtml() : cdTab === 'people' ? cdPeopleViewHtml() : cdDayHtml());
+    // The app redraws every page whenever schedule data arrives (often, on
+    // the live site). Nothing changed → leave the page alone: replacing it
+    // anyway swallowed clicks mid-press, flickered hovers and reset scrolls.
+    if (root._cdHtml === html) return;
     // Keep the list's and panel's scroll when redrawing the same tab.
     const keep = root.dataset.tab === cdTab;
     const list = root.querySelector('.cf-list'), side = root.querySelector('.cf-cal');
     const ls = keep && list ? list.scrollTop : 0, ss = keep && side ? side.scrollTop : 0;
     root.dataset.tab = cdTab;
-    root.innerHTML = cdHeaderHtml() + (cdTab === 'types' ? cdTypesViewHtml() : cdTab === 'people' ? cdPeopleViewHtml() : cdDayHtml());
+    cdSetRoot(root, html);
     const l2 = root.querySelector('.cf-list'), s2 = root.querySelector('.cf-cal');
     if (l2) l2.scrollTop = ls;
     if (s2) s2.scrollTop = ss;
+}
+
+function cdSetRoot(root, html) {
+    if (root._cdHtml === html) return;
+    root.innerHTML = html;
+    root._cdHtml = html;
 }
 
 // The paste panel (in the app's panel style): the list copied from Epic's
@@ -1871,15 +1874,6 @@ function cdAfterSettingsChange() {
             const head = root.querySelector(`[data-cd-sec="${id}"]`);
             const list = root.querySelector('.cf-list');
             if (head && list) list.scrollTop = head.closest('.cf-sec').offsetTop - list.offsetTop;
-        } else if (d.cdToggle) {
-            const ex = cdExcludedSet();
-            const id = d.cdToggle;
-            if (ex.has(id)) ex.delete(id); else ex.add(id);
-            // Their hand-set cases go back in the pool.
-            cdCases.forEach(c => { if (String(c.pinned) === id && ex.has(id)) delete c.pinned; });
-            if (cdRecordedKey) cdRecordedDirty = true;
-            if (cdTable) cdDistribute();
-            renderCasesPage();
         } else if (t.id === 'cdPasteBtn') cdOpenPaste();
         else if (t.id === 'cdExportAhk') cdExportAhk();
         else if (t.id === 'cdRecord') cdRecord();

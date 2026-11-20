@@ -9094,7 +9094,7 @@ span.ch-day { box-sizing: border-box; cursor: default; }
 .cd-btn-sm { padding: 4px 9px; font-size: 11px; }
 .cd-btn.cd-del:hover, .cd-btn.armed { color: #b94e2a; border-color: #b94e2a; background: rgba(185, 78, 42, 0.06); }
 
-/* Working pathologists: click to leave someone out for the day. */
+/* Working pathologists (from the schedule; not clickable). */
 .cd-working { display: flex; flex-wrap: wrap; gap: 8px; }
 .cd-person {
     display: inline-flex;
@@ -9107,12 +9107,7 @@ span.ch-day { box-sizing: border-box; cursor: default; }
     font-family: var(--sans);
     font-size: 13px;
     color: var(--ink);
-    cursor: pointer;
-    transition: border-color 0.15s ease, opacity 0.15s ease;
 }
-.cd-person:hover { border-color: var(--ink-3); }
-.cd-person.is-out { opacity: 0.55; background: transparent; border-style: dashed; }
-.cd-person.is-out .cd-person-name { text-decoration: line-through; }
 .cd-person-name { font-weight: 500; }
 .cd-person-meta { font-size: 11.5px; color: var(--ink-3); }
 .cd-dot {

@@ -5714,18 +5714,21 @@ body.sidebar-scroll-locked {
 .app[data-page="requests"] .schedule-toolbar,
 .app[data-page="changes"] .schedule-toolbar,
 .app[data-page="tracking"] .schedule-toolbar,
+.app[data-page="cases"] .schedule-toolbar,
 .app[data-page="settings"] .schedule-toolbar { display: none; }
 
 .app[data-page="conflicts"] .oc-callout-wrap,
 .app[data-page="requests"] .oc-callout-wrap,
 .app[data-page="changes"] .oc-callout-wrap,
 .app[data-page="tracking"] .oc-callout-wrap,
+.app[data-page="cases"] .oc-callout-wrap,
 .app[data-page="settings"] .oc-callout-wrap { display: none; }
 
 .app[data-page="conflicts"] > .content-area > main,
 .app[data-page="requests"] > .content-area > main,
 .app[data-page="changes"] > .content-area > main,
 .app[data-page="tracking"] > .content-area > main,
+.app[data-page="cases"] > .content-area > main,
 .app[data-page="settings"] > .content-area > main { display: none; }
 
 /* For any non-schedule page, the page-shell needs a tiny breathing room
@@ -5734,6 +5737,7 @@ body.sidebar-scroll-locked {
 .app[data-page="requests"] .page-shell,
 .app[data-page="changes"] .page-shell,
 .app[data-page="tracking"] .page-shell,
+.app[data-page="cases"] .page-shell,
 .app[data-page="settings"] .page-shell {
     padding-top: 30px;
 }
@@ -5747,6 +5751,7 @@ body.sidebar-scroll-locked {
 .app[data-page="requests"] .schedule-toolbar,
     .app[data-page="changes"] .schedule-toolbar,
     .app[data-page="tracking"] .schedule-toolbar,
+    .app[data-page="cases"] .schedule-toolbar,
     .app[data-page="settings"] .schedule-toolbar {
         display: flex;
         grid-template-columns: none;
@@ -5763,6 +5768,7 @@ body.sidebar-scroll-locked {
 .app[data-page="requests"] .schedule-toolbar > :not(.aside-toggle-btn),
     .app[data-page="changes"] .schedule-toolbar > :not(.aside-toggle-btn),
     .app[data-page="tracking"] .schedule-toolbar > :not(.aside-toggle-btn),
+    .app[data-page="cases"] .schedule-toolbar > :not(.aside-toggle-btn),
     .app[data-page="settings"] .schedule-toolbar > :not(.aside-toggle-btn) {
         display: none !important;
     }
@@ -6907,7 +6913,8 @@ table.tracking-summary tbody td.t-sum-empty {
 @media (min-width: 801px) {
     #requestsPage.page-shell,
     #changesPage.page-shell,
-    #trackingPage.page-shell {
+    #trackingPage.page-shell,
+    #casesPage.page-shell {
         padding-top: 0;
     }
 
@@ -8954,14 +8961,14 @@ span.ch-day { box-sizing: border-box; cursor: default; }
     /* The top bar says the page's name, so the big title goes. The header
        (tabs) scrolls away under it — the global `header { position: sticky }`
        otherwise slid it up under the top bar. */
-    .tl-page .tl-title { display: none; }
+    .tl-page:not(#casesPage) .tl-title { display: none; }   /* Cases keeps its own (no top-bar name) */
     .tl-page .tl-header { position: static; }
     .tl-page .tl-header:not(:has(> :not(.tl-title):not([hidden]))) { display: none; }
     .app .page-shell.tl-page { padding-top: 14px; }
     .tl-page .tl-content { padding-top: 0; }
     /* One at a time: the list, or the month. */
-    .app:not([data-tl-view="cal"]) .tl-page .cf-cal { display: none; }
-    .app[data-tl-view="cal"] .tl-page .cf-side { display: none; }
+    .app:not([data-tl-view="cal"]) .tl-page:not(#casesPage) .cf-cal { display: none; }
+    .app[data-tl-view="cal"] .tl-page:not(#casesPage) .cf-side { display: none; }
 }
 
 @media (max-width: 800px) {
@@ -9027,3 +9034,399 @@ span.ch-day { box-sizing: border-box; cursor: default; }
     text-transform: none;
     padding: 1px 6px;
 }
+
+/* ═══════════════ CASE DISTRIBUTION PAGE (director) ═══════════════
+   Header, section labels and tables reuse the Tracking page styles
+   (.tracking-page-header, .tracking-section-label, table.tracking-summary);
+   everything else is prefixed cd-. */
+.cases-page-content {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 12px 4px 60px;
+}
+@media (min-width: 801px) {
+    .cases-page-content { padding-top: 0; }
+}
+
+.cd-date {
+    padding: 7px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    font-family: var(--sans);
+    font-size: 12.5px;
+    background: var(--paper);
+    color: var(--ink);
+    min-width: 170px;
+}
+.cd-date:focus { outline: 1px solid var(--ink-2); border-color: var(--ink-2); }
+
+.cd-tabs { margin-bottom: 22px; }
+.cd-section { margin-bottom: 26px; }
+.cd-empty { padding: 14px 4px; font-size: 13px; color: var(--ink-3); }
+.cd-muted { color: var(--ink-3); font-size: 12px; }
+.cd-help {
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--ink-2);
+    margin: 0 0 16px;
+    max-width: 82ch;
+}
+.cd-help strong { font-weight: 600; color: var(--ink); }
+
+/* Buttons: same look as the panel bottom-bar buttons. */
+.cd-btn {
+    padding: 7px 12px;
+    border-radius: 5px;
+    font-family: var(--sans);
+    font-size: 11.5px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    border: 1px solid var(--rule);
+    background: var(--bg);
+    color: var(--ink-2);
+    transition: all 0.15s ease;
+}
+.cd-btn:hover { background: var(--paper); border-color: var(--ink-3); color: var(--ink); }
+.cd-btn.primary { font-weight: 600; color: var(--ink); border-color: var(--ink-3); }
+.cd-btn.is-done { color: #2f7a3e; border-color: rgba(47, 122, 62, 0.35); cursor: default; }
+.cd-btn.is-done:hover { background: var(--bg); }
+.cd-btn-sm { padding: 4px 9px; font-size: 11px; }
+.cd-btn.cd-del:hover, .cd-btn.armed { color: #b94e2a; border-color: #b94e2a; background: rgba(185, 78, 42, 0.06); }
+
+/* Working pathologists: click to leave someone out for the day. */
+.cd-working { display: flex; flex-wrap: wrap; gap: 8px; }
+.cd-person {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: 8px;
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--ink);
+    cursor: pointer;
+    transition: border-color 0.15s ease, opacity 0.15s ease;
+}
+.cd-person:hover { border-color: var(--ink-3); }
+.cd-person.is-out { opacity: 0.55; background: transparent; border-style: dashed; }
+.cd-person.is-out .cd-person-name { text-decoration: line-through; }
+.cd-person-name { font-weight: 500; }
+.cd-person-meta { font-size: 11.5px; color: var(--ink-3); }
+.cd-dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--c, var(--ink-3));
+    flex-shrink: 0;
+}
+.cd-svc {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--c);
+    background: color-mix(in srgb, var(--c) 10%, white);
+    white-space: nowrap;
+}
+
+/* Paste box + column pickers */
+.cd-paste {
+    width: 100%;
+    min-height: 92px;
+    max-height: 220px;
+    resize: vertical;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border: 1px dashed var(--rule);
+    border-radius: 8px;
+    background: var(--paper);
+    font-family: var(--mono);
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--ink-2);
+    white-space: pre;
+}
+.cd-paste:focus { outline: none; border-style: solid; border-color: var(--ink-3); }
+.cd-paste-meta:not(:empty) { margin-top: 12px; }
+.cd-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+}
+.cd-field-inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--sans);
+    font-size: 13px;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--ink-2);
+}
+
+/* Result header + tables */
+.cd-result-head, .cd-cases-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 12px;
+}
+.cd-result-head .tracking-section-label,
+.cd-cases-head .tracking-section-label { margin: 0; }
+.cd-cases-head { margin-top: 24px; }
+.cd-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.cd-batch-txt { margin-right: 4px; }
+
+table.tracking-summary .cd-left { text-align: left; }
+table.tracking-summary.cd-summary th, table.tracking-summary.cd-summary td,
+table.tracking-summary.cd-cases th, table.tracking-summary.cd-cases td,
+table.tracking-summary.cd-types th, table.tracking-summary.cd-types td,
+table.tracking-summary.cd-people th, table.tracking-summary.cd-people td { padding-left: 10px; padding-right: 10px; }
+.cd-sum-row { cursor: pointer; }
+.cd-sum-row:hover td { background: var(--paper-2); }
+.cd-sum-row.is-filter td { background: var(--accent-soft); }
+.cd-over { color: #b94e2a; }
+.cd-under { color: #2563b0; }
+.cd-warn { color: #a16207; }
+.cd-mono { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+
+.cd-bar-wrap { display: flex; align-items: center; gap: 10px; min-width: 200px; }
+.cd-bar {
+    position: relative;
+    flex: 1 1 auto;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--bg-2);
+    min-width: 90px;
+}
+.cd-bar-fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    border-radius: 4px;
+    background: var(--c, var(--ink-3));
+}
+.cd-bar-target {
+    position: absolute; top: -3px; bottom: -3px;
+    width: 2px; margin-left: -1px;
+    background: var(--ink);
+    border-radius: 1px;
+}
+.cd-bar-num { min-width: 78px; text-align: right; color: var(--ink); }
+
+table.tracking-summary.cd-cases td { white-space: normal; vertical-align: top; }
+.cd-type-cell { min-width: 220px; }
+.cd-detail { display: block; font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+table.tracking-summary.cd-cases td.cd-num { white-space: nowrap; }
+table.tracking-summary.cd-cases th.cd-sort-th { padding: 0; }
+.cd-sort {
+    all: unset;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+    padding: 9px 6px;
+    justify-content: center;
+    cursor: pointer;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    color: inherit;
+}
+th.cd-left .cd-sort { justify-content: flex-start; }
+.cd-sort:hover, .cd-sort.is-on { color: var(--ink); }
+.cd-sort:focus-visible { outline: 2px solid var(--ink-3); outline-offset: -2px; }
+.cd-sort-arrow { font-size: 8px; opacity: 0.45; }
+.cd-sort.is-on .cd-sort-arrow { opacity: 1; }
+.cd-assign {
+    padding: 4px 6px;
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    background: var(--paper);
+    font-family: var(--sans);
+    font-size: 12.5px;
+    color: var(--ink);
+}
+.cd-pin {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border: none;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    font-family: var(--sans);
+    font-size: 11px;
+    color: var(--accent);
+    cursor: pointer;
+}
+.cd-note { font-size: 11.5px; color: #a16207; margin-top: 3px; }
+
+/* Unrecognized case types */
+.cd-unrec {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border: 1px solid rgba(161, 98, 7, 0.3);
+    border-radius: 8px;
+    background: rgba(161, 98, 7, 0.05);
+}
+.cd-unrec-head { font-size: 13px; font-weight: 500; color: #a16207; margin-bottom: 8px; }
+.cd-unrec-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0;
+    font-size: 12.5px;
+    color: var(--ink);
+}
+.cd-unrec-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
+/* Case types / pathologists editing */
+.cd-default { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.cd-default-fields { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 24px; }
+.cd-input {
+    padding: 5px 8px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 5px;
+    background: var(--paper);
+    font-family: var(--sans);
+    font-size: 12.5px;
+    color: var(--ink);
+    box-sizing: border-box;
+}
+.cd-input:hover { border-color: var(--rule); }
+.cd-input:focus { outline: none; border-color: var(--ink-3); background: #fff; }
+.cd-input-name { width: 190px; }
+.cd-input-match { width: 260px; }
+.cd-input-min { width: 64px; text-align: right; }
+.cd-input-fte { width: 72px; text-align: right; }
+.cd-input-epic { width: 190px; }
+table.tracking-summary.cd-types td { vertical-align: middle; }
+.cd-chips { display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; }
+.cd-chip {
+    padding: 3px 7px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 4px;
+    background: transparent;
+    font-family: var(--sans);
+    font-size: 11px;
+    color: var(--ink-3);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.cd-chip:hover { border-color: var(--c); color: var(--c); }
+.cd-chip.on {
+    border-color: var(--c);
+    background: color-mix(in srgb, var(--c) 12%, white);
+    color: var(--c);
+    font-weight: 600;
+}
+.cd-chip.backup {
+    border-style: dashed;
+    border-color: var(--c);
+    color: var(--c);
+}
+.cd-chip sup { font-size: 8.5px; margin-left: 2px; vertical-align: super; line-height: 0; }
+.cd-chip-any { font-size: 11px; color: var(--ink-4); margin-left: 4px; }
+.cd-basis {
+    display: block;
+    max-width: 190px;
+    margin-top: 3px;
+    font-size: 10.5px;
+    line-height: 1.35;
+    color: var(--ink-3);
+    white-space: normal;
+}
+.cd-help em { font-style: normal; font-weight: 600; }
+
+@media (max-width: 720px) {
+    .cd-date { width: 100%; min-width: 0; }
+    .cd-bar-wrap { min-width: 150px; }
+    .cd-person { width: 100%; flex-wrap: wrap; }
+}
+
+/* ════ CASES PAGE — laid out like Requests (option A, Nov 2026) ════
+   Header: the day, the case list's actions, the tabs. Day: cases by
+   pathologist on the left (ledger lines), the day's workload on the right.
+   Case types and Pathologists: the same list + panel. Drawn by
+   case-distribution.js. */
+#casesPage { --tl-sel: var(--accent); }
+/* The list is the main thing here: it gets the wide side. */
+@media (min-width: 1024px) {
+    #casesPage .cf-body { grid-template-columns: minmax(0, 1fr) clamp(380px, 36%, 580px); }
+}
+#casesPage .cf-cal { padding: 0; }
+
+.cd-head-right { display: flex; align-items: center; gap: 14px; margin-left: auto; min-width: 0; }
+.cd-head-right .requests-page-bar { margin: 0; }
+.tl-header .cd-list-group .req-new-btn::before { content: none; }
+.tl-header .cd-list-group .req-new-btn:disabled { opacity: 0.45; cursor: default; background: transparent; box-shadow: none; }
+.cd-day-nav { display: flex; align-items: center; gap: 4px; }
+.cd-day-nav .current-period { font-size: 18px; min-width: 0; padding: 2px 10px; white-space: nowrap; cursor: pointer; }
+.cd-day-nav .current-period:hover { background: var(--paper); }
+
+/* Right-hand cards */
+.cd-panel { display: flex; flex-direction: column; gap: 14px; }
+.cd-card { background: #fff; border: 1px solid var(--rule-soft); border-radius: 10px; padding: 12px 16px 14px; }
+.cd-card-h { margin: 0 0 10px; display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font: 600 13px var(--sans); color: var(--ink); }
+.cd-card-h span { font-weight: 400; font-size: 12px; color: var(--ink-2); }
+.cd-load { display: grid; grid-template-columns: auto minmax(60px, 1fr) auto auto; align-items: center; gap: 8px 12px; font-size: 12.5px; }
+.cd-load .cd-bar { width: 100%; }
+.cd-load-who { padding: 0; border: 0; background: none; cursor: pointer; font: inherit; }
+.cd-load-who:hover .ch-tag { filter: brightness(0.96); }
+.cd-load-num { text-align: right; color: var(--ink); white-space: nowrap; }
+.cd-diff { text-align: right; color: var(--ink-2); white-space: nowrap; font-size: 12px; }
+.cd-diff.over { color: #9b3b22; }
+.cd-diff.under { color: #1f5e8c; }
+.cd-working { display: flex; flex-wrap: wrap; gap: 8px; }
+.cd-facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 12.5px; color: var(--ink-2); }
+.cd-facts b { color: var(--ink); font-weight: 500; overflow-wrap: anywhere; }
+.cd-card-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.cd-help-text { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink-2); }
+
+/* Sections that carry a pathologist */
+.cd-sec-path { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cd-sec-meta { margin-left: auto; display: flex; align-items: center; gap: 10px; font-weight: 400; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+
+/* Case lines: the case number is the tag; its place in Epic's list leads the text. */
+.ch-tag.cd-acc-tag { font-family: var(--mono); font-size: 11px; }
+.cd-seq { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-right: 8px; }
+.ch-tag.cd-svc-tag {
+    background: color-mix(in srgb, var(--c) 20%, #fff);
+    color: color-mix(in srgb, var(--c) 72%, #000);
+}
+.ch-table.cd-parts td, .ch-table.cd-parts th { white-space: normal; }
+.cd-detail-note { margin: 8px 0 0; font-size: 12.5px; color: var(--ink-2); }
+.cd-detail-note b { color: var(--ink); font-weight: 600; }
+.cd-detail-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-top: 10px; font-size: 12.5px; color: var(--ink-2); }
+.cd-detail-who { display: inline-flex; align-items: center; gap: 6px; }
+.cd-detail-actions select { font: inherit; font-size: 12.5px; padding: 4px 8px; border: 1px solid var(--rule-soft); border-radius: 5px; background: var(--paper); color: var(--ink); }
+.cd-flag { color: #8a5a00; }
+
+/* Settings forms under an open line */
+.cd-form { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 8px 14px; align-items: center; font-size: 12.5px; color: var(--ink); padding: 2px 0; }
+.cd-form > label { color: var(--ink-2); }
+.cd-form > input.cd-input { width: 100%; }
+.cd-form .cd-chips { flex-wrap: wrap; }
+.cd-form-narrow { grid-template-columns: 120px minmax(0, 1fr); }
+
+/* The paste panel */
+#cdPasteBack .modal-stable { height: min(620px, 90vh); width: min(760px, 94vw); max-width: none; }
+#cdPasteBack .modal-scroll { display: flex; }
+#cdPasteBack .cd-paste { flex: 1 1 auto; min-height: 240px; resize: none; }
+
+@media (max-width: 800px) {
+    .cd-head-right { width: 100%; flex-wrap: wrap; margin-left: 0; }
+    .cd-sec-meta { display: none; }
+    .cd-form { grid-template-columns: 1fr; gap: 4px; }
+}
+.cd-unk-cases { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.cd-unk-case { display: inline-flex; align-items: center; gap: 6px; }
+.cd-unk-case .cd-seq { margin: 0; }

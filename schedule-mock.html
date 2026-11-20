@@ -100,6 +100,17 @@
                     </svg>
                     <span>Tracking</span>
                 </button>
+                <!-- Case distribution — director only for now; shown by renderSidebar(). -->
+                <button class="nav-item" data-page="cases" style="display:none;">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="2.5" width="5" height="4" rx="0.8"/>
+                        <path d="M7 4.5h2.5a1 1 0 0 1 1 1V11"/>
+                        <path d="M4.5 6.5V11"/>
+                        <rect x="2" y="11" width="5" height="2.5" rx="0.8"/>
+                        <rect x="9" y="11" width="5" height="2.5" rx="0.8"/>
+                    </svg>
+                    <span>Cases</span>
+                </button>
             </nav>
 
             <div class="aside-spacer"></div>
@@ -560,6 +571,14 @@
 
                     </div>
                 </div>
+            </div>
+
+            <!-- Case distribution page — director only. Laid out like Requests:
+                 the day's cases on the left, by pathologist, in collapsible
+                 sections; the day's workload on the right. case-distribution.js
+                 draws all of it, header included. -->
+            <div class="page-shell tl-page" id="casesPage" hidden>
+                <div class="tl-content" id="cdRoot"></div>
             </div>
 
             <!-- Settings page (full main-area version of what used to be a small drawer) -->
@@ -1442,6 +1461,7 @@
     <script src="procedure-options.js"></script>
     <script src="outlook-meetings.js"></script>
     <script src="undo.js"></script>
+    <script src="case-distribution.js"></script>
 
 </body>
 </html>

@@ -3,3 +3,6 @@
 
 # Cloud Functions dependencies
 functions/node_modules/
+
+# AutoHotkey run log (case numbers from real runs)
+tools/autohotkey/*.log

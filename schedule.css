@@ -9425,3 +9425,67 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
 .cd-unk-cases { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .cd-unk-case { display: inline-flex; align-items: center; gap: 6px; }
 .cd-unk-case .cd-seq { margin: 0; }
+
+/* Cases → Case types: one aligned, editable row per type, full width. */
+@media (min-width: 1024px) {
+    #casesPage .cf-body.cd-full { grid-template-columns: minmax(0, 1fr); }
+}
+.cd-tstrip { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 22px; padding: 2px 2px 10px; font-size: 12.5px; color: var(--ink-2); }
+.cd-tstrip label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cd-tstrip .cd-btn { margin-left: auto; }
+.cd-trow {
+    display: grid;
+    /* Fixed tracks, so every row (its own grid) lines up with the headings.
+       --cd-readers: how many pathologists, set on the table. */
+    grid-template-columns: minmax(170px, 1.3fr) minmax(160px, 1.7fr) 64px 64px 64px 196px calc(var(--cd-readers, 4) * 36px) 64px;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px;
+    border-bottom: 1px solid var(--rule-soft-2);
+    background: #fff;
+}
+.cd-trow { padding-top: 4px; padding-bottom: 4px; }
+.cd-trow:hover { background: var(--paper-2); }
+.cd-trow > .cd-input { width: 100%; min-width: 0; }
+.cd-t-name { font-weight: 500; }
+.cd-t-num { width: 62px; text-align: right; }
+.cd-trow .cd-t-num { width: 100%; }
+.cd-t-chips .cd-chips { flex-wrap: nowrap; }
+.cd-t-chips .cd-chip-any { display: none; }   /* empty = any; the headings say so */
+/* Quiet fields: outlined only on the row under the mouse or while editing. */
+.cd-trow > .cd-input { border-color: transparent; background: transparent; }
+.cd-trow:hover > .cd-input { border-color: var(--rule-soft); background: var(--paper); }
+.cd-trow > .cd-input:focus { border-color: var(--ink-3); background: #fff; }
+.cd-trow .cd-t-num::-webkit-inner-spin-button { opacity: 0; }
+.cd-trow > .cd-del { opacity: 0; }
+.cd-trow:hover > .cd-del, .cd-trow > .cd-del:focus, .cd-trow > .cd-del.armed { opacity: 1; }
+@media (hover: none) { .cd-trow > .cd-del { opacity: 1; } }
+.cd-trow:hover .cd-t-num::-webkit-inner-spin-button { opacity: 1; }
+.cd-thead {
+    position: sticky; top: 0; z-index: 2;
+    padding-top: 8px; padding-bottom: 8px;
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule-soft);
+}
+.cd-thead:hover { background: var(--paper); }
+.cd-th { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--ink-2); text-align: left; cursor: default; white-space: nowrap; }
+.cd-th.num { text-align: right; }
+.cd-th-sort { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: none; font-family: inherit; cursor: pointer; }
+.cd-th-sort.num { justify-content: flex-end; }
+.cd-th-sort:hover, .cd-th-sort.is-on { color: var(--ink); }
+.cd-sort-arrow { font-size: 9px; color: var(--ink-4); }
+.cd-th-sort.is-on .cd-sort-arrow { color: var(--ink-2); }
+/* Under the sticky column headings, the section heads scroll away. */
+.cd-types .cf-sec-head { position: static; }
+@media (max-width: 1100px) {
+    /* Narrow: name, then its words, then First / Each more / Slides under
+       their headings, then the services and readers. */
+    .cd-trow { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 4px; grid-auto-flow: row dense; }
+    .cd-trow > .cd-t-name, .cd-trow > .cd-t-match { grid-column: 1 / -1; }
+    .cd-trow > .cd-t-chips:nth-of-type(1) { grid-column: 1 / span 2; }
+    .cd-trow > .cd-t-chips:nth-of-type(2) { grid-column: 1 / -1; }
+    .cd-trow > .cd-del { justify-self: end; }
+    .cd-thead > :nth-child(1), .cd-thead > :nth-child(2), .cd-thead > :nth-child(n+6) { display: none; }
+    .cd-trow > .cd-input { border-color: var(--rule-soft); background: var(--paper); }
+}
+

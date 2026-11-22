@@ -13983,14 +13983,20 @@ async function saveServiceFromModal(choice) {
             });
         }
 
+        // "Save & recompute" always recomputes (the director's call, Nov
+        // 2026) — even with nothing changed or only locks flipped — from
+        // this day, or from today for a day already past.
+        const wantsRecompute = !!(choice && choice.recompute);
+        const recomputeFrom = d => (d.getTime() < today.getTime() ? today : d);
+
         const touched = rows.filter(r => r.sidChanged || r.lockChanged);
         if (touched.length === 0) {
             _closeServiceEditors();
-            if (ptoLines.length) {
+            if (ptoLines.length || wantsRecompute) {
                 setPendingRecomputeChoice(choice);
                 await maybeOfferRecompute({}, {
-                    fromDate: activeSvcDate,
-                    dayBeforeFix: true,
+                    fromDate: wantsRecompute ? recomputeFrom(activeSvcDate) : activeSvcDate,
+                    dayBeforeFix: !!ptoLines.length,
                     message: 'PTO updated. Recompute the future schedule for everyone using the rotation rules?',
                 });
             }
@@ -14057,6 +14063,7 @@ async function saveServiceFromModal(choice) {
             }
             recomputePins[activeSvcDayKey] = pins;
             if (anySidChanged) recomputeFromDate = activeSvcDate;
+            if (wantsRecompute) recomputeFromDate = recomputeFrom(activeSvcDate);
         } else {
             // Full call week: merge into every workday in the cycle.
             const days = workdaysInCallCycle(activeSvcDate);
@@ -14076,6 +14083,7 @@ async function saveServiceFromModal(choice) {
                 await db.ref().update(writes);
             }
             if (anySidChanged && days.length > 0) recomputeFromDate = days[0];
+            if (wantsRecompute && days.length > 0) recomputeFromDate = recomputeFrom(days[0]);
         }
 
         // ── Change log ── one line per touched row, including pure lock flips.

@@ -2936,8 +2936,17 @@ main {
     justify-content: flex-start;
 }
 .day-modal-actions .day-edit-spacer { flex: 1; }
-/* Horizon picker in any bottom bar: natural width (outranks .modal select). */
-.modal .modal-actions .rc-horizon select { width: auto; }
+/* Horizon picker in any bottom bar: natural width (outranks .modal select),
+   and exactly as tall as the buttons beside it. */
+.modal .modal-actions .rc-horizon { align-self: stretch; margin-top: 0; margin-bottom: 0; }   /* not `.modal label`'s top margin */
+.modal .modal-actions .rc-horizon select {
+    width: auto;
+    height: 100%;
+    box-sizing: border-box;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-radius: 5px;
+}
 .day-modal-actions button,
 .day-modal-actions button:not(.danger):hover {
     padding: 8px 12px;

@@ -936,14 +936,19 @@ function cdScheduled(date) {
         });
 }
 
-// Locums working the day (locums.js): a full-timer's share of the shared
-// cases, no service (so never first pick of a service's cases), and no
-// carry-over between days (director, Nov 2026).
+// Locums working the day (locums.js): on their service like anyone else
+// (usually Bigs, so they get the Bigs cases first — up to an even day),
+// a full-timer's share, and no carry-over between days (director, Nov
+// 2026). A locum with no service that day just shares the shared cases.
 const CD_LOCUM_SVC = { id: 'locum', short: 'Locum', name: 'Locum', cssVar: '--svc-locum' };
 function cdLocumWorkers(date) {
     if (!date || typeof locumsOnDay !== 'function') return [];
-    return locumsOnDay(date).map(l => cdPath('l:' + l.lid)).filter(Boolean)
-        .map(p => ({ p, svc: CD_LOCUM_SVC, svcIds: ['locum'], share: 1, locum: true }));
+    return locumsOnDay(date).map(l => {
+        const p = cdPath('l:' + l.lid);
+        if (!p) return null;
+        const svc = l.svc && SERVICE_BY_ID[l.svc] ? SERVICE_BY_ID[l.svc] : CD_LOCUM_SVC;
+        return { p, svc, svcIds: [svc.id], share: 1, locum: true };
+    }).filter(Boolean);
 }
 
 function cdWorking() {

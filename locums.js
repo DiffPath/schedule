@@ -7,28 +7,42 @@
 // showToast, MONTHS_SHORT, DOW, renderAll, openDayDetail) and before
 // case-distribution.js, which reads who is working.
 //
-// A locum covers for a stretch of days (director, Nov 2026): cases are sent
-// to them, and nothing else — no call, consults, conferences or tumor
-// boards, no service in the rotation, no PTO. So they live apart from
-// the pathologists list: their own roster and their own date ranges ("stints"),
-// added from the day editor. On their working days they show as a "Locum"
-// row on the schedule, and the Assign page gives them a full-timer's share
-// of the shared cases (never first pick of a service's cases), evened
-// within each day only (cdLocumWorkers).
+// A locum covers for a stretch of days (director, Nov 2026). They work a
+// service like everyone else — usually McHenry Bigs, and Cyto/Gross on
+// Fridays (Friday Bigs carries breast conference) — but never call,
+// consults, conferences or tumor boards, and no PTO. So they live apart
+// from the pathologists list: their own roster and date ranges ("stints"),
+// added from the day editor. On a locum's days the regulars cover the other
+// services (regularServiceSet in schedule.js; recompute plans around them),
+// the schedule shows the locum's row with their service, and the Assign
+// page routes cases to them by that service (cdLocumWorkers), evened within
+// each day only.
 //
 // Firebase:
-//   scheduler/locums/roster/<lid>   { name, epic? }      epic: what the AutoHotkey
-//                                                        script types in Epic (blank = last name)
-//   scheduler/locums/stints/<sid>   { lid, start, end }  YYYY-MM-DD, inclusive;
-//                                                        weekends and holidays inside don't count
+//   scheduler/locums/roster/<lid>        { name, epic? }    epic: what the AutoHotkey
+//                                                           script types in Epic (blank = last name)
+//   scheduler/locums/stints/<sid>        { lid, start, end, svc?, friSvc? }
+//                                        YYYY-MM-DD, inclusive; weekends and holidays inside
+//                                        don't count. svc: usual service (default bigs);
+//                                        friSvc: Fridays (default cyto); 'none' = cases only
+//   scheduler/locums/days/<YYYY-MM-DD>/<lid>   service id or 'none' — one day changed
 
 let locumRoster = {};
 let locumStints = {};
+let locumDays = {};
+
+// A locum's usual service and Friday service when a stretch doesn't say.
+const LOCUM_DEFAULT_SVC = 'bigs';
+const LOCUM_DEFAULT_FRI_SVC = 'cyto';
+const LOCUM_NO_SVC = 'none';
 
 regListener('scheduler/locums', snap => {
     const v = snap.exists() ? snap.val() : {};
     locumRoster = v.roster || {};
     locumStints = v.stints || {};
+    locumDays = v.days || {};
+    // The regulars' services depend on the locums' (schedule.js caches days).
+    if (typeof clearDayCache === 'function') clearDayCache();
     if (typeof cdDelnorChanged === 'function') cdDelnorChanged();   // re-splits when the day's people change
     if (typeof renderAll === 'function' && pathologistsReady && vacationsReady) renderAll();
     const back = document.getElementById('locumBack');
@@ -62,27 +76,90 @@ function locumsOnDay(date) {
         if (!s || !s.lid || !locumRoster[s.lid] || seen.has(s.lid)) return;
         if (dk < s.start || dk > s.end) return;
         seen.add(s.lid);
-        out.push({ lid: s.lid, name: locumRoster[s.lid].name || '', epic: locumRoster[s.lid].epic || '', sid, start: s.start, end: s.end });
+        out.push({ lid: s.lid, name: locumRoster[s.lid].name || '', epic: locumRoster[s.lid].epic || '', sid, start: s.start, end: s.end,
+            svc: _locumServiceId(s, s.lid, date) });
     });
     return out.sort((a, b) => locumLastName(a.name).localeCompare(locumLastName(b.name)));
 }
 
+// A locum's service on a day: the day's change if any (unless usualOnly),
+// else the stretch's Friday or usual service. 'none' = cases only.
+function _locumServiceId(stint, lid, date, usualOnly) {
+    const day = usualOnly ? null : locumDays[fmt(date)];
+    const set = day && day[lid];
+    const ok = id => id === LOCUM_NO_SVC || SERVICES.some(x => x.id === id);
+    if (set && ok(set)) return set;
+    const fri = date.getDay() === 5;
+    const id = fri ? (stint.friSvc || LOCUM_DEFAULT_FRI_SVC) : (stint.svc || LOCUM_DEFAULT_SVC);
+    return ok(id) ? id : LOCUM_NO_SVC;
+}
+
+// The services the day's locums hold, e.g. ['bigs'] — what the regulars
+// don't cover that day.
+function locumServicesOn(date) {
+    return locumsOnDay(date).map(l => l.svc).filter(id => id && id !== LOCUM_NO_SVC);
+}
+
 // The schedule's "Locum" rows for a day (week, day and month views).
 function locumRowsHtml(date) {
-    return locumsOnDay(date).map(l => `<div class="wd-row locum-row" title="${escapeHtml(l.name)} — locum (cases only)">
+    return locumsOnDay(date).map(l => {
+        const svc = l.svc !== LOCUM_NO_SVC ? SERVICE_BY_ID[l.svc] : null;
+        return `<div class="wd-row locum-row" title="${escapeHtml(l.name)} — locum${svc ? ', ' + escapeHtml(svc.name) : ', cases only'}"${svc ? ` style="--sc:var(${svc.cssVar})"` : ''}>
             <span class="pid">${escapeHtml(locumInitials(l.name))}</span>
-            <span class="svc">Locum</span>
-          </div>`).join('');
+            <span class="svc">${svc ? `<span class="swatch"></span>${escapeHtml(svc.short)}` : 'Locum'}</span>
+            <span class="locum-mark">Locum</span>
+          </div>`;
+    }).join('');
+}
+
+// The services a locum can be given, for the pickers.
+function _locumSvcOptions(selected, withDefault) {
+    return (withDefault ? `<option value="">${escapeHtml(withDefault)}</option>` : '')
+        + SERVICES.map(s => `<option value="${s.id}"${s.id === selected ? ' selected' : ''}>${escapeHtml(s.name)}</option>`).join('')
+        + `<option value="${LOCUM_NO_SVC}"${selected === LOCUM_NO_SVC ? ' selected' : ''}>No service (cases only)</option>`;
 }
 
 // The day editor's rows for the day's locums.
 function locumDetailRowsHtml(date) {
-    return locumsOnDay(date).map(l => `<div class="day-detail-row locum-detail-row" title="Cases only — no call, consults or conferences">
+    const edit = isAdmin() && !isWeekend(date) && !getFederalHoliday(date);
+    return locumsOnDay(date).map(l => {
+        const svc = l.svc !== LOCUM_NO_SVC ? SERVICE_BY_ID[l.svc] : null;
+        const changed = !!(locumDays[fmt(date)] && locumDays[fmt(date)][l.lid]);
+        return `<div class="day-detail-row locum-detail-row" title="Locum — no call, consults or conferences">
           <div class="ddot" style="background:var(--locum)"></div>
-          <div class="dname">${escapeHtml(l.name)}</div>
-          <div class="dservice">Locum · ${escapeHtml(_locumRange(l.start, l.end))}</div>
-        </div>`).join('');
+          <div class="dname">${escapeHtml(l.name)} <span class="locum-mark">Locum</span></div>
+          ${edit ? `<select class="locum-day-svc" data-locum-day="${escapeHtml(l.lid)}" aria-label="${escapeHtml(l.name)}'s service">${_locumSvcOptions(changed ? l.svc : '', 'Usual (' + _locumUsualLabel(locumStints[l.sid], date) + ')')}</select>`
+            : `<div class="dservice">${svc ? `<span class="swatch" style="background:var(${svc.cssVar})"></span>${escapeHtml(svc.name)}` : 'Cases only'} · ${escapeHtml(_locumRange(l.start, l.end))}</div>`}
+        </div>`;
+    }).join('');
 }
+
+// "M Bigs", the stretch's own service for that weekday.
+function _locumUsualLabel(stint, date) {
+    const id = _locumServiceId(stint || {}, '', date, true);
+    return id === LOCUM_NO_SVC ? 'cases only' : SERVICE_BY_ID[id].short;
+}
+
+// The director changes a locum's service for one day (blank = back to the
+// usual). The regulars' services follow, so a re-plan is offered.
+function _locumSetDayService(lid, date, value) {
+    const dk = fmt(date);
+    db.ref(`scheduler/locums/days/${dk}/${lid}`).set(value || null)
+        .then(() => {
+            if (typeof openDayDetail === 'function') openDayDetail(date);
+            if (typeof maybeOfferRecompute === 'function') {
+                const who = locumRoster[lid] ? locumRoster[lid].name : 'The locum';
+                const what = !value ? 'back on their usual service' : value === LOCUM_NO_SVC ? 'on no service' : 'on ' + SERVICE_BY_ID[value].name;
+                maybeOfferRecompute({}, { fromDate: date, message: `${who} is ${what} that day. The others' services were planned around the old one — re-plan them from that day using the rotation rules? (Without it, two people may share a station.)` });
+            }
+        })
+        .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
+}
+
+document.addEventListener('change', e => {
+    const sel = e.target.closest && e.target.closest('.locum-day-svc');
+    if (sel && isAdmin() && activeDayDate) _locumSetDayService(sel.dataset.locumDay, activeDayDate, sel.value);
+});
 
 // "Dec 1–12", "Nov 30 – Dec 4", "Dec 3".
 function _locumRange(start, end) {
@@ -121,6 +198,7 @@ function openLocumPanel(date, keepForm) {
         who: (document.getElementById('locumWho') || {}).value, name: (document.getElementById('locumName') || {}).value,
         epic: (document.getElementById('locumEpic') || {}).value, from: (document.getElementById('locumFrom') || {}).value,
         to: (document.getElementById('locumTo') || {}).value,
+        svc: (document.getElementById('locumSvc') || {}).value, fri: (document.getElementById('locumFriSvc') || {}).value,
     } : null;
     const here = locumsOnDay(date);
     const roster = locumRosterList();
@@ -153,6 +231,11 @@ function openLocumPanel(date, keepForm) {
             <label for="locumTo">To<input type="date" id="locumTo" value="${dk}"></label>
           </div>
           <p class="lc-hint">Weekends and holidays in between are off.</p>
+          <div class="lc-dates">
+            <label for="locumSvc">Service<select id="locumSvc">${_locumSvcOptions(LOCUM_DEFAULT_SVC)}</select></label>
+            <label for="locumFriSvc">Fridays<select id="locumFriSvc">${_locumSvcOptions(LOCUM_DEFAULT_FRI_SVC)}</select></label>
+          </div>
+          <p class="lc-hint">Everyone else covers the other services those days. Change a single day from that day's editor.</p>
         </div>
         <div class="modal-actions">
           <button type="button" data-lc-close>Close</button>
@@ -162,6 +245,7 @@ function openLocumPanel(date, keepForm) {
     if (prev) {
         const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
         set('locumWho', prev.who); set('locumName', prev.name); set('locumEpic', prev.epic); set('locumFrom', prev.from); set('locumTo', prev.to);
+        set('locumSvc', prev.svc); set('locumFriSvc', prev.fri);
     } else if (!roster.length) document.getElementById('locumWho').value = '';
     _locumSyncWho();
     document.getElementById('locumAdd').onclick = _locumAdd;
@@ -191,12 +275,21 @@ function _locumAdd() {
             updates['roster/' + lid] = epic ? { name, epic } : { name };
         }
     }
-    updates['stints/' + db.ref('scheduler/locums/stints').push().key] = { lid, start: from, end: to };
+    updates['stints/' + db.ref('scheduler/locums/stints').push().key] = {
+        lid, start: from, end: to,
+        svc: document.getElementById('locumSvc').value || LOCUM_DEFAULT_SVC,
+        friSvc: document.getElementById('locumFriSvc').value || LOCUM_DEFAULT_FRI_SVC,
+    };
     db.ref('scheduler/locums').update(updates)
         .then(() => {
             const name = (locumRoster[lid] && locumRoster[lid].name) || (updates['roster/' + lid] || {}).name || 'The locum';
             showToast(`${name}: ${_locumRange(from, to)}.`);
             document.getElementById('locumBack').classList.remove('open');
+            if (typeof maybeOfferRecompute === 'function') {
+                const start = parseDate(from);
+                maybeOfferRecompute({}, { fromDate: start.getTime() < today.getTime() ? today : start,
+                    message: `${name} covers ${_locumRange(from, to)}. The others' services for those days were planned without them — re-plan them around the locum using the rotation rules? (Without it, two people may share a station.)` });
+            }
         })
         .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
 }

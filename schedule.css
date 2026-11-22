@@ -9580,8 +9580,11 @@ body.cd-resizing, body.cd-resizing * { cursor: col-resize !important; user-selec
 :root { --locum: #475569; --locum-bg: #e2e8f0; --svc-locum: #475569; }
 .ch-tag.ch-tag-locum { background: var(--locum-bg); color: var(--locum); font-weight: 600; }
 .cd-person-locum { background: var(--locum-bg); border-color: transparent; }
-.wd-row.locum-row { --c: var(--locum); --c-bg: var(--locum-bg); --sc: var(--locum); }
-.wd-row.locum-row .svc { font-style: italic; color: var(--locum); }
+.wd-row.locum-row { --c: var(--locum); --c-bg: var(--locum-bg); }
+.wd-row.locum-row:not([style*="--sc"]) .svc { font-style: italic; color: var(--locum); }
+.locum-mark { margin-left: auto; font: 600 8.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--locum); }
+.day-detail-row .locum-mark { margin-left: 6px; }
+.locum-day-svc { justify-self: end; height: 30px; padding: 0 8px; border: 1px solid var(--rule-soft); border-radius: 6px; background: var(--paper); font: 12.5px var(--sans); color: var(--ink); }
 .lc-modal { width: min(520px, 94vw); }
 .lc-here { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; padding-bottom: 12px; border-bottom: 1px solid var(--rule-soft); }
 .lc-here-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

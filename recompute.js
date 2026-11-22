@@ -138,7 +138,7 @@ function _dayCycleFor(n) {
 // 'bigs' map to the cytobigs slot, since they're served jointly.
 function _dayCycleIndex(svcId, dayCycle) {
     if (!svcId) return -1;
-    if (dayCycle.length === 2) {
+    if (dayCycle.length === 2 && dayCycle.includes('cytobigs')) {
         if (svcId === 'cyto' || svcId === 'bigs' || svcId === 'cytobigs') {
             return dayCycle.indexOf('cytobigs');
         }
@@ -385,6 +385,28 @@ function _rcDayStates(pids, pins) {
     return all.filter((st, i) => tiers[i] === bestTier);
 }
 
+// A day a locum holds a service (locums.js, usually Bigs): the regulars'
+// arrangements are found as if the locum were one more pathologist pinned
+// to that service, then the locum is dropped — so the regulars cover the
+// rest and nobody doubles up on the locum's station.
+function _rcDayStatesWithLocums(pids, pins, taken) {
+    if (!taken || !taken.length) return _rcDayStates(pids, pins);
+    const virt = taken.map((_, i) => '__locum' + i);
+    const all = Object.assign({}, pins || {});
+    virt.forEach((v, i) => { all[v] = taken[i]; });
+    const seen = new Set();
+    return _rcDayStates(pids.concat(virt), all)
+        .map(st => st.slice(0, pids.length))
+        .filter(st => { const k = st.join('|'); if (seen.has(k)) return false; seen.add(k); return true; });
+}
+
+// On a locum day the regulars turn through what they cover, in the usual
+// order (Cyto/Gross → Bigs → Huntley → Breast Bx/WFH).
+function _rcLocumDayCycle(state) {
+    const order = ['cyto', 'bigs', 'huntley', 'wfh', 'cytobigs'];
+    return order.filter(s => state.includes(s));
+}
+
 // Build the optimization problem from app state. Days run: lookback history
 // (fixed) → window (re-planned) → one boundary day after the window (fixed,
 // so the plan hands back to the existing schedule smoothly).
@@ -419,10 +441,12 @@ function _rcBuildProblem(windowDays, mergedPins) {
         const key = fmt(date);
         const cur = workingMap(date);
         const pids = pathologists.map(p => p.id).filter(id => cur[id] !== undefined);
+        const taken = typeof locumServicesOn === 'function' ? locumServicesOn(date) : [];
         const states = variable
-            ? _rcDayStates(pids, mergedPins[key] || null)
+            ? _rcDayStatesWithLocums(pids, mergedPins[key] || null, taken)
             : [pids.map(id => cur[id])];
         days.push({
+            taken: taken,
             date: date, key: key, variable: variable, counted: counted,
             pids: pids, pi: pids.map(id => pis.get(String(id))),
             states: states, baseline: cur,
@@ -436,7 +460,7 @@ function _rcBuildProblem(windowDays, mergedPins) {
     const W = RC_WEIGHTS;
     days.forEach(day => {
         const n = day.pids.length;
-        day.cycle = _dayCycleFor(n);
+        day.cycle = day.taken.length && n > 0 ? _rcLocumDayCycle(day.states[0]) : _dayCycleFor(n);
         day.share = new Float64Array(nP * 4);
         if (n > 0) {
             const slots = [0, 0, 0, 0];
@@ -1358,7 +1382,9 @@ function _bfMapViolations(date, dayMap, prevMap, nextMap) {
 function _bfCandidateMaps(pinnedByDay, date) {
     const cur = _bfDayMap(pinnedByDay, date);
     const pids = Object.keys(cur);
-    const required = requiredServicesFor(pids.length);
+    // A locum day: the regulars cover what the locums don't (schedule.js).
+    const taken = typeof locumServicesOn === 'function' ? locumServicesOn(date) : [];
+    const required = taken.length && pids.length ? regularServiceSet(pids.length, taken) : requiredServicesFor(pids.length);
     if (!required) return [];
     const k = fmt(date);
     const fixed = {};

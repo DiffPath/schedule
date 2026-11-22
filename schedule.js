@@ -1248,6 +1248,35 @@ function _callBreaks() {
     return out.sort((a, b) => a.w - b.w);
 }
 
+// The services the regular pathologists cover on a day the locums hold
+// `taken` (locums.js, e.g. ['bigs']): the usual set for everyone working,
+// less what the locums hold. nRegular of them, in rotation order.
+//   3 regulars + a locum on Bigs → Cyto/Gross, Huntley, Breast Bx/WFH
+//   2 regulars + a locum on Bigs → Cyto/Gross, Huntley
+function regularServiceSet(nRegular, taken) {
+    const total = nRegular + taken.length;
+    const set = total >= 4 ? ['cyto', 'bigs', 'huntley', 'wfh'] : total === 3 ? ['cyto', 'bigs', 'huntley']
+        : total === 2 ? ['cytobigs', 'huntley'] : ['cytobigs'];
+    for (let i = 4; i < total; i++) set.push('wfh');
+    taken.forEach(s => {
+        const i = set.indexOf(s);
+        if (i >= 0) { set.splice(i, 1); return; }
+        const c = set.indexOf('cytobigs');
+        if (c >= 0 && (s === 'cyto' || s === 'bigs')) { set[c] = s === 'cyto' ? 'bigs' : 'cyto'; return; }
+        const w = set.indexOf('wfh');           // a locum service the day doesn't need: one fewer of ours
+        if (w >= 0) set.splice(w, 1);
+    });
+    while (set.length > nRegular) {
+        const w = set.indexOf('wfh');
+        if (w >= 0) { set.splice(w, 1); continue; }
+        const ci = set.indexOf('cyto'), bi = set.indexOf('bigs');
+        if (ci >= 0 && bi >= 0) { set.splice(Math.max(ci, bi), 1); set[Math.min(ci, bi)] = 'cytobigs'; continue; }
+        set.pop();
+    }
+    while (set.length < nRegular) set.push('wfh');
+    return set;
+}
+
 // ── Leaving the group ── A pathologist's last working day ('YYYY-MM-DD',
 // Settings → Leaving the group). After it they're off the schedule
 // entirely: no row, no service, no call, no consults, no cases. They stay
@@ -1393,11 +1422,30 @@ function getNaturalDayAssignments(date) {
         }
     });
 
+    // ── Locum day ───────────────────────────────────────────────────────────
+    // A locum holds a service (locums.js — usually Bigs): the regulars
+    // working cover the rest of the day's set, turning through it one step
+    // per workday. Locked slots keep their service.
+    const locumTaken = typeof locumServicesOn === 'function' ? locumServicesOn(date) : [];
+    const ptoCount = slots.filter(s => s.onPto).length;
+    if (locumTaken.length) {
+        const free = slots.filter(s => !s.onPto && !s.gone && !s.offSiteServiceId && !s.lockedServiceId);
+        const locked = slots.filter(s => !s.onPto && !s.gone && s.lockedServiceId).map(s => s.lockedServiceId);
+        // The regulars' set (locked ones included), less what the locked hold.
+        const set = regularServiceSet(free.length + locked.length, locumTaken);
+        locked.forEach(id => { const i = set.indexOf(id); if (i >= 0) set.splice(i, 1); });
+        while (set.length > free.length) { const w = set.indexOf('wfh'); set.splice(w >= 0 ? w : set.length - 1, 1); }
+        while (set.length < free.length) set.push('wfh');
+        const order = ['cyto', 'bigs', 'huntley', 'wfh', 'cytobigs'];
+        set.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+        const wdi = workDayIndex(date), m = set.length;
+        slots.forEach(s => { if (s.onPto || s.gone) s.serviceId = null; });
+        free.forEach((s, i) => { s.serviceId = m ? set[((i + wdi) % m + m) % m] : null; });
+    } else
     // ── PTO / WFH cascade ───────────────────────────────────────────────────
     // Only unlocked working pathologists are reassigned by the cascade.
     // Locked pathologists (explicit service override) keep their assigned
     // service and count as "working" when determining coverage rules.
-    const ptoCount = slots.filter(s => s.onPto).length;
     if (ptoCount > 0) {
         slots.forEach(s => { if (s.onPto) s.serviceId = null; });
         // Only reassign slots that are working AND have no locked service.
@@ -8822,12 +8870,15 @@ function coverageViolationsForDay(date) {
 
     const assign = getDayAssignments(date);
     const working = pathologists.filter(p => assign[p.id] && assign[p.id].type === 'service');
-    const n = working.length;
+    // Locums on a service count too (locums.js).
+    const locumSvcs = typeof locumServicesOn === 'function' ? locumServicesOn(date) : [];
+    const n = working.length + locumSvcs.length;
     if (n < 2) return null;
 
     const svcs = working
         .map(p => assign[p.id].service && assign[p.id].service.id)
-        .filter(Boolean);
+        .filter(Boolean)
+        .concat(locumSvcs);
 
     const hasHuntley = svcs.includes('huntley');
     const hasCyto = svcs.includes('cyto') || svcs.includes('cytobigs');

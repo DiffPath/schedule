@@ -8894,6 +8894,8 @@ function renderDay() {
         </div>`;
         }
     });
+    // Locums working the day (locums.js).
+    if (typeof locumRowsHtml === 'function') rows += locumRowsHtml(d);
 
     const holidayBadge = holiday ? `<span class="holiday-badge" title="${holiday}">${holiday}</span>` : '';
     const hoursHtml = renderHourGrid(d);
@@ -8987,6 +8989,8 @@ function renderWeek() {
           </div>`;
             }
         });
+        // Locums working the day (locums.js).
+        if (typeof locumRowsHtml === 'function') rows += locumRowsHtml(d);
         const holidayBadge = holiday ? `<span class="holiday-badge" title="${holiday}">${holiday}</span>` : '';
         const hoursHtml = renderHourGrid(d);
         html += `<div class="week-day ${td ? 'today' : ''} ${we ? 'weekend' : ''} ${holiday ? 'holiday' : ''}" data-date="${fmt(d)}">
@@ -10078,6 +10082,8 @@ function monthCellRowsHtml(date, inMonth, people, decorate) {
           </div>`;
         }
     });
+    // Locums working the day (locums.js).
+    if (inMonth && typeof locumRowsHtml === 'function') rows += locumRowsHtml(date);
     return rows;
 }
 
@@ -10455,7 +10461,7 @@ function openDayDetail(date) {
         activeSvcDate = date;
         _svcRootId = 'dayDetailRows';
         renderFreetextDatalist();
-        rows.innerHTML = lfRowHtml + _dayEditRowsHtml(date, dayAssign);
+        rows.innerHTML = lfRowHtml + _dayEditRowsHtml(date, dayAssign) + (typeof locumDetailRowsHtml === 'function' ? locumDetailRowsHtml(date) : '');
         rows.querySelectorAll('select[data-pid]').forEach(sel => { _svcRowSyncLock(sel); _dayEditPaintRow(sel); });
     } else rows.innerHTML = lfRowHtml + pathologists.map(p => {
         const a = dayAssign[p.id];
@@ -10502,7 +10508,7 @@ function openDayDetail(date) {
         ${lockBadge}
         ${ocPill}
       </div>`;
-    }).join('');
+    }).join('') + (typeof locumDetailRowsHtml === 'function' ? locumDetailRowsHtml(date) : '');
 
     if (admin) attachPathRowHandlers(date);
 
@@ -10562,6 +10568,9 @@ function openDayDetail(date) {
     }
 
     // LF sendout button (admin-only) — label flips between add and remove.
+    const locumBtn = document.getElementById('dayAddLocum');
+    if (locumBtn) locumBtn.style.display = admin && !isWk && !holiday ? '' : 'none';
+
     const lfBtn = document.getElementById('dayAddLfSendout');
     if (lfBtn) {
         if (admin) {

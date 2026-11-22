@@ -9566,6 +9566,23 @@ body.cd-resizing, body.cd-resizing * { cursor: col-resize !important; user-selec
 /* ════ DELNOR (delnor.js; Cases reads it) ════
    Delnor's own pathologists, in teal everywhere they appear. */
 :root { --delnor: #0f766e; --delnor-bg: #d5efe9; --svc-delnor: #0f766e; }
+/* Locums (locums.js): slate, so they never read as one of ours or Delnor. */
+:root { --locum: #475569; --locum-bg: #e2e8f0; --svc-locum: #475569; }
+.ch-tag.ch-tag-locum { background: var(--locum-bg); color: var(--locum); font-weight: 600; }
+.cd-person-locum { background: var(--locum-bg); border-color: transparent; }
+.wd-row.locum-row { --c: var(--locum); --c-bg: var(--locum-bg); --sc: var(--locum); }
+.wd-row.locum-row .svc { font-style: italic; color: var(--locum); }
+.lc-modal { width: min(520px, 94vw); }
+.lc-here { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; padding-bottom: 12px; border-bottom: 1px solid var(--rule-soft); }
+.lc-here-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.lc-here-when { font-size: 12.5px; color: var(--ink-2); margin-right: auto; }
+.lc-form { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.lc-form > label, .lc-new > label { font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.lc-new { display: flex; flex-direction: column; gap: 6px; }
+.lc-new[hidden] { display: none; }
+.lc-dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.lc-dates label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+.lc-hint { margin: 2px 0 0; font-size: 12px; color: var(--ink-3); }
 .ch-tag.ch-tag-delnor { background: var(--delnor-bg); color: var(--delnor); font-weight: 600; }
 .cd-person-delnor { background: var(--delnor-bg); border-color: transparent; }
 /* Case types: the "Delnor" checkbox column. */

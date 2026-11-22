@@ -753,7 +753,7 @@ function cdShortName(p) {
 // window: their whole last name, unless set otherwise on the Pathologists tab.
 function cdEpicName(pid) {
     const dp = cdPath(pid);
-    if (dp && dp.delnor) return String(dp.epic || '').trim() || cdLastName(dp);
+    if (dp && (dp.delnor || dp.locum)) return String(dp.epic || '').trim() || cdLastName(dp);
     const set = String(cdEpic[pid] || '').trim();
     if (set) return set;
     const p = cdPath(pid);
@@ -769,20 +769,28 @@ function cdPath(pid) {
         const r = typeof delnorRoster !== 'undefined' ? delnorRoster[rid] : null;
         return r ? { id: s, name: r.name || '', color: 'var(--delnor)', delnor: true, rid, epic: r.epic || '' } : null;
     }
+    if (s.startsWith('l:')) {
+        const lid = s.slice(2);
+        const r = typeof locumRoster !== 'undefined' ? locumRoster[lid] : null;
+        return r ? { id: s, name: r.name || '', color: 'var(--locum)', locum: true, lid, epic: r.epic || '' } : null;
+    }
     return pathologists.find(p => String(p.id) === s) || null;
 }
 
-// A person's tag: the pathologist's schedule colour, Delnor's teal.
+// A person's tag: the pathologist's schedule colour, Delnor's teal, a
+// locum's slate.
 function cdTag(pid) {
     const p = cdPath(pid);
     if (p && p.delnor) return `<span class="ch-tag ch-tag-delnor" title="Delnor">${escapeHtml(cdShortName(p))}</span>`;
+    if (p && p.locum) return `<span class="ch-tag ch-tag-locum" title="Locum">${escapeHtml(cdShortName(p))}</span>`;
     return _pathTagHtml(pid);
 }
 
-// Ours by id, then Delnor's by name.
+// Ours by id, then locums, then Delnor's, by name.
 function cdPidOrder(a, b) {
     const pa = cdPath(a), pb = cdPath(b);
-    const da = pa && pa.delnor ? 1 : 0, dd = pb && pb.delnor ? 1 : 0;
+    const rank = p => (p && p.delnor ? 2 : p && p.locum ? 1 : 0);
+    const da = rank(pa), dd = rank(pb);
     if (da !== dd) return da - dd;
     return da ? String(pa.name).localeCompare(String(pb.name)) : (pa ? pa.id : 0) - (pb ? pb.id : 0);
 }
@@ -928,8 +936,18 @@ function cdScheduled(date) {
         });
 }
 
+// Locums working the day (locums.js): a full-timer's share of the shared
+// cases, no service (so never first pick of a service's cases), and no
+// carry-over between days (director, Nov 2026).
+const CD_LOCUM_SVC = { id: 'locum', short: 'Locum', name: 'Locum', cssVar: '--svc-locum' };
+function cdLocumWorkers(date) {
+    if (!date || typeof locumsOnDay !== 'function') return [];
+    return locumsOnDay(date).map(l => cdPath('l:' + l.lid)).filter(Boolean)
+        .map(p => ({ p, svc: CD_LOCUM_SVC, svcIds: ['locum'], share: 1, locum: true }));
+}
+
 function cdWorking() {
-    return [...cdScheduled(cdDate), ...cdDelnorWorkers(cdDate)];
+    return [...cdScheduled(cdDate), ...cdLocumWorkers(cdDate), ...cdDelnorWorkers(cdDate)];
 }
 
 // Delnor's pathologists signed up for the day (delnor.js). Together they
@@ -942,7 +960,7 @@ function cdDelnorWorkers(date) {
     if (!date || typeof delnorOnDay !== 'function') return [];
     const people = delnorOnDay(date).map(r => cdPath('d:' + r.rid)).filter(Boolean);
     if (!people.length) return [];
-    const ours = cdScheduled(date).reduce((t, w) => t + w.share, 0);
+    const ours = [...cdScheduled(date), ...cdLocumWorkers(date)].reduce((t, w) => t + w.share, 0);
     const total = ours > 0 ? ours * CD_DELNOR_FRACTION / (1 - CD_DELNOR_FRACTION) : 1;
     return people.map(p => ({ p, svc: CD_DELNOR_SVC, svcIds: ['delnor'], share: total / people.length, delnor: true }));
 }
@@ -950,7 +968,7 @@ function cdDelnorWorkers(date) {
 // Delnor's sign-ups changed (delnor.js): re-split when the day's people did.
 let _cdDelnorSig = '';
 function cdDelnorSig() {
-    return (cdDate ? fmt(cdDate) : '') + '|' + cdDelnorWorkers(cdDate).map(w => w.p.id).join(',');
+    return (cdDate ? fmt(cdDate) : '') + '|' + [...cdLocumWorkers(cdDate), ...cdDelnorWorkers(cdDate)].map(w => w.p.id).join(',');
 }
 function cdDelnorChanged() {
     const sig = cdDelnorSig();
@@ -1240,7 +1258,8 @@ function cdDistribute() {
     const { bal } = cdBalances(cdDate, cdRecordedKey);
     const load = {};
     // Delnor's pathologists carry nothing over: their part is fresh each day.
-    working.forEach(w => { load[w.p.id] = w.delnor ? 0 : CD_CARRY * (bal[w.p.id] || 0); });
+    // Delnor's pathologists and locums carry nothing over: fresh each day.
+    working.forEach(w => { load[w.p.id] = w.delnor || w.locum ? 0 : CD_CARRY * (bal[w.p.id] || 0); });
     const ours = working.filter(w => !w.delnor), delnor = working.filter(w => w.delnor);
 
     // Who may read a case: our pathologists, by the case type's readers.
@@ -1530,6 +1549,7 @@ function cdSvcPill(svc) {
 function cdAccTag(c) {
     const p = c.assigned != null ? cdPath(c.assigned) : null;
     if (p && p.delnor) return `<span class="ch-tag ch-tag-delnor cd-acc-tag">${escapeHtml(c.id || '—')}</span>`;
+    if (p && p.locum) return `<span class="ch-tag ch-tag-locum cd-acc-tag">${escapeHtml(c.id || '—')}</span>`;
     const bg = p ? pathBgColor(p.color) : null;
     return p
         ? `<span class="ch-tag ch-tag-path cd-acc-tag" style="--c:${p.color}${bg ? `; --c-bg:${bg}` : ''}">${escapeHtml(c.id || '—')}</span>`
@@ -1605,11 +1625,11 @@ function cdCaseDetail(c) {
             : 'Shared to even out the day';
     const routeTxt = route + (c.shared ? ' · ' + c.shared : '') + (c.delnorOK ? ' · Delnor may read it' : '');
     // Our pathologists, then Delnor's signed up that day (and whoever has it).
-    const pathOpts = [...pathologists.filter(p => typeof p.id === 'number'), ...cdDelnorWorkers(cdDate).map(w => w.p)];
+    const pathOpts = [...pathologists.filter(p => typeof p.id === 'number'), ...cdLocumWorkers(cdDate).map(w => w.p), ...cdDelnorWorkers(cdDate).map(w => w.p)];
     if (c.assigned != null && !pathOpts.some(p => String(p.id) === String(c.assigned)) && cdPath(c.assigned)) pathOpts.push(cdPath(c.assigned));
     const sel = `<select class="cd-assign" data-cd-case="${escapeHtml(c.key)}" aria-label="Pathologist for ${escapeHtml(c.id)}">
         <option value=""${c.assigned == null ? ' selected' : ''}>Not assigned</option>
-        ${pathOpts.map(p => `<option value="${escapeHtml(String(p.id))}"${String(c.assigned) === String(p.id) ? ' selected' : ''}>${escapeHtml(cdShortName(p))}${p.delnor ? ' (Delnor)' : ''}</option>`).join('')}
+        ${pathOpts.map(p => `<option value="${escapeHtml(String(p.id))}"${String(c.assigned) === String(p.id) ? ' selected' : ''}>${escapeHtml(cdShortName(p))}${p.delnor ? ' (Delnor)' : p.locum ? ' (Locum)' : ''}</option>`).join('')}
       </select>`;
     const unknown = cdUnknownParts(c);
     return `<table class="ch-table cd-parts"><thead><tr><th>Specimen</th><th>Counted as</th><th>Units</th><th>Minutes</th></tr></thead>
@@ -1727,7 +1747,7 @@ function cdWorkingCard() {
               </span>`;
     return `<section class="cd-card">
         <h3 class="cd-card-h">Working</h3>
-        <div class="cd-working">${sched.length ? sched.map(w => tile(w, w.p.color, '')).join('') : '<span class="cd-muted">No one is on a service this day.</span>'}${cdDelnorWorkers(cdDate).map(w => tile(w, 'var(--delnor)', ' cd-person-delnor')).join('')}</div>
+        <div class="cd-working">${sched.length ? sched.map(w => tile(w, w.p.color, '')).join('') : '<span class="cd-muted">No one is on a service this day.</span>'}${cdLocumWorkers(cdDate).map(w => tile(w, 'var(--locum)', ' cd-person-locum')).join('')}${cdDelnorWorkers(cdDate).map(w => tile(w, 'var(--delnor)', ' cd-person-delnor')).join('')}</div>
       </section>`;
 }
 
@@ -1901,7 +1921,14 @@ function cdPeopleViewHtml() {
             <label for="cdde-${r.rid}">Typed in Epic</label>
             <input type="text" class="cd-input cd-input-epic" id="cdde-${r.rid}" data-dn-epic="${r.rid}" value="${escapeHtml(r.epic || '')}" placeholder="${escapeHtml(delnorLastName(r.name))}" spellcheck="false" autocomplete="off">
           </div>`, r.name));
-    return `<div class="cf-body"><div class="cf-side"><div class="cf-list" aria-label="Pathologists">${cdSecHtml('people', 'Pathologists', people.length, lines)}${dnLines.length ? cdSecHtml('people-delnor', 'Delnor pathologists', dnLines.length, dnLines) : ''}</div></div>
+    const lcLines = (typeof locumRosterList === 'function' ? locumRosterList() : []).map(r => cdLineHtml('people', 'l:' + r.lid, cdTag('l:' + r.lid),
+        `<b>Locum</b><span class="ch-dates"> · types “${escapeHtml(cdEpicName('l:' + r.lid))}” in Epic</span>`, null,
+        () => `<div class="cd-form">
+            <label>Name</label><span>${escapeHtml(r.name)} <span class="cd-muted">(locums are added from a day on the schedule)</span></span>
+            <label for="cdle-${r.lid}">Typed in Epic</label>
+            <input type="text" class="cd-input cd-input-epic" id="cdle-${r.lid}" data-lc-epic="${r.lid}" value="${escapeHtml(r.epic || '')}" placeholder="${escapeHtml(cdLastName(r))}" spellcheck="false" autocomplete="off">
+          </div>`, r.name));
+    return `<div class="cf-body"><div class="cf-side"><div class="cf-list" aria-label="Pathologists">${cdSecHtml('people', 'Pathologists', people.length, lines)}${lcLines.length ? cdSecHtml('people-locum', 'Locums', lcLines.length, lcLines) : ''}${dnLines.length ? cdSecHtml('people-delnor', 'Delnor pathologists', dnLines.length, dnLines) : ''}</div></div>
         <section class="cf-cal" aria-label="Ahead or behind">${panel}</section></div>`;
 }
 
@@ -2329,6 +2356,10 @@ function cdAfterSettingsChange() {
         } else if (el.dataset.cdDn) {
             db.ref('scheduler/caseDist/types/' + el.dataset.cdDn + '/delnor').set(el.checked ? true : null)
                 .then(cdAfterSettingsChange)
+                .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
+        } else if (el.dataset.lcEpic) {
+            const v = el.value.replace(/[\t\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+            db.ref('scheduler/locums/roster/' + el.dataset.lcEpic + '/epic').set(v || null)
                 .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
         } else if (el.dataset.dnEpic) {
             const v = el.value.replace(/[\t\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();

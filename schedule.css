@@ -2881,6 +2881,14 @@ main {
 .modal .day-edit-row .svc-lock-toggle { justify-self: center; }
 .day-edit-row .locum-dates { justify-self: center; font-size: 11.5px; font-weight: 500; color: var(--locum); white-space: nowrap; }
 .day-detail-row .locum-pill { background: var(--locum); color: #fff; }
+/* The locum's name in the day editor: a button that opens Rename. */
+.locum-name-btn { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+.locum-name-btn .locum-pencil { color: var(--locum); opacity: 0.55; transition: opacity 0.15s ease; }
+.locum-name-btn:hover { text-decoration: underline; text-underline-offset: 2px; }
+.locum-name-btn:hover .locum-pencil, .locum-name-btn:focus-visible .locum-pencil { opacity: 1; }
+.lc-who { display: flex; gap: 8px; align-items: center; }
+.lc-who select { flex: 1 1 auto; min-width: 0; }
+.lc-who .cd-btn[hidden] { display: none; }
 .day-detail-row.locum-detail-row { border-color: color-mix(in srgb, var(--locum) 25%, transparent); }
 .day-edit-row .dtag {
     font-family: var(--mono);

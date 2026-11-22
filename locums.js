@@ -128,7 +128,7 @@ function locumDetailRowsHtml(date) {
         if (edit) {
             return `<div class="day-detail-row day-edit-row locum-detail-row" style="--c:var(--locum); --c-bg:var(--locum-bg)" title="Locum — no call, consults or conferences">
           <div class="ddot"></div>
-          <div class="dname">${escapeHtml(l.name)} <span class="doc-pill locum-pill">Locum</span></div>
+          <div class="dname"><button type="button" class="locum-name-btn" data-locum-rename="${escapeHtml(l.lid)}" title="Rename ${escapeHtml(l.name)}">${escapeHtml(l.name)}<svg class="locum-pencil" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.5 2.5l3 3L6 13H3v-3z"/></svg></button> <span class="doc-pill locum-pill">Locum</span></div>
           <select class="locum-day-svc" data-locum-day="${escapeHtml(l.lid)}" aria-label="${escapeHtml(l.name)}'s service">${_locumSvcOptions(changed ? l.svc : '', 'Usual (' + _locumUsualLabel(locumStints[l.sid], date) + ')')}</select>
           <span class="locum-dates">${escapeHtml(_locumRange(l.start, l.end))}</span>
         </div>`;
@@ -162,6 +162,16 @@ function _locumSetDayService(lid, date, value) {
         })
         .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
 }
+
+// The locum's name in the day editor opens Rename (in the Locums panel).
+document.addEventListener('click', e => {
+    const b = e.target.closest && e.target.closest('[data-locum-rename]');
+    if (!b || !isAdmin() || !activeDayDate) return;
+    if (typeof _dayEditOkToLeave === 'function' && !_dayEditOkToLeave()) return;
+    document.getElementById('dayModalBack').classList.remove('open');
+    openLocumPanel(activeDayDate);
+    openLocumRename(b.dataset.locumRename);
+});
 
 document.addEventListener('change', e => {
     const sel = e.target.closest && e.target.closest('.locum-day-svc');
@@ -202,6 +212,7 @@ function openLocumPanel(date, keepForm) {
             if (rn) openLocumRename(rn.dataset.lcRename);
             if (e.target.closest('[data-lc-back]')) openLocumPanel(_locumDate);
             if (e.target.closest('#locumRenameSave')) _locumSaveRename();
+            if (e.target.closest('#locumWhoRename')) openLocumRename(document.getElementById('locumWho').value);
         });
         back.addEventListener('keydown', e => {
             if (e.key === 'Escape') { e.stopPropagation(); back.classList.remove('open'); }
@@ -229,14 +240,17 @@ function openLocumPanel(date, keepForm) {
     back.innerHTML = `<div class="modal lc-modal" role="dialog" aria-labelledby="locumTitle">
         <button type="button" class="modal-close-x" data-lc-close aria-label="Close" title="Close">&times;</button>
         <h3 id="locumTitle">Locums</h3>
-        <div class="sub">${escapeHtml(DOW[date.getDay()] + ', ' + MONTHS_SHORT[date.getMonth()] + ' ' + date.getDate())} · Locums only read cases — no call, consults, conferences or tumor boards.</div>
+        <div class="sub">${escapeHtml(DOW[date.getDay()] + ', ' + MONTHS_SHORT[date.getMonth()] + ' ' + date.getDate())} · Locums work a service like everyone else, but take no call, consults, conferences or tumor boards.</div>
         ${herePart}
         <div class="lc-form">
           <label for="locumWho">Locum</label>
-          <select id="locumWho">
-            ${roster.map(r => `<option value="${escapeHtml(r.lid)}">${escapeHtml(r.name)}</option>`).join('')}
-            <option value="">New locum…</option>
-          </select>
+          <div class="lc-who">
+            <select id="locumWho">
+              ${roster.map(r => `<option value="${escapeHtml(r.lid)}">${escapeHtml(r.name)}</option>`).join('')}
+              <option value="">New locum…</option>
+            </select>
+            <button type="button" class="cd-btn cd-btn-sm" id="locumWhoRename">Rename</button>
+          </div>
           <div class="lc-new">
             <label for="locumName">Name</label>
             <input type="text" id="locumName" placeholder="e.g. Dr. Jane Smith" autocomplete="off">
@@ -319,6 +333,7 @@ function locumNameProblem(lid, name) {
 function _locumSyncWho() {
     const isNew = !document.getElementById('locumWho').value;
     document.querySelector('#locumBack .lc-new').hidden = !isNew;
+    document.getElementById('locumWhoRename').hidden = isNew;
 }
 
 function _locumAdd() {

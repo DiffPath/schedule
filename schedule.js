@@ -38,6 +38,7 @@ function authEmailForId(id) {
     if (id === HISTOLOGY_ID)  return 'histology' + AUTH_EMAIL_DOMAIN;
     if (id === GUEST_ID)      return 'guest' + AUTH_EMAIL_DOMAIN;
     if (id === LAKE_FOREST_ID) return 'lakeforest' + AUTH_EMAIL_DOMAIN;
+    if (id === DELNOR_ID)     return 'delnor' + AUTH_EMAIL_DOMAIN;
     return 'p' + id + AUTH_EMAIL_DOMAIN; // pathologist
 }
 
@@ -51,6 +52,7 @@ function idForAuthEmail(email) {
     if (local === 'histology') return HISTOLOGY_ID;
     if (local === 'guest') return GUEST_ID;
     if (local === 'lakeforest') return LAKE_FOREST_ID;
+    if (local === 'delnor') return DELNOR_ID;
     const m = local.match(/^p(\d+)$/);
     if (m) return parseInt(m[1], 10);
     return null;
@@ -314,6 +316,10 @@ const HISTOLOGY_ID = 'histology';
 const GUEST_ID = 'guest';
 // Read-only Lake Forest guest: sees only LF sendout days, no password.
 const LAKE_FOREST_ID = 'lakeforest';
+// Delnor: fills in the Delnor sign-up sheet (which of Delnor's pathologists
+// cover each working day) and sees nothing else. It writes, so unlike the
+// guests it has a password.
+const DELNOR_ID = 'delnor';
 let requests = {};            // { reqKey: { ...request fields } } from Firebase
 let requestsReady = false;    // becomes true after first snapshot resolves
 let _seenRequestKeys = null;  // for "new request arrived" detection
@@ -351,6 +357,15 @@ function isLakeForest() {
     return loggedInPathId === LAKE_FOREST_ID;
 }
 
+function isDelnor() {
+    return loggedInPathId === DELNOR_ID;
+}
+
+// The Delnor sign-up sheet: the director and the Delnor login.
+function canSeeDelnorPage() {
+    return isAdmin() || isDelnor();
+}
+
 // Read-only guest accounts: full UI lockdown (histology and the guest see
 // everything, Lake Forest only LF sendout days via body.lf-guest CSS).
 function isReadOnlyGuest() {
@@ -379,7 +394,7 @@ function isPathologistAccount(pathId) {
 // pathologists (the admin included) and Lake Forest. Kathleen, the gross
 // room and histology never see it.
 function canSeeRequestsPage() {
-    return loggedInPathId !== null && !isGrossRoom() && !isManager() && !isHistology();
+    return loggedInPathId !== null && !isGrossRoom() && !isManager() && !isHistology() && !isDelnor();
 }
 
 // PTO is for pathologists only: the admin (a pathologist) manages it, the
@@ -1597,7 +1612,7 @@ function checkReady() {
         hideLoading();
         // Listeners only start after sign-in, so loggedInPathId is already
         // resolved. Guard: an account mapping to a missing pathologist forces re-login.
-        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && loggedInPathId !== HISTOLOGY_ID && loggedInPathId !== GUEST_ID && loggedInPathId !== LAKE_FOREST_ID && !pathologists.find(p => p.id === loggedInPathId)) {
+        if (loggedInPathId !== null && loggedInPathId !== GROSS_ROOM_ID && loggedInPathId !== MANAGER_ID && loggedInPathId !== HISTOLOGY_ID && loggedInPathId !== GUEST_ID && loggedInPathId !== LAKE_FOREST_ID && loggedInPathId !== DELNOR_ID && !pathologists.find(p => p.id === loggedInPathId)) {
             auth.signOut();
             return;
         }
@@ -1656,7 +1671,8 @@ function showLoginOverlay() {
         `<option value="${MANAGER_ID}">Kathleen</option>` +
         `<option value="${HISTOLOGY_ID}">Histology</option>` +
         `<option value="${GUEST_ID}">Guest</option>` +
-        `<option value="${LAKE_FOREST_ID}">Lake Forest</option>`;
+        `<option value="${LAKE_FOREST_ID}">Lake Forest</option>` +
+        `<option value="${DELNOR_ID}">Delnor</option>`;
     pwInput.value = '';
     errEl.textContent = '';
     overlay.style.display = 'flex';
@@ -1712,6 +1728,7 @@ async function attemptLogin() {
 
     const pid = isGrossRoomLogin ? GROSS_ROOM_ID
         : isManagerLogin ? MANAGER_ID
+        : pidRaw === DELNOR_ID ? DELNOR_ID
         : guestPw ? pidRaw
         : parseInt(pidRaw, 10);
 
@@ -1768,6 +1785,7 @@ document.getElementById('loginPath').addEventListener('change', updateLoginPassw
 // Sign-out: tear listeners down, show the login overlay.
 auth.onAuthStateChanged(user => {
     document.body.classList.toggle('lf-guest', user ? idForAuthEmail(user.email) === LAKE_FOREST_ID : false);
+    document.body.classList.toggle('delnor-guest', user ? idForAuthEmail(user.email) === DELNOR_ID : false);
     if (user) {
         const id = idForAuthEmail(user.email);
         if (id === null) {
@@ -2039,6 +2057,12 @@ function renderSidebar() {
     // Lake Forest guest mode: body class drives the CSS that strips the
     // calendar down to LF sendout days and hides non-schedule chrome.
     document.body.classList.toggle('lf-guest', isLakeForest());
+    // Delnor mode: only the sign-up sheet (CSS hides everything else).
+    document.body.classList.toggle('delnor-guest', isDelnor());
+    const delnorNav = document.querySelector('.nav-item[data-page="delnor"]');
+    if (delnorNav) delnorNav.style.display = canSeeDelnorPage() ? '' : 'none';
+    if (isDelnor() && typeof window.__setPage === 'function' && document.getElementById('app')?.getAttribute('data-page') !== 'delnor') window.__setPage('delnor');
+    else if (document.getElementById('app')?.getAttribute('data-page') === 'delnor' && typeof renderDelnorPage === 'function') renderDelnorPage();
     // Show/hide admin-only controls based on signed-in user's role
     const admin = isAdmin();
     const grossRoom = isGrossRoom();
@@ -2124,6 +2148,9 @@ function renderSidebar() {
             sInfo.style.display = 'flex';
         } else if (isManager()) {
             sWho.textContent = 'Signed in · Kathleen';
+            sInfo.style.display = 'flex';
+        } else if (isDelnor()) {
+            sWho.textContent = 'Signed in · Delnor';
             sInfo.style.display = 'flex';
         } else if (isLakeForest()) {
             sWho.textContent = 'Signed in · Lake Forest (read-only)';
@@ -15192,7 +15219,7 @@ document.getElementById('exportDownload').addEventListener('click', () => {
 // Requests / Export / Recompute.
 
 (function initPageNavigation() {
-    const VALID_PAGES = ['schedule', 'conflicts', 'requests', 'changes', 'tracking', 'cases', 'settings'];
+    const VALID_PAGES = ['schedule', 'conflicts', 'requests', 'changes', 'tracking', 'cases', 'delnor', 'settings'];
     let currentPage = 'schedule';
 
     const app = document.getElementById('app');
@@ -15206,6 +15233,10 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         if (page === 'requests' && loggedInPathId !== null && !canSeeRequestsPage()) page = 'schedule';
         // Case distribution is the director's alone (for now).
         if (page === 'cases' && loggedInPathId !== null && !isAdmin()) page = 'schedule';
+        // The Delnor sign-up sheet: the director and the Delnor login, which
+        // sees nothing else.
+        if (page === 'delnor' && loggedInPathId !== null && !canSeeDelnorPage()) page = 'schedule';
+        if (isDelnor()) page = 'delnor';
         if (!VALID_PAGES.includes(page)) page = 'schedule';
         currentPage = page;
 
@@ -15224,6 +15255,7 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         const chgPg = document.getElementById('changesPage');
         const trkPg = document.getElementById('trackingPage');
         const casesPg = document.getElementById('casesPage');
+        const delnorPg = document.getElementById('delnorPage');
         const settingsPg = document.getElementById('settingsPage');
 
         if (mainEl) mainEl.hidden = (page !== 'schedule');
@@ -15232,6 +15264,7 @@ document.getElementById('exportDownload').addEventListener('click', () => {
         if (chgPg) chgPg.hidden = (page !== 'changes');
         if (trkPg) trkPg.hidden = (page !== 'tracking');
         if (casesPg) casesPg.hidden = (page !== 'cases');
+        if (delnorPg) delnorPg.hidden = (page !== 'delnor');
         if (settingsPg) settingsPg.hidden = (page !== 'settings');
 
         // When switching to schedule, re-render the calendar to make sure the
@@ -15258,6 +15291,10 @@ document.getElementById('exportDownload').addEventListener('click', () => {
 
         if (page === 'cases' && typeof renderCasesPage === 'function') {
             try { renderCasesPage(); } catch (err) { console.error(err); }
+        }
+
+        if (page === 'delnor' && typeof renderDelnorPage === 'function') {
+            try { renderDelnorPage(); } catch (err) { console.error(err); }
         }
 
         // When switching to settings, re-apply settings so toggles reflect

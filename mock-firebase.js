@@ -353,7 +353,7 @@
         });
     }
     function knownLocalPart(local) {
-        if (local === 'grossroom' || local === 'kathleen' || local === 'histology' || local === 'guest' || local === 'lakeforest') return true;
+        if (local === 'grossroom' || local === 'kathleen' || local === 'histology' || local === 'guest' || local === 'lakeforest' || local === 'delnor') return true;
         return /^p\d{1,4}$/.test(local); // p<id>; the app validates the id itself
     }
     function authError(code, message) {

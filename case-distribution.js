@@ -61,7 +61,7 @@
 // cases won't. Needle core is set to 3 from those cut without them. A case with the typical
 // count keeps the G107 minutes; see cdSlideFactor(). Bone marrows have none
 // and aren't adjusted.
-const CD_SEED_VERSION = 7;
+const CD_SEED_VERSION = 12;
 const CD_STARTER_TYPES = [
     // Readers are matched by name when the starter list is written;
     // services are [serviceId, 1 = first choice | 2 = backup].
@@ -75,16 +75,20 @@ const CD_STARTER_TYPES = [
         basis: 'Nephrectomy, neoplastic 8 pts (31–50 min)' },
     { name: 'Thyroid resection', match: 'thyroid', minutes: 25, addMinutes: 15, slides: 10.5, services: [['bigs', 1]],
         basis: 'Thyroidectomy for presumed neoplasm 5 pts (21–30 min)' },
-    { name: 'Colon resection', match: 'colon resection; colectomy; hemicolectomy', minutes: 15, addMinutes: 8, slides: 11.5, services: [['bigs', 1]],
+    { name: 'Colon resection', match: 'colon resection; colectomy; hemicolectomy', minutes: 15, addMinutes: 8, slides: 8, services: [['bigs', 1]],
         basis: 'Benign colectomy 3 pts (11–20 min); billed 88309 (tumor) counts 40' },
+    { name: 'Colon resection, malignant', match: 'colon resection, malignant; colectomy, malignant; hemicolectomy, malignant', minutes: 40, addMinutes: 10, slides: 31, services: [['bigs', 1]],
+        basis: 'Colorectal cancer resection 8 pts (31–50 min); billed 88309, a median 31 slides (AP report 2026)' },
     { name: 'Small bowel resection', match: 'small bowel', minutes: 15, addMinutes: 8, slides: 5, services: [['bigs', 1]],
         basis: 'Benign small bowel resection 3 pts (11–20 min); billed 88309 counts 40' },
     { name: 'Prostate biopsy', match: 'prostate biopsy; prostate needle', minutes: 15, addMinutes: 2.5, slides: 5,
         basis: '1 container 3 pts (11–20 min) · 2–6: 5 pts (21–30) · >6: 8 pts (31–50)' },
     { name: 'Breast core biopsy', match: 'breast core', minutes: 15, addMinutes: 15, slides: 12, services: [['wfh', 1], ['huntley', 2]],
         basis: 'Needle core biopsy 3 pts (11–20 min) per container' },
-    { name: 'Sentinel / lymph node', match: 'sentinel node; lymph node', minutes: 15, addMinutes: 8, slides: 3.5,
-        basis: 'Sentinel node, H&E + levels 3 pts (11–20 min)' },
+    { name: 'Lymph node', match: 'lymph node', minutes: 15, addMinutes: 8, slides: 3,
+        basis: 'Lymph node, H&E + levels 3 pts (11–20 min); billed 88305' },
+    { name: 'Sentinel node / dissection / lymphoma', match: 'sentinel node; sentinel lymph node; lymph node dissection; lymph node for lymphoma', minutes: 25, addMinutes: 8, slides: 7,
+        basis: 'Sentinel node, node dissection or ?lymphoma 5 pts (21–30 min); billed 88307' },
     { name: 'Placenta', match: 'placenta', minutes: 15, addMinutes: 15, slides: 4.5,
         basis: 'Placenta 3 pts (11–20 min)' },
     { name: 'Bladder TURBT', match: 'transurethral resection; turbt', minutes: 15, addMinutes: 8, slides: 4.5,
@@ -98,7 +102,7 @@ const CD_STARTER_TYPES = [
     { name: 'FNA', match: 'fna; fine needle; thyroid fna', minutes: 15, addMinutes: 15, slides: 5.5, services: [['cyto', 1]],
         basis: 'FNA of solid organ or mass 3 pts (11–20 min) per site' },
     { name: 'Needle core biopsy (cytology)', match: 'needle core biopsy', minutes: 15, addMinutes: 15, slides: 3, services: [['cyto', 1]],
-        basis: 'Needle biopsy 3 pts (11–20 min)' },
+        basis: 'Needle biopsy 3 pts (11–20 min); billed 88305 through its “Cell Block (NWR)” charge (the core has no charge line of its own)' },
     { name: 'Body fluid', match: 'body fluid; fluid; pericardial fluid; pleural fluid; peritoneal fluid', minutes: 15, addMinutes: 8, slides: 2, services: [['cyto', 1]],
         basis: 'Pleural/ascitic/pericardial fluid 3 pts (11–20 min)' },
     { name: 'Bronchial washing / brushing', match: 'bronchial washing; washing; brushing', minutes: 15, addMinutes: 8, slides: 1.5, services: [['cyto', 1]],
@@ -126,11 +130,15 @@ const CD_STARTER_TYPES = [
     { name: 'Appendix', match: 'appendix', minutes: 3, addMinutes: 3, slides: 2.5,
         basis: 'Appendix 1 pt (1–5 min)' },
     { name: 'Fallopian tubes', match: 'fallopian tube', minutes: 3, addMinutes: 3, slides: 3,
-        basis: 'Sterilisation 1 pt (1–5 min)' },
+        basis: 'Sterilisation 1 pt (1–5 min); billed 88302' },
+    { name: 'Fallopian tube, ectopic', match: 'fallopian tube, ectopic; ectopic pregnancy', minutes: 8, addMinutes: 3, slides: 5.5,
+        basis: 'Ectopic pregnancy 2 pts (6–10 min); billed 88305, a median 5.5 slides (AP report 2026)' },
     { name: 'Lipoma / soft tissue', match: 'lipoma; soft tissue', minutes: 3, addMinutes: 3, slides: 2,
         basis: 'Excision for benign disease 1 pt (1–5 min)' },
-    { name: 'Nasal contents / septum', match: 'nasal contents; nasal septum', minutes: 3, addMinutes: 3, slides: 1,
-        basis: 'Nasal polyps 1 pt (1–5 min) per side' },
+    { name: 'Nasal contents', match: 'nasal contents', minutes: 3, addMinutes: 3, slides: 1,
+        basis: 'Nasal polyps 1 pt (1–5 min) per side; billed 88305' },
+    { name: 'Nasal septum', match: 'nasal septum', minutes: 3, addMinutes: 3, slides: 1,
+        basis: 'Septum 1 pt (1–5 min); billed 88304 — 1 slide, like nasal contents' },
     { name: 'Adenoids / tonsils', match: 'adenoids; tonsil; tonsils', minutes: 3, addMinutes: 3, slides: 1.5,
         basis: 'Benign tonsils 1 pt (1–5 min) per side' },
     { name: 'Hernia sac', match: 'hernia sac', minutes: 3, addMinutes: 3, slides: 1.5,
@@ -163,8 +171,10 @@ const CD_STARTER_TYPES = [
         basis: 'Traumatic amputation 1 pt (1–5 min)' },
     { name: 'Limb amputation', match: 'leg amputation; foot amputation', minutes: 15, addMinutes: 8, slides: 9, services: [['bigs', 1]],
         basis: 'Limb amputation, non-neoplastic 3 pts (11–20 min)' },
-    { name: 'Tendon / ganglion / disc', match: 'tendon; tenosynovium; ganglion; ganglion cyst; disc', minutes: 3, addMinutes: 3, slides: 1,
-        basis: 'Benign soft tissue 1 pt (1–5 min)' },
+    { name: 'Tendon / ganglion / disc', match: 'tendon; ganglion; ganglion cyst; disc', minutes: 3, addMinutes: 3, slides: 1,
+        basis: 'Benign soft tissue 1 pt (1–5 min); billed 88304' },
+    { name: 'Tenosynovium', match: 'tenosynovium', minutes: 3, addMinutes: 3, slides: 2,
+        basis: 'Benign soft tissue 1 pt (1–5 min); billed 88305' },
     { name: 'Arterial plaque', match: 'carotid artery, plaque; artery, plaque; plaque', minutes: 3, addMinutes: 3, slides: 1,
         basis: 'Endarterectomy / atheroma 1 pt (1–5 min)' },
     { name: 'Thrombus / hematoma', match: 'thrombus; hematoma; subdural', minutes: 3, addMinutes: 3, slides: 2,
@@ -179,8 +189,12 @@ const CD_STARTER_TYPES = [
         basis: 'Bladder biopsy 2 pts (6–10 min)' },
     { name: 'Testis tumor', match: 'testicle tumor; testis tumor; orchiectomy', minutes: 40, addMinutes: 10, slides: 9, services: [['bigs', 1]],
         basis: 'Orchidectomy for tumour 8 pts (31–50 min)' },
-    { name: 'Scrotum / hydrocele / foreskin', match: 'scrotum; hydrocele; foreskin; testis, biopsy', minutes: 3, addMinutes: 3, slides: 3,
-        basis: 'Simple benign specimen 1 pt (1–5 min)' },
+    { name: 'Scrotum / foreskin', match: 'scrotum; foreskin', minutes: 3, addMinutes: 3, slides: 1.5,
+        basis: 'Simple benign specimen 1 pt (1–5 min); billed 88304' },
+    { name: 'Hydrocele', match: 'hydrocele', minutes: 3, addMinutes: 3, slides: 2.5,
+        basis: 'Simple benign specimen 1 pt (1–5 min); billed 88302' },
+    { name: 'Testis biopsy', match: 'testis, biopsy; testicular biopsy', minutes: 3, addMinutes: 3, slides: 12,
+        basis: 'Simple specimen 1 pt (1–5 min); billed 88305, 12 slides (AP report 2026, 1 case)' },
     { name: 'Ureter / urethra', match: 'ureter; urethra', minutes: 3, addMinutes: 3, slides: 6.5,
         basis: 'Benign tubular organ segment 1 pt (1–5 min)' },
     { name: 'Urine cytology', match: 'urine cytology; urine', minutes: 8, addMinutes: 8, slides: 2, services: [['cyto', 1]],
@@ -197,8 +211,10 @@ const CD_STARTER_TYPES = [
         basis: 'Cervical loop excision / cone 3 pts (11–20 min)' },
     { name: 'Cervix / vagina / vulva biopsy', match: 'cervical, biopsy; endocervical curettings; endocervical; cervical polyp; vaginal mucosa; vagina, biopsy; vulva, biopsy', minutes: 8, addMinutes: 3, slides: 3,
         basis: 'Cervical / vulval biopsy, ?dysplasia 2 pts (6–10 min)' },
-    { name: 'Ovary / adnexa', match: 'ovary and fallopian tube; ovary; ovarian cyst; adnexa', minutes: 8, addMinutes: 8, slides: 4,
-        basis: 'Ovary / ovarian cyst, benign 2 pts (6–10 min); billed 88309 counts 40' },
+    { name: 'Ovary / adnexa', match: 'ovary; adnexa', minutes: 8, addMinutes: 8, slides: 3.5,
+        basis: 'Ovary 2 pts (6–10 min); billed 88307 (a median 3.5 slides — no more than ovary + tube); 88309 counts 40' },
+    { name: 'Ovary + tube / ovarian cyst', match: 'ovary and fallopian tube; ovarian cyst', minutes: 8, addMinutes: 8, slides: 5,
+        basis: 'Ovary / ovarian cyst, benign 2 pts (6–10 min); billed 88305' },
     { name: 'Lung biopsy (bronchoscopic)', match: 'lung bronchoscopic biopsy; bronchial, biopsy; transbronchial', minutes: 15, addMinutes: 8, slides: 13,
         basis: 'Bronchial / transbronchial biopsy 3 pts (11–20 min)' },
     { name: 'Lung wedge', match: 'lung wegde; lung wedge', minutes: 25, addMinutes: 8, slides: 4.5, services: [['bigs', 1]],
@@ -207,16 +223,24 @@ const CD_STARTER_TYPES = [
         basis: 'Lung resection for tumour 8 pts (31–50 min)' },
     { name: 'Pleura', match: 'pleural peel; pleura, biopsy; pleura', minutes: 8, addMinutes: 3, slides: 3,
         basis: 'Pleural biopsy / decortication 2 pts (6–10 min)' },
-    { name: 'Mediastinum / thymus', match: 'mediastinum; thymus', minutes: 15, addMinutes: 8, slides: 7.5,
-        basis: 'Mediastinal biopsy / thymus 3 pts (11–20 min)' },
+    { name: 'Mediastinum', match: 'mediastinum', minutes: 15, addMinutes: 8, slides: 7.5,
+        basis: 'Mediastinal biopsy 3 pts (11–20 min); billed 88304' },
+    { name: 'Thymus', match: 'thymus', minutes: 25, addMinutes: 8, slides: 14,
+        basis: 'Thymus 5 pts (21–30 min); billed 88307, 14 slides (AP report 2026, 1 case)' },
     { name: 'Parathyroid', match: 'parathyroid', minutes: 8, addMinutes: 3, slides: 3.5,
         basis: 'Parathyroid 2 pts (6–10 min)' },
-    { name: 'Sinus / turbinate / nose', match: 'ethmoid; turbinates; turbinate; sinus, curettage; nasal shavings; nose, biopsy', minutes: 3, addMinutes: 3, slides: 3,
-        basis: 'Nasal / sinus tissue, benign 1 pt (1–5 min)' },
-    { name: 'Larynx / pharynx / trachea biopsy', match: 'larynx, biopsy; vocal cord biopsy; trachea, biopsy; oropharynx, biopsy; pharynx; uvula', minutes: 8, addMinutes: 3, slides: 3,
-        basis: 'Laryngeal / pharyngeal biopsy 2 pts (6–10 min)' },
-    { name: 'Salivary gland', match: 'parotid; submandibular gland', minutes: 15, addMinutes: 8, slides: 4,
-        basis: 'Salivary gland biopsy / excision 3 pts (11–20 min)' },
+    { name: 'Ethmoid / nose biopsy', match: 'ethmoid; nose, biopsy', minutes: 3, addMinutes: 3, slides: 3,
+        basis: 'Nasal / sinus tissue, benign 1 pt (1–5 min); billed 88305' },
+    { name: 'Turbinates / sinus curettage', match: 'turbinates; turbinate; sinus, curettage; nasal shavings', minutes: 3, addMinutes: 3, slides: 1.5,
+        basis: 'Nasal / sinus tissue, benign 1 pt (1–5 min); billed 88304' },
+    { name: 'Larynx / trachea / uvula biopsy', match: 'larynx, biopsy; vocal cord biopsy; trachea, biopsy; oropharynx, biopsy; uvula', minutes: 8, addMinutes: 3, slides: 3,
+        basis: 'Laryngeal / pharyngeal biopsy 2 pts (6–10 min); billed 88305' },
+    { name: 'Pharynx', match: 'pharynx', minutes: 8, addMinutes: 3, slides: 1.5,
+        basis: 'Pharyngeal tissue 2 pts (6–10 min); billed 88304' },
+    { name: 'Salivary gland biopsy', match: 'submandibular gland; salivary gland, biopsy', minutes: 15, addMinutes: 8, slides: 4,
+        basis: 'Salivary gland biopsy 3 pts (11–20 min); billed 88305' },
+    { name: 'Parotid gland', match: 'parotid; parotid gland', minutes: 25, addMinutes: 8, slides: 4,
+        basis: 'Parotidectomy 5 pts (21–30 min); billed 88307' },
     { name: 'Hemorrhoids', match: 'hemorrhoids; hemorrhoid', minutes: 3, addMinutes: 3, slides: 1,
         basis: 'Haemorrhoids 1 pt (1–5 min)' },
     { name: 'Liver biopsy, medical', match: 'liver biopsy, random; liver biopsy', minutes: 25, addMinutes: 8, slides: 3,
@@ -233,8 +257,12 @@ const CD_STARTER_TYPES = [
         basis: 'Adrenalectomy 5 pts (21–30 min)' },
     { name: 'Pilonidal sinus', match: 'pilonidal', minutes: 3, addMinutes: 3, slides: 2,
         basis: 'Pilonidal sinus 1 pt (1–5 min)' },
-    { name: 'Skin / soft tissue, named site', match: 'scalp; lip; cheek; areola; umbilicus; perineum; supraclavicular; plantar wart; abdominoplasty', minutes: 3, addMinutes: 3, slides: 3,
-        basis: 'Skin / benign soft tissue 1 pt (1–5 min)' },
+    { name: 'Skin / soft tissue, named site', match: 'scalp; lip; areola; umbilicus; perineum; supraclavicular', minutes: 3, addMinutes: 3, slides: 3,
+        basis: 'Skin / benign soft tissue 1 pt (1–5 min); billed 88304' },
+    { name: 'Abdominoplasty', match: 'abdominoplasty; panniculectomy', minutes: 3, addMinutes: 3, slides: 3,
+        basis: 'Skin / benign soft tissue 1 pt (1–5 min); billed 88302' },
+    { name: 'Cheek / plantar wart', match: 'cheek; plantar wart', minutes: 3, addMinutes: 3, slides: 3,
+        basis: 'Skin / benign soft tissue 1 pt (1–5 min); billed 88305' },
     { name: 'Breast reconstruction', match: 'breast reconstruction; capsule', minutes: 3, addMinutes: 3, slides: 3,
         basis: 'Breast capsule / benign tissue 1 pt (1–5 min)' },
     { name: 'Breast biopsy (not core)', match: 'breast biopsy', minutes: 15, addMinutes: 15, slides: 5, services: [['wfh', 1], ['huntley', 2]],
@@ -245,8 +273,10 @@ const CD_STARTER_TYPES = [
         basis: 'Neurosurgical tumour resection 5 pts (21–30 min)' },
     { name: 'Dura, non-tumor', match: 'dura matter, other than tumor resection', minutes: 3, addMinutes: 3, slides: 1,
         basis: 'Simple benign specimen 1 pt (1–5 min)' },
-    { name: 'Resection for tumor, other', match: 'stomach tumor; radical resection; resection for tumor; retroperitoneal mass', minutes: 40, addMinutes: 10, slides: 23.5, services: [['bigs', 1]],
-        basis: 'Resection for tumour 8 pts (31–50 min)' },
+    { name: 'Resection for tumor, other', match: 'stomach tumor; radical resection; resection for tumor', minutes: 40, addMinutes: 10, slides: 23.5, services: [['bigs', 1]],
+        basis: 'Resection for tumour 8 pts (31–50 min); billed 88309' },
+    { name: 'Retroperitoneal mass', match: 'retroperitoneal mass', minutes: 25, addMinutes: 8, slides: 7, services: [['bigs', 1]],
+        basis: 'Mass excision 5 pts (21–30 min); billed 88307' },
     // Pericardial tissue (6 cases in the Nov 19 report, all 88304 surgical;
     // fluids come as "Body fluid", which also claims "pericardial fluid").
     { name: 'Pericardium', match: 'pericardial; pericardium', minutes: 3, addMinutes: 3, slides: 3,
@@ -268,9 +298,42 @@ const CD_MATCH_ADDITIONS = {
 // Starter types added in a seed version: a customized list gets them on
 // upgrade (unless it already has a type of that name).
 const CD_ADDED_TYPES = {
-    6: ['Extra block / clot section', 'H&E level (cytology)', 'Bone biopsy', 'Bone fragments', 'Digit amputation', 'Digit amputation, traumatic', 'Limb amputation', 'Tendon / ganglion / disc', 'Arterial plaque', 'Thrombus / hematoma', 'Prostate TURP', 'Radical prostatectomy', 'Vas deferens', 'Bladder biopsy', 'Testis tumor', 'Scrotum / hydrocele / foreskin', 'Ureter / urethra', 'Urine cytology', 'Abscess / aspirate (cytology)', 'Synovial fluid crystals', 'Hysterectomy', 'Fibroid (myomectomy)', 'Cervical LEEP / cone', 'Cervix / vagina / vulva biopsy', 'Ovary / adnexa', 'Lung biopsy (bronchoscopic)', 'Lung wedge', 'Lung lobectomy', 'Pleura', 'Mediastinum / thymus', 'Parathyroid', 'Sinus / turbinate / nose', 'Larynx / pharynx / trachea biopsy', 'Salivary gland', 'Hemorrhoids', 'Liver biopsy, medical', 'Liver biopsy, lesion', 'Colostomy / stoma', 'Omentum', 'Spleen', 'Adrenal gland', 'Pilonidal sinus', 'Skin / soft tissue, named site', 'Breast reconstruction', 'Breast biopsy (not core)', 'Brain biopsy', 'Brain / dura / pituitary tumor', 'Dura, non-tumor', 'Resection for tumor, other'],
+    6: ['Extra block / clot section', 'H&E level (cytology)', 'Bone biopsy', 'Bone fragments', 'Digit amputation', 'Digit amputation, traumatic', 'Limb amputation', 'Tendon / ganglion / disc', 'Arterial plaque', 'Thrombus / hematoma', 'Prostate TURP', 'Radical prostatectomy', 'Vas deferens', 'Bladder biopsy', 'Testis tumor', 'Scrotum / foreskin', 'Ureter / urethra', 'Urine cytology', 'Abscess / aspirate (cytology)', 'Synovial fluid crystals', 'Hysterectomy', 'Fibroid (myomectomy)', 'Cervical LEEP / cone', 'Cervix / vagina / vulva biopsy', 'Ovary / adnexa', 'Lung biopsy (bronchoscopic)', 'Lung wedge', 'Lung lobectomy', 'Pleura', 'Mediastinum', 'Parathyroid', 'Ethmoid / nose biopsy', 'Larynx / trachea / uvula biopsy', 'Salivary gland biopsy', 'Hemorrhoids', 'Liver biopsy, medical', 'Liver biopsy, lesion', 'Colostomy / stoma', 'Omentum', 'Spleen', 'Adrenal gland', 'Pilonidal sinus', 'Skin / soft tissue, named site', 'Breast reconstruction', 'Breast biopsy (not core)', 'Brain biopsy', 'Brain / dura / pituitary tumor', 'Dura, non-tumor', 'Resection for tumor, other'],
     7: ['Pericardium'],
+    // A list that only now gains Ovary / adnexa (from 6) also needs its other half.
+    9: ['Ovary + tube / ovarian cyst'],
+    11: ['Fallopian tube, ectopic'],
+    10: ['Thymus', 'Parotid gland', 'Turbinates / sinus curettage', 'Pharynx', 'Tenosynovium', 'Hydrocele', 'Testis biopsy', 'Abdominoplasty', 'Cheek / plantar wart', 'Retroperitoneal mass'],
 };
+// Types split in two (seed version 9, from the 2026 AP report: the halves
+// bill differently and, for colon and nodes, take far more slides). On
+// upgrade the old row becomes "keep" — renamed, narrower words, its code —
+// and "add" is created with the old row's services, readers and Delnor
+// setting. Minutes and slides change only where still the old starter's;
+// an edited value also goes to the new half where it wasn't meant to differ.
+// Seed version 10 split the small mixed-code rows the same way, so every
+// row carries one billing code.
+const CD_SPLITS = [
+    { v: 9, from: 'Colon resection', keep: 'Colon resection', add: ['Colon resection, malignant'], was: { minutes: 15, addMinutes: 8, slides: 11.5 } },
+    { v: 9, from: 'Sentinel / lymph node', keep: 'Lymph node', add: ['Sentinel node / dissection / lymphoma'], was: { minutes: 15, addMinutes: 8, slides: 3.5 } },
+    { v: 9, from: 'Nasal contents / septum', keep: 'Nasal contents', add: ['Nasal septum'], was: { minutes: 3, addMinutes: 3, slides: 1 } },
+    { v: 9, from: 'Ovary / adnexa', keep: 'Ovary / adnexa', add: ['Ovary + tube / ovarian cyst'], was: { minutes: 8, addMinutes: 8, slides: 4 } },
+    { v: 10, from: 'Mediastinum / thymus', keep: 'Mediastinum', add: ['Thymus'], was: { minutes: 15, addMinutes: 8, slides: 7.5 } },
+    { v: 10, from: 'Salivary gland', keep: 'Salivary gland biopsy', add: ['Parotid gland'], was: { minutes: 15, addMinutes: 8, slides: 4 } },
+    { v: 10, from: 'Sinus / turbinate / nose', keep: 'Ethmoid / nose biopsy', add: ['Turbinates / sinus curettage'], was: { minutes: 3, addMinutes: 3, slides: 3 } },
+    { v: 10, from: 'Larynx / pharynx / trachea biopsy', keep: 'Larynx / trachea / uvula biopsy', add: ['Pharynx'], was: { minutes: 8, addMinutes: 3, slides: 3 } },
+    { v: 10, from: 'Tendon / ganglion / disc', keep: 'Tendon / ganglion / disc', add: ['Tenosynovium'], was: { minutes: 3, addMinutes: 3, slides: 1 } },
+    { v: 10, from: 'Scrotum / hydrocele / foreskin', keep: 'Scrotum / foreskin', add: ['Hydrocele', 'Testis biopsy'], was: { minutes: 3, addMinutes: 3, slides: 3 } },
+    { v: 10, from: 'Skin / soft tissue, named site', keep: 'Skin / soft tissue, named site', add: ['Abdominoplasty', 'Cheek / plantar wart'], was: { minutes: 3, addMinutes: 3, slides: 3 } },
+    { v: 10, from: 'Resection for tumor, other', keep: 'Resection for tumor, other', add: ['Retroperitoneal mass'], was: { minutes: 40, addMinutes: 10, slides: 23.5 } },
+    // v11: ectopics bill 88305 (CPT Level IV), sterilizations 88302 (Level II).
+    { v: 11, from: 'Fallopian tubes', keep: 'Fallopian tubes', add: ['Fallopian tube, ectopic'], was: { minutes: 3, addMinutes: 3, slides: 3 } },
+];
+// Starter codes changed after they were seeded: [version, type, old, new] —
+// a row still showing the old codes gets the new ones.
+const CD_CODE_UPDATES = [
+    [12, 'FNA', '88173', '88173, 88177'],
+];
 // Types dropped from the list on upgrade — their lines are priced by CPT
 // code (decal and Diff-Quik 0 min; special stains as stains).
 const CD_REMOVED_TYPES = ['Decalcification', 'Rapid adequacy slides (Diff-Quik)', 'Special stain'];
@@ -288,6 +351,144 @@ const CD_OLD_STARTER_NAMES = ['Bone marrow', 'Large resection', 'Lymph node / ly
     'Two blocks specimen', 'Nasal contents / septum', 'Femoral head', 'Heart valve',
     'Rapid adequacy slides (Diff-Quik)', 'ThinPrep slide (non-gyn)', 'Extra levels', 'Special stain',
     'Adenoids / tonsils', 'Hernia sac', 'Gross only / stones', 'Decalcification'];
+
+// Medicare RVUs by CPT code — [work RVU, professional (-26) total RVU, the
+// facility total for codes billed professional-only] — from the CMS 2026
+// National Physician Fee Schedule Relative Value File, October release
+// (RVU26D, released 08/26/2026), pathology codes only. The Case types table
+// shows the work RVU of each type's billing codes.
+const CD_RVU = {
+    '85060': [0.44, 0.57], '85097': [0.92, 1.17], '88104': [0.55, 0.80], '88106': [0.36, 0.53],
+    '88108': [0.43, 0.64], '88112': [0.55, 0.78], '88120': [1.17, 1.63], '88121': [0.98, 1.36],
+    '88125': [0.25, 0.38], '88141': [0.25, 0.72], '88160': [0.49, 0.72], '88161': [0.49, 0.72],
+    '88162': [0.74, 1.10], '88172': [0.67, 0.99], '88173': [1.36, 1.96], '88177': [0.41, 0.61],
+    '88182': [0.75, 1.05], '88184': [0.00, 2.43], '88185': [0.00, 0.69], '88187': [0.72, 1.05],
+    '88188': [1.17, 1.75], '88189': [1.66, 2.37], '88291': [0.51, 0.99], '88300': [0.08, 0.13],
+    '88302': [0.13, 0.20], '88304': [0.21, 0.31], '88305': [0.73, 1.05], '88307': [1.55, 2.29],
+    '88309': [2.73, 4.03], '88311': [0.23, 0.34], '88312': [0.53, 0.75], '88313': [0.23, 0.34],
+    '88314': [0.44, 0.56], '88319': [0.52, 0.76], '88321': [1.59, 2.02], '88323': [1.78, 2.49],
+    '88325': [2.78, 3.37], '88329': [0.65, 0.84], '88331': [1.16, 1.73], '88332': [0.58, 0.87],
+    '88333': [1.17, 1.72], '88334': [0.71, 1.05], '88341': [0.55, 0.80], '88342': [0.68, 0.98],
+    '88344': [0.75, 1.08], '88346': [0.72, 1.00], '88348': [1.47, 2.16], '88350': [0.58, 0.82],
+    '88355': [1.80, 2.35], '88356': [2.73, 3.37], '88358': [0.93, 1.38], '88360': [0.83, 1.17],
+    '88361': [0.93, 1.21], '88362': [2.12, 3.15], '88363': [0.36, 0.46], '88364': [0.68, 0.95],
+    '88365': [0.86, 1.21], '88366': [1.21, 1.73], '88367': [0.71, 0.93], '88368': [0.86, 1.20],
+    '88369': [0.68, 0.96], '88371': [0.36, 0.54], '88372': [0.36, 0.53], '88373': [0.57, 0.71],
+    '88374': [0.91, 1.18], '88375': [0.89, 1.35], '88377': [1.37, 1.82], '88380': [1.11, 1.45],
+    '88381': [0.52, 0.66], '88387': [0.60, 0.76], '89060': [0.36, 0.53],
+};
+
+// Each starter case type's billing codes: the CPT codes its specimens were
+// billed under on the AP case report of Nov 19 2026 (every code on at least
+// 1 in 10 of its specimens, commonest first). Editable per type.
+const CD_TYPE_CODES = {
+    'Abscess / aspirate (cytology)': '88108',
+    'Adenoids / tonsils': '88304',
+    'Adrenal gland': '88307',
+    Appendix: '88304',
+    'Arterial plaque': '88304',
+    'Biopsy (H&E levels)': '88305',
+    'Bladder TURBT': '88307',
+    'Bladder biopsy': '88305',
+    'Body fluid': '88108',
+    'Bone biopsy': '88305',
+    'Bone fragments': '88304',
+    'Bone marrow': '88305, 85097',
+    'Brain / dura / pituitary tumor': '88307',
+    'Brain biopsy': '88307',
+    'Breast biopsy (not core)': '88305',
+    'Breast core biopsy': '88305',
+    'Breast lumpectomy / excision': '88307',
+    'Breast margin': '88307',
+    'Breast reconstruction': '88305',
+    'Breast reduction': '88305',
+    'Bronchial washing / brushing': '88104',
+    'Cell block': '88305',
+    'Cervical LEEP / cone': '88307',
+    'Cervix / vagina / vulva biopsy': '88305',
+    'Colon resection': '88307',
+    'Colon resection, malignant': '88309',
+    'Colostomy / stoma': '88304',
+    'Digit amputation, traumatic': '88302',
+    'Digit amputation': '88305',
+    'Dura, non-tumor': '88305',
+    'Endometrial curettings': '88305',
+    'Extra block / clot section': '88305, 88311',
+    // FNA: the read (88173) and the on-site adequacy looks — coders bill each
+    // look as 88177 and later change the first to 88172.
+    FNA: '88173, 88177',
+    'Needle core biopsy (cytology)': '88305',
+    'Fallopian tubes': '88302',
+    'Fallopian tube, ectopic': '88305',
+    'Femoral head': '88304',
+    'Fibroid (myomectomy)': '88305',
+    'GI biopsy / polyp': '88305',
+    Gallbladder: '88304',
+    'Gross only / stones': '88300',
+    'H&E level (cytology)': '88305',
+    'Heart valve': '88305',
+    Hemorrhoids: '88304',
+    'Hernia sac': '88302',
+    Hysterectomy: '88307',
+    'Kidney (nephrectomy)': '88307',
+    'Larynx / trachea / uvula biopsy': '88305',
+    Pharynx: '88304',
+    'Limb amputation': '88307',
+    'Lipoma / soft tissue': '88304',
+    'Liver biopsy, lesion': '88307',
+    'Liver biopsy, medical': '88307',
+    'Lung biopsy (bronchoscopic)': '88305',
+    'Lung lobectomy': '88309',
+    'Lung wedge': '88307',
+    Mastectomy: '88307',
+    Mediastinum: '88304',
+    Thymus: '88307',
+    'Nasal contents': '88305',
+    'Nasal septum': '88304',
+    Omentum: '88305',
+    'Oral / tongue biopsy': '88305',
+    'Ovary / adnexa': '88307',
+    'Ovary + tube / ovarian cyst': '88305',
+    Parathyroid: '88305',
+    Pericardium: '88304',
+    'Pilonidal sinus': '88304',
+    Placenta: '88307',
+    Pleura: '88305',
+    'Products of conception': '88305',
+    'Prostate TURP': '88305',
+    'Prostate biopsy': '88305',
+    'Radical prostatectomy': '88309',
+    'Resection for tumor, other': '88309',
+    'Retroperitoneal mass': '88307',
+    'Salivary gland biopsy': '88305',
+    'Parotid gland': '88307',
+    'Scrotum / foreskin': '88304',
+    Hydrocele: '88302',
+    'Testis biopsy': '88305',
+    'Lymph node': '88305',
+    'Sentinel node / dissection / lymphoma': '88307',
+    'Ethmoid / nose biopsy': '88305',
+    'Turbinates / sinus curettage': '88304',
+    'Skin / soft tissue, named site': '88304',
+    Abdominoplasty: '88302',
+    'Cheek / plantar wart': '88305',
+    'Skin biopsy': '88305',
+    'Sleeve gastrectomy (stomach, portion)': '88307',
+    'Small bowel resection': '88307',
+    Spleen: '88305',
+    'Synovial fluid crystals': '89060',
+    'Temporal artery biopsy': '88305',
+    'Tendon / ganglion / disc': '88304',
+    Tenosynovium: '88305',
+    'Testis tumor': '88309',
+    'ThinPrep slide (non-gyn)': '88112',
+    'Thrombus / hematoma': '88304',
+    'Thyroid resection': '88307',
+    'Two blocks specimen': '88304',
+    'Ureter / urethra': '88304',
+    'Urine cytology': '88108, 88112',
+    'Vas deferens': '88302',
+};
 
 // Fallback for a part no case type recognizes: [first unit, each additional]
 // minutes by CPT code (the export's "88305G" / "88305G.PROSTATE" → 88305),
@@ -393,15 +594,17 @@ function cdEnsureListener() {
         cdSettings = v.settings || {};
         cdLedger = v.ledger || {};
         cdLoaded = true;
+        // Re-split the list only when what splits it changed (case types,
+        // FTE, defaults) — not for a record being written (Record's own
+        // write would otherwise re-split the list it just recorded). Noted
+        // before anything below returns: a list split right here (the
+        // script's, below) must not count the next record as a change.
+        const sig = JSON.stringify([cdTypes, cdFte, cdSettings], (k, val) => (k === 'codes' ? undefined : val));
+        const changed = sig !== _cdSplitInputs;
+        _cdSplitInputs = sig;
         if (v.seeded !== CD_SEED_VERSION && isAdmin()) { cdSeedTypes(v.types, v.seeded); return; }
         // A list the AutoHotkey script handed over before the settings loaded.
         if (cdPendingAuto !== null) { cdAutoRun(cdPendingAuto); return; }
-        // Re-split the list only when what splits it changed (case types,
-        // FTE, defaults) — not for a record being written (Record's own
-        // write would otherwise re-split the list it just recorded).
-        const sig = JSON.stringify([cdTypes, cdFte, cdSettings]);
-        const changed = sig !== _cdSplitInputs;
-        _cdSplitInputs = sig;
         if (cdTable && changed) cdBuildCases();
         if (cdPageActive()) renderCasesPage();
     }, err => console.error('Firebase caseDist error:', err));
@@ -427,6 +630,7 @@ function cdSignedOut() {
 function cdStarterRow(t) {
     const row = { name: t.name, match: t.match, minutes: t.minutes, addMinutes: t.addMinutes, basis: t.basis };
     if (t.slides !== undefined) row.slides = t.slides;
+    if (CD_TYPE_CODES[t.name]) row.codes = CD_TYPE_CODES[t.name];
     if (t.services) row.services = Object.fromEntries(t.services);
     if (t.readers) {
         const readers = {};
@@ -457,6 +661,38 @@ function cdSeedTypes(existing, fromVersion) {
         updates.types = types;
     } else {
         const have = new Set(old.map(t => cdNorm(t.name)));
+        {
+            CD_SPLITS.filter(sp => (Number(fromVersion) || 0) < sp.v).forEach(sp => {
+                const hit = Object.entries(existing || {}).find(([, t]) => t.name === sp.from);
+                if (!hit) return;
+                const [id, t] = hit;
+                const keep = CD_STARTER_TYPES.find(x => x.name === sp.keep);
+                const base = 'types/' + id + '/';
+                updates[base + 'name'] = keep.name;
+                updates[base + 'match'] = keep.match;
+                updates[base + 'codes'] = CD_TYPE_CODES[keep.name];
+                updates[base + 'basis'] = keep.basis;
+                ['minutes', 'addMinutes', 'slides'].forEach(f => {
+                    if (t[f] === undefined || Number(t[f]) === sp.was[f]) updates[base + f] = keep[f];
+                });
+                have.add(cdNorm(keep.name));
+                sp.add.map(n => CD_STARTER_TYPES.find(x => x.name === n)).forEach(add => {
+                    if (have.has(cdNorm(add.name))) return;
+                    const row = cdStarterRow(add);
+                    delete row.services; delete row.readers;
+                    // A value the director set on the old row carries over where
+                    // the new half wasn't meant to differ from it.
+                    ['minutes', 'addMinutes', 'slides'].forEach(f => {
+                        if (add[f] === sp.was[f] && t[f] !== undefined && Number(t[f]) !== sp.was[f]) row[f] = t[f];
+                    });
+                    if (t.services) row.services = t.services;
+                    if (t.readers) row.readers = t.readers;
+                    if (t.delnor) row.delnor = true;
+                    updates['types/' + db.ref('scheduler/caseDist/types').push().key] = row;
+                    have.add(cdNorm(add.name));
+                });
+            });
+        }
         for (let v = (Number(fromVersion) || 0) + 1; v <= CD_SEED_VERSION; v++) {
             (CD_ADDED_TYPES[v] || []).forEach(name => {
                 const t = CD_STARTER_TYPES.find(x => x.name === name);
@@ -469,6 +705,10 @@ function cdSeedTypes(existing, fromVersion) {
         Object.entries(existing || {}).forEach(([id, t]) => {
             const s = CD_STARTER_TYPES.find(x => x.name === t.name);
             if (s && s.slides !== undefined && t.slides === undefined) updates['types/' + id + '/slides'] = s.slides;
+            if (t.codes === undefined && CD_TYPE_CODES[t.name]) updates['types/' + id + '/codes'] = CD_TYPE_CODES[t.name];
+            CD_CODE_UPDATES.forEach(([v, name, was, now]) => {
+                if ((Number(fromVersion) || 0) < v && t.name === name && t.codes === was) updates['types/' + id + '/codes'] = now;
+            });
             // "Thyroid FNA" was matching Thyroid resection (longer phrase).
             const phrases = cdPhrases(t);
             const add = (CD_MATCH_ADDITIONS[t.name] || []).filter(p => !phrases.includes(p));
@@ -513,14 +753,39 @@ function cdShortName(p) {
 // What the AutoHotkey script types for a pathologist in Epic's assign
 // window: their whole last name, unless set otherwise on the Pathologists tab.
 function cdEpicName(pid) {
+    const dp = cdPath(pid);
+    if (dp && dp.delnor) return String(dp.epic || '').trim() || cdLastName(dp);
     const set = String(cdEpic[pid] || '').trim();
     if (set) return set;
     const p = cdPath(pid);
     return p ? cdLastName(p) : '';
 }
 
+// A pathologist — or one of Delnor's ("d:<rid>", from delnor.js's roster),
+// as a look-alike record { id, name, color, delnor, rid, epic }.
 function cdPath(pid) {
-    return pathologists.find(p => String(p.id) === String(pid)) || null;
+    const s = String(pid);
+    if (s.startsWith('d:')) {
+        const rid = s.slice(2);
+        const r = typeof delnorRoster !== 'undefined' ? delnorRoster[rid] : null;
+        return r ? { id: s, name: r.name || '', color: 'var(--delnor)', delnor: true, rid, epic: r.epic || '' } : null;
+    }
+    return pathologists.find(p => String(p.id) === s) || null;
+}
+
+// A person's tag: the pathologist's schedule colour, Delnor's teal.
+function cdTag(pid) {
+    const p = cdPath(pid);
+    if (p && p.delnor) return `<span class="ch-tag ch-tag-delnor" title="Delnor">${escapeHtml(cdShortName(p))}</span>`;
+    return _pathTagHtml(pid);
+}
+
+// Ours by id, then Delnor's by name.
+function cdPidOrder(a, b) {
+    const pa = cdPath(a), pb = cdPath(b);
+    const da = pa && pa.delnor ? 1 : 0, dd = pb && pb.delnor ? 1 : 0;
+    if (da !== dd) return da - dd;
+    return da ? String(pa.name).localeCompare(String(pb.name)) : (pa ? pa.id : 0) - (pb ? pb.id : 0);
 }
 
 function cdDefaultMinutes() {
@@ -529,14 +794,16 @@ function cdDefaultMinutes() {
 }
 
 // Today in Central time, or the next working day from 5 pm on — the list
-// pulled in the evening is the next day's work.
+// pulled in the evening is the next day's work. A weekend or holiday is
+// never the day: a list pulled then is for the next working day.
 function cdDefaultDate(now = new Date()) {
     const p = {};
     new Intl.DateTimeFormat('en-US', {
         timeZone: 'America/Chicago', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hourCycle: 'h23',
     }).formatToParts(now).forEach(x => { p[x.type] = Number(x.value); });
     const d = new Date(p.year, p.month - 1, p.day);
-    return p.hour >= 17 ? nextWorkday(d) : d;
+    if (p.hour >= 17 || isWeekend(d) || getFederalHoliday(d)) return nextWorkday(d);
+    return d;
 }
 
 function cdSlideEffect() {
@@ -660,7 +927,36 @@ function cdScheduled(date) {
 }
 
 function cdWorking() {
-    return cdScheduled(cdDate);
+    return [...cdScheduled(cdDate), ...cdDelnorWorkers(cdDate)];
+}
+
+// Delnor's pathologists signed up for the day (delnor.js). Together they
+// read about a quarter of the day's case minutes — their shares add up to a
+// third of ours — split evenly, and only from the case types allowed to go
+// to Delnor (cdBuildCases: c.delnorOK). The director's rule, Nov 2026.
+const CD_DELNOR_FRACTION = 0.25;
+const CD_DELNOR_SVC = { id: 'delnor', short: 'Delnor', name: 'Delnor', cssVar: '--svc-delnor' };
+function cdDelnorWorkers(date) {
+    if (!date || typeof delnorOnDay !== 'function') return [];
+    const people = delnorOnDay(date).map(r => cdPath('d:' + r.rid)).filter(Boolean);
+    if (!people.length) return [];
+    const ours = cdScheduled(date).reduce((t, w) => t + w.share, 0);
+    const total = ours > 0 ? ours * CD_DELNOR_FRACTION / (1 - CD_DELNOR_FRACTION) : 1;
+    return people.map(p => ({ p, svc: CD_DELNOR_SVC, svcIds: ['delnor'], share: total / people.length, delnor: true }));
+}
+
+// Delnor's sign-ups changed (delnor.js): re-split when the day's people did.
+let _cdDelnorSig = '';
+function cdDelnorSig() {
+    return (cdDate ? fmt(cdDate) : '') + '|' + cdDelnorWorkers(cdDate).map(w => w.p.id).join(',');
+}
+function cdDelnorChanged() {
+    const sig = cdDelnorSig();
+    if (sig !== _cdDelnorSig) {
+        _cdDelnorSig = sig;
+        if (cdTable) { cdDistribute(); if (cdRecordedKey) cdRecordedDirty = true; }
+    }
+    if (cdPageActive()) renderCasesPage();
 }
 
 // Running surplus (+) or deficit (−) in minutes this fiscal year, from the
@@ -915,6 +1211,10 @@ function cdBuildCases() {
         g.readers = readers;
         g.services = (routed && cdServiceTiers(routed.type.services))
             || (catType && cdServiceTiers(catType.services)) || null;
+        // Delnor may read it when every specimen with time of its own is of a
+        // case type allowed to go to Delnor (stains and add-ons don't count).
+        const timed = g.parts.filter(pt => pt.minutes > 0 && !(pt.code && (CD_STAIN_RE.test(pt.code) || CD_ADDON_RE.test(pt.code))));
+        g.delnorOK = timed.length > 0 && timed.every(pt => pt.type && pt.type.delnor);
         g.assigned = null;
         g.note = '';
         if (prevPins[g.key] !== undefined) g.pinned = prevPins[g.key];
@@ -935,11 +1235,17 @@ function cdDistribute() {
     const working = cdWorking();
     const { bal } = cdBalances(cdDate, cdRecordedKey);
     const load = {};
-    working.forEach(w => { load[w.p.id] = CD_CARRY * (bal[w.p.id] || 0); });
+    // Delnor's pathologists carry nothing over: their part is fresh each day.
+    working.forEach(w => { load[w.p.id] = w.delnor ? 0 : CD_CARRY * (bal[w.p.id] || 0); });
+    const ours = working.filter(w => !w.delnor), delnor = working.filter(w => w.delnor);
 
+    // Our pathologists by readers and services. (Delnor's take their
+    // quarter first, below; they get one of the rest only when none of ours
+    // can read it.)
     const eligible = c => {
-        let el = working.filter(w => !c.readers || c.readers.has(String(w.p.id)));
+        let el = ours.filter(w => !c.readers || c.readers.has(String(w.p.id)));
         if (!el.length) {
+            if (c.delnorOK && delnor.length) return delnor;
             c.note = c.readers ? 'No reader for this case type is working' : 'No one is working';
             return el;
         }
@@ -962,7 +1268,25 @@ function cdDistribute() {
         if (c.pinned !== null && load[c.pinned] !== undefined) load[c.pinned] += c.minutes;
     });
 
-    const todo = cdCases.filter(c => c.pinned === undefined)
+    // Delnor first: a quarter of the day's case minutes, from the cases
+    // allowed to go there, largest first, each to whichever of Delnor's
+    // pathologists has least so far — skipping a case that would overshoot
+    // by more than half of itself. Less only when not enough is allowed.
+    if (delnor.length) {
+        const target = cdCases.reduce((t, c) => t + c.minutes, 0) * CD_DELNOR_FRACTION;
+        let have = delnor.reduce((t, w) => t + load[w.p.id], 0);
+        cdCases.filter(c => c.pinned === undefined && c.delnorOK)
+            .sort((a, b) => b.minutes - a.minutes || a.seq - b.seq)
+            .forEach(c => {
+                if (have >= target || have + c.minutes / 2 > target) return;
+                const w = delnor.reduce((a, b) => (load[b.p.id] < load[a.p.id] ? b : a));
+                c.assigned = w.p.id;
+                load[w.p.id] += c.minutes;
+                have += c.minutes;
+            });
+    }
+
+    const todo = cdCases.filter(c => c.pinned === undefined && c.assigned == null)
         .map(c => ({ c, el: eligible(c) }))
         .sort((a, b) => (a.el.length - b.el.length) || (b.c.minutes - a.c.minutes));
     todo.forEach(({ c, el }) => {
@@ -975,6 +1299,9 @@ function cdDistribute() {
         c.assigned = best.p.id;
         load[best.p.id] += c.minutes;
     });
+    // The Delnor sign-ups this split used: only a real change to them
+    // re-splits (cdDelnorChanged), not the first Delnor update after it.
+    _cdDelnorSig = cdDelnorSig();
 }
 
 // Per-pathologist totals for the current distribution; `expected` is the
@@ -1062,6 +1389,7 @@ function cdRestoreSplit() {
 function cdSetDate(d) {
     cdKeepSplit();
     cdDate = d;
+    _cdDelnorSig = cdDelnorSig();
     cdRecordedKey = null; cdRecordedDirty = false; cdRecordedAt = null;
     if (cdTable) {
         const restored = cdRestoreSplit();
@@ -1116,6 +1444,7 @@ function cdSvcPill(svc) {
 // A case number as the line's tag, in its pathologist's colour (red: no one).
 function cdAccTag(c) {
     const p = c.assigned != null ? cdPath(c.assigned) : null;
+    if (p && p.delnor) return `<span class="ch-tag ch-tag-delnor cd-acc-tag">${escapeHtml(c.id || '—')}</span>`;
     const bg = p ? pathBgColor(p.color) : null;
     return p
         ? `<span class="ch-tag ch-tag-path cd-acc-tag" style="--c:${p.color}${bg ? `; --c-bg:${bg}` : ''}">${escapeHtml(c.id || '—')}</span>`
@@ -1193,10 +1522,13 @@ function cdCaseDetail(c) {
         ? 'Goes to ' + cdSvcNames(c.services[0]) + (c.services[1].size ? ', else ' + cdSvcNames(c.services[1]) : '')
         : c.readers ? 'Read by ' + [...c.readers].map(id => cdPath(id)).filter(Boolean).map(cdShortName).join(' or ')
             : 'Shared to even out the day';
-    const pathOpts = pathologists.filter(p => typeof p.id === 'number');
+    const routeTxt = route + (c.delnorOK ? ' · Delnor may read it' : '');
+    // Our pathologists, then Delnor's signed up that day (and whoever has it).
+    const pathOpts = [...pathologists.filter(p => typeof p.id === 'number'), ...cdDelnorWorkers(cdDate).map(w => w.p)];
+    if (c.assigned != null && !pathOpts.some(p => String(p.id) === String(c.assigned)) && cdPath(c.assigned)) pathOpts.push(cdPath(c.assigned));
     const sel = `<select class="cd-assign" data-cd-case="${escapeHtml(c.key)}" aria-label="Pathologist for ${escapeHtml(c.id)}">
         <option value=""${c.assigned == null ? ' selected' : ''}>Not assigned</option>
-        ${pathOpts.map(p => `<option value="${p.id}"${String(c.assigned) === String(p.id) ? ' selected' : ''}>${escapeHtml(cdShortName(p))}</option>`).join('')}
+        ${pathOpts.map(p => `<option value="${escapeHtml(String(p.id))}"${String(c.assigned) === String(p.id) ? ' selected' : ''}>${escapeHtml(cdShortName(p))}${p.delnor ? ' (Delnor)' : ''}</option>`).join('')}
       </select>`;
     const unknown = cdUnknownParts(c);
     return `<table class="ch-table cd-parts"><thead><tr><th>Specimen</th><th>Counted as</th><th>Units</th><th>Minutes</th></tr></thead>
@@ -1205,7 +1537,7 @@ function cdCaseDetail(c) {
       <div class="cd-detail-actions">
         <label class="cd-detail-who">Pathologist ${sel}</label>
         ${c.pinned !== undefined ? `<button type="button" class="cd-btn cd-btn-sm" data-cd-unpin="${escapeHtml(c.key)}" title="Let the app choose again">Undo set by hand</button>` : ''}
-        <span>${escapeHtml(route)}</span>
+        <span>${escapeHtml(routeTxt)}</span>
         ${c.note ? `<span class="cd-flag">${escapeHtml(c.note)}</span>` : ''}
         ${unknown.map(pt => `<button type="button" class="cd-btn cd-btn-sm" data-cd-addtype="${escapeHtml(pt.name)}" data-cd-addcode="${pt.code || ''}">Add “${escapeHtml(pt.name.length > 28 ? pt.name.slice(0, 27) + '…' : pt.name)}” as a case type</button>`).join('')}
       </div>`;
@@ -1224,7 +1556,7 @@ function cdHeaderHtml() {
     const nTypes = Object.keys(cdTypes).length;
     const tab = (k, label, n) => `<button class="req-tab${cdTab === k ? ' active' : ''}" type="button" data-cd-tab="${k}"><span>${label}</span>${n != null ? `<span class="req-tab-count">${n}</span>` : ''}</button>`;
     return `<header class="tl-header">
-        <h2 class="tl-title">Cases</h2>
+        <h2 class="tl-title">Assign</h2>
         <div class="cd-head-right">
           ${day ? `<div class="cd-day-nav">
               <button class="nav-btn" type="button" data-cd-day="-1" title="Previous working day" aria-label="Previous working day">‹</button>
@@ -1261,11 +1593,11 @@ function cdDayHtml() {
                 ...unknown.map(cdUnknownLine),
             ]));
         }
-        const rows = Object.values(t.rows).filter(r => cdPath(r.pid)).sort((a, b) => cdPath(a.pid).id - cdPath(b.pid).id);
+        const rows = Object.values(t.rows).filter(r => cdPath(r.pid)).sort((a, b) => cdPidOrder(a.pid, b.pid));
         rows.forEach(r => {
             const p = cdPath(r.pid);
             const mine = cdCases.filter(c => String(c.assigned) === String(r.pid)).sort((a, b) => a.seq - b.seq);
-            const head = `<span class="cd-sec-path">${_pathTagHtml(p.id)}${r.w ? cdSvcPill(r.w.svc) : '<span class="cd-muted">not working</span>'}
+            const head = `<span class="cd-sec-path">${cdTag(p.id)}${r.w ? cdSvcPill(r.w.svc) : '<span class="cd-muted">not working</span>'}
                 <span class="cd-sec-meta">${mine.length} case${mine.length === 1 ? '' : 's'} · ${escapeHtml(cdFmtMin(r.minutes))} ${cdDiffHtml(r.minutes - r.expected)}</span></span>`;
             secs.push(cdSecHtml('p' + p.id, head, null,
                 mine.map(c => cdLineHtml('day', 'p' + p.id + '|' + c.key, cdAccTag(c), cdCaseText(c), null, () => cdCaseDetail(c), cdCaseLabel(c))),
@@ -1274,7 +1606,7 @@ function cdDayHtml() {
         list = secs.join('');
     }
     return `<div class="cf-body">
-        <div class="cf-side"><div class="cf-list" aria-label="Cases">${list}</div></div>
+        <div class="cf-side"><div class="cf-list" aria-label="Assign">${list}</div></div>
         <section class="cf-cal" aria-label="The day"><div class="cd-panel">
           ${has ? cdWorkloadCard(t) : ''}${cdWorkingCard()}${has ? cdListCard() : ''}
         </div></section>
@@ -1282,14 +1614,14 @@ function cdDayHtml() {
 }
 
 function cdWorkloadCard(t) {
-    const rows = Object.values(t.rows).filter(r => cdPath(r.pid)).sort((a, b) => cdPath(a.pid).id - cdPath(b.pid).id);
+    const rows = Object.values(t.rows).filter(r => cdPath(r.pid)).sort((a, b) => cdPidOrder(a.pid, b.pid));
     const max = Math.max(1, ...rows.map(r => Math.max(r.minutes, r.expected))) * 1.04;
     return `<section class="cd-card">
         <h3 class="cd-card-h">Workload <span>${cdCases.length} cases · ${escapeHtml(cdFmtMin(t.total))}</span></h3>
         <div class="cd-load" title="Bar: estimated time · tick: fair share">
           ${rows.map(r => {
               const p = cdPath(r.pid);
-              return `<button type="button" class="cd-load-who" data-cd-jump="${p.id}" title="Show ${escapeHtml(cdShortName(p))}’s cases">${_pathTagHtml(p.id)}</button>
+              return `<button type="button" class="cd-load-who" data-cd-jump="${p.id}" title="Show ${escapeHtml(cdShortName(p))}’s cases">${cdTag(p.id)}</button>
                 <div class="cd-bar"><span class="cd-bar-fill" style="width:${(r.minutes / max * 100).toFixed(1)}%;--c:${p.color};"></span><span class="cd-bar-target" style="left:${(r.expected / max * 100).toFixed(1)}%;"></span></div>
                 <span class="cd-load-num">${escapeHtml(cdFmtMin(r.minutes))}</span>${cdDiffHtml(r.minutes - r.expected)}`;
           }).join('')}
@@ -1311,7 +1643,11 @@ function cdWorkingCard() {
                 <span class="cd-person-name">${escapeHtml(cdShortName(w.p))}</span>${cdSvcPill(w.svc)}
                 <span class="cd-person-meta">${(w.share < 1 ? 'share ' + w.share.toFixed(2) + ' · ' : '') + balTxt}</span>
               </span>`;
-        }).join('') : '<span class="cd-muted">No one is on a service this day.</span>'}</div>
+        }).join('') : '<span class="cd-muted">No one is on a service this day.</span>'}${cdDelnorWorkers(cdDate).map(w => `<span class="cd-person cd-person-delnor">
+                <span class="cd-dot" style="--c:var(--delnor);"></span>
+                <span class="cd-person-name">${escapeHtml(cdShortName(w.p))}</span>${cdSvcPill(w.svc)}
+                <span class="cd-person-meta">signed up</span>
+              </span>`).join('')}</div>
       </section>`;
 }
 
@@ -1343,17 +1679,33 @@ function cdListCard() {
 let cdTypeSort = { key: 'name', dir: 1 };
 
 const CD_TYPE_COLS = [
-    { key: 'name', label: 'Case type', sort: true, tip: 'Hover a name for where its minutes come from (RCPath G107 time bands)' },
-    { key: 'match', label: 'Recognized by', tip: 'Words in the specimen’s name, separated by ; — whole words; the longest match wins' },
-    { key: 'minutes', label: 'First', sort: true, num: true, tip: 'Minutes for the first unit (container, core, polyp)' },
-    { key: 'addMinutes', label: 'Each more', sort: true, num: true, tip: 'Minutes for each additional unit' },
-    { key: 'slides', label: 'Slides', sort: true, num: true, tip: 'Usual slides per unit: more slides take a little longer, fewer a little less (−25% to +50%). Blank: not adjusted' },
-    { key: 'services', label: 'Goes to', tip: 'Sent to whoever is on these services. Click a service once for first choice, again for backup (2nd), again to clear' },
-    { key: 'readers', label: 'Read by', tip: 'Only these pathologists read it (bone marrows)' },
-    { key: 'del', label: '' },
+    { key: 'name', label: 'Case type', sort: true, pad: true, w: 'minmax(150px, 1.3fr)', tip: 'Hover a name for where its minutes come from (RCPath G107 time bands)' },
+    { key: 'match', label: 'Recognized by', pad: true, w: 'minmax(140px, 1.7fr)', tip: 'Words in the specimen’s name, separated by ; — whole words; the longest match wins' },
+    { key: 'codes', label: 'Billing codes', sort: true, pad: true, w: '112px', tip: 'CPT codes this type is billed under (from the Nov 19 2026 AP report); separate with commas' },
+    { key: 'rvu', label: 'Work RVU', sort: true, num: true, pad: true, w: '96px', tip: 'Medicare work RVU of each billing code, in the same order (CMS 2026 fee schedule, October release). Hover for the professional (-26) total' },
+    { key: 'minutes', label: 'First', sort: true, num: true, pad: true, w: '68px', tip: 'Minutes for the first unit (container, core, polyp)' },
+    { key: 'addMinutes', label: 'Additional', sort: true, num: true, pad: true, w: '84px', tip: 'Minutes for each additional unit' },
+    { key: 'slides', label: 'Slides', sort: true, num: true, pad: true, w: '68px', tip: 'Usual slides per unit: more slides take a little longer, fewer a little less (−25% to +50%). Blank: not adjusted' },
+    { key: 'services', label: 'Goes to', w: '196px', tip: 'Sent to whoever is on these services. Click a service once for first choice, again for backup (2nd), again to clear' },
+    { key: 'readers', label: 'Read by', w: 'calc(var(--cd-readers, 4) * 36px)', tip: 'Only these pathologists read it (bone marrows)' },
+    { key: 'delnor', label: 'Delnor', w: '56px', tip: 'May go to Delnor’s pathologists when any are signed up — about a quarter of the day’s case minutes, from these types only' },
 ];
 
+// A type's billing codes as a list: "88305, 85097" → ['88305', '85097'].
+function cdCodeList(t) {
+    return String((t && t.codes) || '').toUpperCase().match(/\b\d{4}[0-9A-Z]\b/g) || [];
+}
+function cdCodeRvu(code) { return CD_RVU[code] || null; }
+
+// Column widths someone dragged (this browser only): { key: px }.
+const CD_COLW_KEY = 'cdTypeColWidths';
+let cdColW = (() => { try { return JSON.parse(localStorage.getItem(CD_COLW_KEY)) || {}; } catch (_) { return {}; } })();
+function cdColTemplate() {
+    return CD_TYPE_COLS.map(c => (cdColW[c.key] ? cdColW[c.key] + 'px' : c.w)).join(' ');
+}
+
 function cdTypeNum(t, key) {
+    if (key === 'rvu') { const r = cdCodeList(t).map(c => cdCodeRvu(c)).filter(Boolean); return r.length ? Math.max(...r.map(x => x[0])) : null; }
     if (key === 'addMinutes') return Number.isFinite(Number(t.addMinutes)) && t.addMinutes !== undefined ? Number(t.addMinutes) : (Number(t.minutes) || 0);
     if (key === 'slides') return t.slides === undefined || t.slides === null || t.slides === '' ? null : Number(t.slides);
     return Number(t.minutes) || 0;
@@ -1362,23 +1714,36 @@ function cdTypeNum(t, key) {
 function cdTypeOrder(a, b) {
     const byName = String(a.name || '').localeCompare(String(b.name || ''));
     if (cdTypeSort.key === 'name') return cdTypeSort.dir * byName;
+    if (cdTypeSort.key === 'codes') {
+        const ca = cdCodeList(a).join(' '), cb = cdCodeList(b).join(' ');
+        if (!ca !== !cb) return ca ? -1 : 1;           // blanks last either way
+        return cdTypeSort.dir * ca.localeCompare(cb) || byName;
+    }
     const va = cdTypeNum(a, cdTypeSort.key), vb = cdTypeNum(b, cdTypeSort.key);
+    if (cdTypeSort.key === 'rvu' && (va === null) !== (vb === null)) return va === null ? 1 : -1;   // no codes: last
     return cdTypeSort.dir * ((va ?? -1) - (vb ?? -1)) || byName;
 }
 
 function cdTypeRow(t) {
     const slides = cdTypeNum(t, 'slides');
+    const codes = cdCodeList(t);
+    const rv = codes.map(c => ({ c, r: cdCodeRvu(c) }));
+    const rvText = rv.map(x => (x.r ? x.r[0].toFixed(2) : '—')).join(', ');
+    const rvTip = rv.map(x => (x.r ? `${x.c}: work ${x.r[0].toFixed(2)} · professional total ${x.r[1].toFixed(2)}` : `${x.c}: not in the CMS fee schedule`)).join('\n');
     return `<div class="cd-trow" role="row">
-        <input type="text" class="cd-input cd-t-name" id="cdtn-${t.id}" data-cd-field="name" data-cd-type="${t.id}" value="${escapeHtml(t.name || '')}"
+        <input type="text" class="cd-input cd-t-name cd-c-name" id="cdtn-${t.id}" data-cd-field="name" data-cd-type="${t.id}" value="${escapeHtml(t.name || '')}"
             aria-label="Case type name" title="${escapeHtml((t.name || '') + (t.basis ? ' — ' + t.basis : ''))}">
-        <input type="text" class="cd-input cd-t-match" data-cd-field="match" data-cd-type="${t.id}" value="${escapeHtml(t.match || '')}"
+        <input type="text" class="cd-input cd-t-match cd-c-match" data-cd-field="match" data-cd-type="${t.id}" value="${escapeHtml(t.match || '')}"
             placeholder="words in the specimen name; separate with ;" aria-label="Recognized by" title="${escapeHtml(t.match || '')}">
-        <input type="number" class="cd-input cd-t-num" data-cd-field="minutes" data-cd-type="${t.id}" min="0" max="600" step="0.5" value="${cdNum(cdTypeNum(t, 'minutes'))}" aria-label="Minutes for the first">
-        <input type="number" class="cd-input cd-t-num" data-cd-field="addMinutes" data-cd-type="${t.id}" min="0" max="600" step="0.5" value="${cdNum(cdTypeNum(t, 'addMinutes'))}" aria-label="Minutes for each more">
-        <input type="number" class="cd-input cd-t-num" data-cd-field="slides" data-cd-type="${t.id}" min="0" max="500" step="0.5" placeholder="off" value="${slides === null ? '' : cdNum(slides)}" aria-label="Usual slides">
-        <span class="cd-t-chips">${cdChips('services', t.id, t.services)}</span>
-        <span class="cd-t-chips">${cdChips('readers', t.id, t.readers)}</span>
-        <button type="button" class="cd-btn cd-btn-sm cd-del" data-cd-del="${t.id}">Delete</button>
+        <input type="text" class="cd-input cd-t-codes cd-c-codes" data-cd-field="codes" data-cd-type="${t.id}" value="${escapeHtml(codes.join(', '))}"
+            placeholder="CPT" aria-label="Billing codes" spellcheck="false" autocomplete="off" title="${escapeHtml(codes.join(', '))}">
+        <span class="cd-t-rvu cd-c-rvu" title="${escapeHtml(rvTip)}">${rvText}</span>
+        <input type="number" class="cd-input cd-t-num cd-c-minutes" data-cd-field="minutes" data-cd-type="${t.id}" min="0" max="600" step="0.5" value="${cdNum(cdTypeNum(t, 'minutes'))}" aria-label="Minutes for the first">
+        <input type="number" class="cd-input cd-t-num cd-c-addMinutes" data-cd-field="addMinutes" data-cd-type="${t.id}" min="0" max="600" step="0.5" value="${cdNum(cdTypeNum(t, 'addMinutes'))}" aria-label="Minutes for each additional">
+        <input type="number" class="cd-input cd-t-num cd-c-slides" data-cd-field="slides" data-cd-type="${t.id}" min="0" max="500" step="0.5" placeholder="off" value="${slides === null ? '' : cdNum(slides)}" aria-label="Usual slides">
+        <span class="cd-t-chips cd-c-services">${cdChips('services', t.id, t.services)}</span>
+        <span class="cd-t-chips cd-c-readers">${cdChips('readers', t.id, t.readers)}</span>
+        <span class="cd-t-dn cd-c-delnor"><input type="checkbox" class="cd-t-check" data-cd-dn="${t.id}"${t.delnor ? ' checked' : ''} aria-label="May go to Delnor"></span>
       </div>`;
 }
 
@@ -1388,10 +1753,12 @@ function cdTypesViewHtml() {
     const readers = list.filter(t => !cdServiceTiers(t.services) && cdSetOf(t.readers));
     const shared = list.filter(t => !cdServiceTiers(t.services) && !cdSetOf(t.readers));
     const head = `<div class="cd-trow cd-thead" role="row">${CD_TYPE_COLS.map(c => {
-        if (!c.sort) return `<span class="cd-th${c.num ? ' num' : ''}"${c.tip ? ` title="${escapeHtml(c.tip)}"` : ''}>${c.label}</span>`;
         const on = cdTypeSort.key === c.key;
-        return `<button type="button" class="cd-th cd-th-sort${c.num ? ' num' : ''}${on ? ' is-on' : ''}" data-cd-tsort="${c.key}" title="${escapeHtml(c.tip)}"
+        const inner = !c.sort
+            ? `<span class="cd-th"${c.tip ? ` title="${escapeHtml(c.tip)}"` : ''}>${c.label}</span>`
+            : `<button type="button" class="cd-th cd-th-sort${on ? ' is-on' : ''}" data-cd-tsort="${c.key}" title="${escapeHtml(c.tip)}"
             aria-sort="${on ? (cdTypeSort.dir > 0 ? 'ascending' : 'descending') : 'none'}">${c.label}<span class="cd-sort-arrow">${on ? (cdTypeSort.dir > 0 ? '▲' : '▼') : '↕'}</span></button>`;
+        return `<div class="cd-thc cd-c-${c.key}${c.num ? ' num' : ''}${c.pad ? ' pad' : ''}" role="columnheader">${inner}<span class="cd-grip" data-cd-grip="${c.key}" title="Drag to resize · double-click to reset" aria-hidden="true"></span></div>`;
     }).join('')}</div>`;
     const secs = [
         cdSecHtml('t-routed', 'Sent to a service', routed.length, routed.map(cdTypeRow), 'None'),
@@ -1408,7 +1775,7 @@ function cdTypesViewHtml() {
         <button type="button" class="cd-btn primary" id="cdAddType">Add case type</button>
       </div>`;
     return `<div class="cf-body cd-full">
-        <div class="cf-side">${strip}<div class="cf-list cd-types" role="table" aria-label="Case types" style="--cd-readers:${pathologists.filter(p => typeof p.id === 'number').length}">${head}${secs}</div></div>
+        <div class="cf-side">${strip}<div class="cf-list cd-types" role="table" aria-label="Case types" style="--cd-readers:${pathologists.filter(p => typeof p.id === 'number').length};--cd-cols:${cdColTemplate()}">${head}${secs}</div></div>
       </div>`;
 }
 
@@ -1445,7 +1812,14 @@ function cdPeopleViewHtml() {
         </section>
         <section class="cd-card"><p class="cd-help-text">A full-time pathologist has a daily share of 1. A part-timer’s share is their FTE, raised when they take more PTO than the full-timers so the year still comes to FTE × a full-timer’s work (never more than a full day). Half of anyone’s lead or lag is worked off with each new list. “Typed in Epic” is what the AutoHotkey script types in Epic’s case assignment window — blank means the last name.</p></section>
       </div>`;
-    return `<div class="cf-body"><div class="cf-side"><div class="cf-list" aria-label="Pathologists">${cdSecHtml('people', 'Pathologists', people.length, lines)}</div></div>
+    const dnLines = (typeof delnorRosterList === 'function' ? delnorRosterList() : []).map(r => cdLineHtml('people', 'd:' + r.rid, cdTag('d:' + r.rid),
+        `<b>Delnor</b><span class="ch-dates"> · types “${escapeHtml(cdEpicName('d:' + r.rid))}” in Epic</span>`, null,
+        () => `<div class="cd-form">
+            <label>Name</label><span>${escapeHtml(r.name)} <span class="cd-muted">(names are kept on the Delnor sign-up page)</span></span>
+            <label for="cdde-${r.rid}">Typed in Epic</label>
+            <input type="text" class="cd-input cd-input-epic" id="cdde-${r.rid}" data-dn-epic="${r.rid}" value="${escapeHtml(r.epic || '')}" placeholder="${escapeHtml(delnorLastName(r.name))}" spellcheck="false" autocomplete="off">
+          </div>`, r.name));
+    return `<div class="cf-body"><div class="cf-side"><div class="cf-list" aria-label="Pathologists">${cdSecHtml('people', 'Pathologists', people.length, lines)}${dnLines.length ? cdSecHtml('people-delnor', 'Delnor pathologists', dnLines.length, dnLines) : ''}</div></div>
         <section class="cf-cal" aria-label="Ahead or behind">${panel}</section></div>`;
 }
 
@@ -1732,7 +2106,7 @@ document.addEventListener('paste', e => {
     e.preventDefault();
     e.stopPropagation();
     if (typeof isAdmin !== 'function' || !isAdmin()) {
-        showToast('Only the director can hand a case list to the Cases page.', { type: 'error' });
+        showToast('Only the director can hand a case list to the Assign page.', { type: 'error' });
         return;
     }
     const nl = body.indexOf('\n');
@@ -1756,7 +2130,9 @@ function cdAddType(fromText, code) {
     const name = fromText ? fromText.slice(0, 60) : 'New case type';
     const [first, add] = (code && CD_CPT_MINUTES[code]) || [cdDefaultMinutes(), cdDefaultMinutes()];
     const slides = code && CD_CPT_SLIDES[code] !== undefined ? CD_CPT_SLIDES[code] : CD_DEFAULT_SLIDES;
-    ref.set({ name, match: fromText ? cdNorm(fromText).replace(/;/g, ' ') : '', minutes: first, addMinutes: add, slides })
+    const row = { name, match: fromText ? cdNorm(fromText).replace(/;/g, ' ') : '', minutes: first, addMinutes: add, slides };
+    if (code) row.codes = code;
+    ref.set(row)
         .then(() => {
             if (fromText) showToast('Added “' + name + '” at ' + cdNum(first) + ' min — adjust it on the Case types tab.');
             else {
@@ -1786,7 +2162,7 @@ function cdAfterSettingsChange() {
         if (el.classList.contains('cd-assign')) {
             const c = cdCases.find(x => x.key === el.dataset.cdCase);
             if (!c) return;
-            c.pinned = el.value === '' ? null : Number(el.value);
+            c.pinned = el.value === '' ? null : (/^d:/.test(el.value) ? el.value : Number(el.value));
             c.assigned = c.pinned;
             if (cdRecordedKey) cdRecordedDirty = true;
             // Opened in a pathologist's section: follow it to the new one.
@@ -1807,6 +2183,11 @@ function cdAfterSettingsChange() {
                     v = Math.round(Number(v) * 10) / 10;
                     if (!Number.isFinite(v) || v < 0) { showToast('Slides must be 0 or more, or blank.', { type: 'error' }); return; }
                 }
+            } else if (f === 'codes') {
+                const list = String(v).toUpperCase().match(/\b\d{4}[0-9A-Z]\b/g) || [];
+                if (v.trim() && !list.length) { showToast('Billing codes are 5-character CPT codes, like 88305.', { type: 'error' }); return; }
+                v = [...new Set(list)].join(', ');
+                el.value = v;
             } else v = v.replace(/\s+/g, ' ').trim();
             if (f === 'name' && !v) { showToast('A case type needs a name.', { type: 'error' }); return; }
             db.ref('scheduler/caseDist/types/' + el.dataset.cdType + '/' + f).set(v)
@@ -1825,6 +2206,14 @@ function cdAfterSettingsChange() {
             if (!Number.isFinite(pct) || pct < 0 || pct > 100) { showToast('Enter a percentage from 0 to 100.', { type: 'error' }); return; }
             const v = Math.round(Math.log2(1 + pct / 100) * 1000) / 1000;
             db.ref('scheduler/caseDist/settings/slideEffect').set(v).then(cdAfterSettingsChange).catch(() => {});
+        } else if (el.dataset.cdDn) {
+            db.ref('scheduler/caseDist/types/' + el.dataset.cdDn + '/delnor').set(el.checked ? true : null)
+                .then(cdAfterSettingsChange)
+                .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
+        } else if (el.dataset.dnEpic) {
+            const v = el.value.replace(/[\t\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+            db.ref('scheduler/delnor/roster/' + el.dataset.dnEpic + '/epic').set(v || null)
+                .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
         } else if (el.dataset.cdEpic) {
             const v = el.value.replace(/[\t\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
             db.ref('scheduler/caseDist/epic/' + el.dataset.cdEpic).set(v || null)
@@ -1912,17 +2301,46 @@ function cdAfterSettingsChange() {
                 : (n ? null : true);
             db.ref(path).set(next).then(cdAfterSettingsChange)
                 .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
-        } else if (d.cdDel) {
-            // Two-step delete: the first click arms the button.
-            if (!t.classList.contains('armed')) {
-                t.classList.add('armed');
-                t.textContent = 'Confirm';
-                setTimeout(() => { if (t.isConnected) { t.classList.remove('armed'); t.textContent = 'Delete'; } }, 3000);
-                return;
-            }
-            cdSel.types = null;
-            db.ref('scheduler/caseDist/types/' + d.cdDel).remove().then(cdAfterSettingsChange)
-                .catch(err => showToast('Could not delete: ' + err.message, { type: 'error' }));
         }
+    });
+})();
+
+// Case types: drag a heading's right edge to resize its column (remembered
+// in this browser); double-click the edge to put it back.
+(function wireTypeColumns() {
+    const root = document.getElementById('cdRoot');
+    if (!root) return;
+    const apply = table => table.style.setProperty('--cd-cols', cdColTemplate());
+    const save = () => { try { localStorage.setItem(CD_COLW_KEY, JSON.stringify(cdColW)); } catch (_) {} };
+    let last = { key: null, at: 0 };
+    root.addEventListener('pointerdown', e => {
+        const grip = e.target.closest('.cd-grip');
+        if (!grip || e.button !== 0) return;
+        e.preventDefault();
+        const table = grip.closest('.cd-types'), cell = grip.parentElement, key = grip.dataset.cdGrip;
+        // A second press on the same edge (the browser sends no dblclick
+        // here, the first press having started a drag): back to its default.
+        if (last.key === key && e.timeStamp - last.at < 450) {
+            last = { key: null, at: 0 };
+            delete cdColW[key];
+            save();
+            apply(table);
+            return;
+        }
+        last = { key, at: e.timeStamp };
+        const x0 = e.clientX, w0 = cell.getBoundingClientRect().width;
+        grip.setPointerCapture(e.pointerId);
+        document.body.classList.add('cd-resizing');
+        const move = ev => { cdColW[key] = Math.round(Math.max(40, Math.min(900, w0 + ev.clientX - x0))); apply(table); };
+        const up = () => {
+            grip.removeEventListener('pointermove', move);
+            grip.removeEventListener('pointerup', up);
+            grip.removeEventListener('pointercancel', up);
+            document.body.classList.remove('cd-resizing');
+            save();
+        };
+        grip.addEventListener('pointermove', move);
+        grip.addEventListener('pointerup', up);
+        grip.addEventListener('pointercancel', up);
     });
 })();

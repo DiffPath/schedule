@@ -110,7 +110,16 @@
                         <rect x="2" y="11" width="5" height="2.5" rx="0.8"/>
                         <rect x="9" y="11" width="5" height="2.5" rx="0.8"/>
                     </svg>
-                    <span>Cases</span>
+                    <span>Assign</span>
+                </button>
+                <!-- Delnor sign-up sheet — the director and the Delnor login; shown by renderSidebar(). -->
+                <button class="nav-item" data-page="delnor" style="display:none;">
+                    <svg class="nav-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="12" height="11" rx="1.5"/>
+                        <path d="M2 6.5h12M5.5 1.8v2.4M10.5 1.8v2.4"/>
+                        <path d="M5 9.5h2M5 11.8h2M9 9.5h2"/>
+                    </svg>
+                    <span>Delnor</span>
                 </button>
             </nav>
 
@@ -580,6 +589,12 @@
                  draws all of it, header included. -->
             <div class="page-shell tl-page" id="casesPage" hidden>
                 <div class="tl-content" id="cdRoot"></div>
+            </div>
+
+            <!-- Delnor sign-up page — which of Delnor's pathologists cover each
+                 working day (three slots). delnor.js draws it. -->
+            <div class="page-shell tl-page" id="delnorPage" hidden>
+                <div class="tl-content" id="dnRoot"></div>
             </div>
 
             <!-- Settings page (full main-area version of what used to be a small drawer) -->
@@ -1462,6 +1477,7 @@
     <script src="procedure-options.js"></script>
     <script src="outlook-meetings.js"></script>
     <script src="undo.js"></script>
+    <script src="delnor.js"></script>
     <script src="case-distribution.js"></script>
 
 </body>

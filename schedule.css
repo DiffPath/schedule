@@ -5715,6 +5715,7 @@ body.sidebar-scroll-locked {
 .app[data-page="changes"] .schedule-toolbar,
 .app[data-page="tracking"] .schedule-toolbar,
 .app[data-page="cases"] .schedule-toolbar,
+.app[data-page="delnor"] .schedule-toolbar,
 .app[data-page="settings"] .schedule-toolbar { display: none; }
 
 .app[data-page="conflicts"] .oc-callout-wrap,
@@ -5722,6 +5723,7 @@ body.sidebar-scroll-locked {
 .app[data-page="changes"] .oc-callout-wrap,
 .app[data-page="tracking"] .oc-callout-wrap,
 .app[data-page="cases"] .oc-callout-wrap,
+.app[data-page="delnor"] .oc-callout-wrap,
 .app[data-page="settings"] .oc-callout-wrap { display: none; }
 
 .app[data-page="conflicts"] > .content-area > main,
@@ -5729,6 +5731,7 @@ body.sidebar-scroll-locked {
 .app[data-page="changes"] > .content-area > main,
 .app[data-page="tracking"] > .content-area > main,
 .app[data-page="cases"] > .content-area > main,
+.app[data-page="delnor"] > .content-area > main,
 .app[data-page="settings"] > .content-area > main { display: none; }
 
 /* For any non-schedule page, the page-shell needs a tiny breathing room
@@ -5738,6 +5741,7 @@ body.sidebar-scroll-locked {
 .app[data-page="changes"] .page-shell,
 .app[data-page="tracking"] .page-shell,
 .app[data-page="cases"] .page-shell,
+.app[data-page="delnor"] .page-shell,
 .app[data-page="settings"] .page-shell {
     padding-top: 30px;
 }
@@ -5752,6 +5756,7 @@ body.sidebar-scroll-locked {
     .app[data-page="changes"] .schedule-toolbar,
     .app[data-page="tracking"] .schedule-toolbar,
     .app[data-page="cases"] .schedule-toolbar,
+    .app[data-page="delnor"] .schedule-toolbar,
     .app[data-page="settings"] .schedule-toolbar {
         display: flex;
         grid-template-columns: none;
@@ -5769,6 +5774,7 @@ body.sidebar-scroll-locked {
     .app[data-page="changes"] .schedule-toolbar > :not(.aside-toggle-btn),
     .app[data-page="tracking"] .schedule-toolbar > :not(.aside-toggle-btn),
     .app[data-page="cases"] .schedule-toolbar > :not(.aside-toggle-btn),
+    .app[data-page="delnor"] .schedule-toolbar > :not(.aside-toggle-btn),
     .app[data-page="settings"] .schedule-toolbar > :not(.aside-toggle-btn) {
         display: none !important;
     }
@@ -8961,7 +8967,7 @@ span.ch-day { box-sizing: border-box; cursor: default; }
     /* The top bar says the page's name, so the big title goes. The header
        (tabs) scrolls away under it — the global `header { position: sticky }`
        otherwise slid it up under the top bar. */
-    .tl-page:not(#casesPage) .tl-title { display: none; }   /* Cases keeps its own (no top-bar name) */
+    .tl-page:not(#casesPage):not(#delnorPage) .tl-title { display: none; }   /* Cases keeps its own (no top-bar name) */
     .tl-page .tl-header { position: static; }
     .tl-page .tl-header:not(:has(> :not(.tl-title):not([hidden]))) { display: none; }
     .app .page-shell.tl-page { padding-top: 14px; }
@@ -9437,7 +9443,7 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
     display: grid;
     /* Fixed tracks, so every row (its own grid) lines up with the headings.
        --cd-readers: how many pathologists, set on the table. */
-    grid-template-columns: minmax(170px, 1.3fr) minmax(160px, 1.7fr) 80px 80px 80px 196px calc(var(--cd-readers, 4) * 36px) 64px;
+    grid-template-columns: var(--cd-cols);
     align-items: center;
     gap: 10px;
     padding: 6px 14px;
@@ -9449,7 +9455,7 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
 .cd-trow > .cd-input { width: 100%; min-width: 0; }
 .cd-t-name { font-weight: 500; }
 .cd-t-num { width: 62px; text-align: right; }
-.cd-trow .cd-t-num { width: 100%; }
+.cd-trow .cd-t-num { width: 100%; text-align: left; }   /* every column reads from its left edge */
 .cd-t-chips .cd-chips { flex-wrap: nowrap; }
 .cd-t-chips .cd-chip-any { display: none; }   /* empty = any; the headings say so */
 /* Quiet fields: outlined only on the row under the mouse or while editing. */
@@ -9465,11 +9471,23 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
 /* Headings over fields start where the fields' text does (the fields'
    padding + border); number headings end where the numbers end, their sort
    arrow on the left. */
-.cd-thead > :nth-child(-n+5) { box-sizing: border-box; width: 100%; padding-left: 9px; padding-right: 9px; }
-.cd-th-sort.num { flex-direction: row-reverse; justify-content: flex-start; }
-.cd-trow > .cd-del { opacity: 0; }
-.cd-trow:hover > .cd-del, .cd-trow > .cd-del:focus, .cd-trow > .cd-del.armed { opacity: 1; }
-@media (hover: none) { .cd-trow > .cd-del { opacity: 1; } }
+.cd-thc { position: relative; display: flex; align-items: center; min-width: 0; height: 100%; box-sizing: border-box; }
+.cd-thc.pad { padding-left: 9px; padding-right: 9px; }
+.cd-thc.cd-c-delnor { justify-content: center; }
+.cd-thc > .cd-th { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The resize handle: the gap to the right of each heading. */
+.cd-grip { position: absolute; top: -8px; bottom: -8px; right: -8px; width: 8px; cursor: col-resize; z-index: 3; touch-action: none; }
+.cd-grip::after { content: ''; position: absolute; top: 6px; bottom: 6px; left: 3px; width: 2px; border-radius: 1px; background: transparent; }
+.cd-thead:hover .cd-grip::after { background: var(--rule-soft); }
+.cd-grip:hover::after, .cd-resizing .cd-grip::after { background: var(--ink-3); }
+body.cd-resizing, body.cd-resizing * { cursor: col-resize !important; user-select: none; }
+/* Wide columns can outgrow the page: the table then scrolls sideways. */
+.cd-types { overflow-x: auto; }
+.cd-types .cd-trow { min-width: min-content; }
+/* Billing: codes in the mono face (they're codes, not words); RVUs read-only. */
+.cd-trow > .cd-t-codes { font-family: var(--mono); font-size: 12px; }
+.cd-t-rvu { box-sizing: border-box; padding: 0 9px; text-align: left; font-variant-numeric: tabular-nums; font-size: 12.5px; color: var(--ink-2);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
 .cd-thead {
     position: sticky; top: 0; z-index: 2;
     padding-top: 8px; padding-bottom: 8px;
@@ -9492,8 +9510,149 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
     .cd-trow > .cd-t-name, .cd-trow > .cd-t-match { grid-column: 1 / -1; }
     .cd-trow > .cd-t-chips:nth-of-type(1) { grid-column: 1 / span 2; }
     .cd-trow > .cd-t-chips:nth-of-type(2) { grid-column: 1 / -1; }
-    .cd-trow > .cd-del { justify-self: end; }
-    .cd-thead > :nth-child(1), .cd-thead > :nth-child(2), .cd-thead > :nth-child(n+6) { display: none; }
+    .cd-trow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .cd-trow > .cd-c-codes { grid-column: 1 / span 2; }
+    .cd-thead > .cd-thc { display: none; }
+    .cd-thead > .cd-c-minutes, .cd-thead > .cd-c-addMinutes, .cd-thead > .cd-c-slides { display: flex; }
+    .cd-grip { display: none; }
     .cd-trow > .cd-input { border-color: var(--rule-soft); background: var(--paper); }
 }
 
+
+/* ════ DELNOR (delnor.js; Cases reads it) ════
+   Delnor's own pathologists, in teal everywhere they appear. */
+:root { --delnor: #0f766e; --delnor-bg: #d5efe9; --svc-delnor: #0f766e; }
+.ch-tag.ch-tag-delnor { background: var(--delnor-bg); color: var(--delnor); font-weight: 600; }
+.cd-person-delnor { background: var(--delnor-bg); border-color: transparent; }
+/* Case types: the "Delnor" checkbox column. */
+.cd-t-dn { display: flex; justify-content: center; }
+.cd-t-check { width: 16px; height: 16px; margin: 0; accent-color: var(--delnor); cursor: pointer; }
+
+/* The Delnor login sees only its sign-up sheet. */
+.delnor-guest .nav-item:not([data-page="delnor"]),
+.delnor-guest #sidebarUndoBtn,
+.delnor-guest #sidebarRecomputeBtn { display: none !important; }
+
+/* The sign-up sheet: a Monday–Friday month, three slots a working day. */
+#delnorPage { --tl-sel: var(--delnor); }
+.dn-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; padding: 2px 2px 24px; }
+.dn-dow { padding: 0 4px 2px; font: 500 11px var(--mono); letter-spacing: 0.08em; color: var(--ink-3); }
+.dn-day {
+    display: flex; flex-direction: column; gap: 6px;
+    min-height: 128px; padding: 8px 10px 10px;
+    background: #fff; border: 1px solid var(--rule-soft); border-radius: 10px;
+}
+.dn-day.no-slots { background: transparent; border-color: transparent; min-height: 0; }
+.dn-day.no-slots .dn-num { color: var(--ink-4); font-size: 15px; }
+.dn-day.no-slots .dn-day-head { justify-content: flex-start; }
+.dn-day.is-out { opacity: 0.4; }
+.dn-day.is-today { border-color: #d4a017; box-shadow: 0 0 0 1px #d4a017; }
+.dn-day-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.dn-num { font: 500 18px var(--serif); color: var(--ink); }
+.dn-count { font-size: 11.5px; color: var(--ink-3); }
+.dn-count.is-full { color: var(--delnor); font-weight: 600; }
+.dn-note { font-size: 11px; color: var(--ink-3); text-align: right; }
+.dn-slots { display: flex; flex-direction: column; gap: 5px; }
+.dn-slot {
+    width: 100%; box-sizing: border-box; min-width: 0;
+    padding: 5px 8px; border-radius: 6px;
+    font: inherit; font-size: 12.5px; color: var(--ink-3);
+    background: transparent; border: 1px dashed var(--rule-soft);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+select.dn-slot { cursor: pointer; }
+.dn-slot:hover { border-color: var(--ink-3); }
+.dn-slot.is-filled { background-color: var(--delnor-bg); color: var(--delnor); font-weight: 600; border: 1px solid transparent; }
+.dn-slot:focus-visible { outline: 2px solid var(--delnor); outline-offset: 1px; }
+/* The roster panel */
+.dn-roster { display: flex; flex-direction: column; gap: 6px; }
+.dn-roster-row { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) 76px; gap: 8px; align-items: center; }
+.dn-roster-head { font-size: 11px; font-weight: 600; color: var(--ink-2); padding: 0 9px; }
+.dn-roster-row .cd-input { width: 100%; }
+#dnRosterBack .modal-stable { height: min(560px, 88vh); }
+#dnRosterBack .dn-roster { overflow-y: auto; flex: 1 1 auto; min-height: 0; }
+@media (max-width: 800px) {
+    /* Phones: one day per row, working days only. */
+    .dn-grid { grid-template-columns: 1fr; }
+    .dn-dow, .dn-day.no-slots, .dn-day.is-out { display: none; }
+    .dn-day { min-height: 0; }
+}
+.dn-wd { display: none; font: 400 13px var(--sans); color: var(--ink-2); }
+@media (max-width: 800px) { .dn-wd { display: inline; } }
+
+/* ════ DATE NAVIGATORS: the ‹ › arrows never move ════
+   Each date label has a fixed width — the widest label it can show, measured
+   in the app's fonts (Nov 2026), plus a little room — with the text centred,
+   so a longer or shorter date doesn't shift the arrows. */
+.schedule-toolbar .current-period,
+.cf-nav .current-period,
+.cd-day-nav .current-period {
+    box-sizing: border-box;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+}
+@media (min-width: 801px) {
+    .schedule-toolbar .current-period { width: 262px; }   /* "September 12–18 2027" */
+}
+.cf-nav .current-period { width: 200px; }                  /* "September 2027" */
+.cd-day-nav .current-period { width: 238px; }              /* "Wednesday, May 12, 2027" */
+@media (max-width: 800px) {
+    .cf-nav .current-period { width: 176px; }              /* 19px type on phones */
+}
+
+/* Delnor: the month navigator at the top, centred in the header band (on
+   phones, its own row under the title). The sheet fills the window: the
+   weeks (never more than 5 Monday–Friday rows) share the height, no
+   scrolling. Phones keep the one-day-per-row list. */
+#delnorPage .tl-header { position: relative; }
+.dn-nav { margin: 0; }
+@media (min-width: 801px) {
+    #delnorPage .dn-nav { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+}
+@media (max-width: 800px) {
+    #delnorPage .dn-nav { order: 2; width: 100%; }
+    #delnorPage .cd-head-right { order: 3; }
+}
+@media (min-width: 1024px) {
+    .dn-grid {
+        flex: 1 1 auto;
+        min-height: 0;
+        grid-template-rows: auto repeat(var(--dn-weeks, 5), minmax(0, 1fr));
+        padding-bottom: 16px;
+    }
+    .dn-grid { gap: 6px; padding-bottom: 8px; }
+    .dn-day { min-height: 0; overflow: hidden; padding: 6px 8px 8px; gap: 4px; }
+    .dn-day.no-slots { min-height: 0; }
+    /* The three slots share the day's height (short screens shrink them,
+       tall ones stop at a comfortable size). */
+    .dn-slots { flex: 1 1 auto; min-height: 0; gap: 4px; }
+    .dn-slot { flex: 1 1 0; min-height: 0; max-height: 32px; padding-top: 0; padding-bottom: 0; }
+}
+
+/* Delnor slots: type-ahead boxes, and the list under the one being typed in. */
+input.dn-slot {
+    cursor: text;
+    padding-right: 26px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2364809a' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+}
+input.dn-slot::placeholder { color: var(--ink-3); opacity: 1; }
+input.dn-slot:focus { outline: none; border: 1px solid var(--delnor); background-color: #fff; color: var(--ink); font-weight: 500; }
+.dn-suggest {
+    position: fixed; z-index: 1000; box-sizing: border-box;
+    max-height: 280px; overflow-y: auto; padding: 4px;
+    background: #fff; border: 1px solid var(--rule-soft); border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(16, 42, 67, 0.16);
+    font: 400 13px var(--sans);
+}
+.dn-suggest[hidden] { display: none; }
+.dn-opt { padding: 7px 10px; border-radius: 6px; cursor: pointer; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dn-opt:hover, .dn-opt.is-hi { background: var(--delnor-bg); color: var(--delnor); }
+.dn-opt-extra { color: var(--ink-2); }
+.dn-opt-first-extra { margin-top: 4px; position: relative; }
+.dn-opt-first-extra::before { content: ''; position: absolute; left: 6px; right: 6px; top: -3px; border-top: 1px solid var(--rule-soft-2); }
+.dn-opt-note { padding: 6px 10px 4px; font-size: 12px; color: #8a5a00; }

@@ -9566,6 +9566,16 @@ body.cd-resizing, body.cd-resizing * { cursor: col-resize !important; user-selec
 /* ════ DELNOR (delnor.js; Cases reads it) ════
    Delnor's own pathologists, in teal everywhere they appear. */
 :root { --delnor: #0f766e; --delnor-bg: #d5efe9; --svc-delnor: #0f766e; }
+/* Settings → Leaving the group */
+.last-day-list { display: flex; flex-direction: column; gap: 8px; }
+.last-day-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px 80px; align-items: center; gap: 10px; }
+.last-day-name { font-size: 13.5px; color: var(--ink); }
+.last-day-input { height: 34px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--rule-soft); border-radius: 8px; background: var(--paper); font: 13px var(--sans); color: var(--ink); }
+.last-day-note { font-size: 12px; color: var(--ink-3); }
+.last-day-clear { justify-self: start; padding: 5px 10px; border: 1px solid var(--rule-soft); border-radius: 8px; background: var(--paper); font: 12px var(--sans); color: var(--ink-2); cursor: pointer; }
+.last-day-clear:hover { border-color: var(--ink-3); color: var(--ink); }
+@media (max-width: 600px) { .last-day-row { grid-template-columns: 1fr auto; } .last-day-name { grid-column: 1 / -1; } }
+
 /* Locums (locums.js): slate, so they never read as one of ours or Delnor. */
 :root { --locum: #475569; --locum-bg: #e2e8f0; --svc-locum: #475569; }
 .ch-tag.ch-tag-locum { background: var(--locum-bg); color: var(--locum); font-weight: 600; }

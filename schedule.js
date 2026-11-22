@@ -567,6 +567,9 @@ function applySettings() {
     }
 
     // Render the admin-only PTO allotment editor (hides itself for non-admins).
+    if (typeof renderLastDaySettings === 'function') {
+        try { renderLastDaySettings(); } catch (_) { /* ignore */ }
+    }
     if (typeof renderPtoAllotmentSettings === 'function') {
         try { renderPtoAllotmentSettings(); } catch (_) { /* ignore */ }
     }
@@ -616,6 +619,65 @@ function stepPtoAllotYear(state, delta) {
     if (y < floor) return PTO_ALLOT_DEFAULT_MODE;
     return String(y);
 }
+
+// Settings → Leaving the group (director only): each pathologist's last
+// working day. Setting or clearing one offers a recompute from the change.
+function renderLastDaySettings() {
+    const section = document.getElementById('lastDaySection');
+    const list = document.getElementById('lastDayList');
+    if (!section || !list) return;
+    if (!isAdmin() || !pathologists || !pathologists.length) { section.style.display = 'none'; return; }
+    section.style.display = '';
+    const active = document.activeElement;
+    if (active && list.contains(active)) return;
+    const html = pathologists.map(p => {
+        const last = pathLastDay(p);
+        return `<div class="last-day-row">
+            <span class="last-day-name">${escapeHtml(p.name)}</span>
+            <input type="date" class="last-day-input" data-last-day="${p.id}" value="${last || ''}" aria-label="${escapeHtml(p.name)}: last working day">
+            ${last ? `<button type="button" class="last-day-clear" data-last-day-clear="${p.id}" title="Remove the last day — they stay on the schedule">Clear</button>` : '<span class="last-day-note">Staying</span>'}
+          </div>`;
+    }).join('');
+    if (list._html !== html) { list.innerHTML = html; list._html = html; }
+}
+
+async function _saveLastDay(pid, value) {
+    if (!isAdmin()) return;
+    const p = pathologists.find(x => String(x.id) === String(pid));
+    if (!p) return;
+    const was = pathLastDay(p);
+    const now = value || null;
+    if (was === now) return;
+    try {
+        await db.ref('scheduler/pathologists/' + p.id + '/lastDay').set(now);
+    } catch (err) {
+        showToast('Could not save: ' + err.message, { type: 'error' });
+        return;
+    }
+    const name = p.name.replace(/^Dr\.\s*/, 'Dr. ');
+    const changed = [was, now].filter(Boolean).sort()[0];      // the earlier of the two dates
+    const from = changed ? addDays(parseDate(changed), 1) : today;
+    showToast(now ? `${name}'s last day: ${MONTHS_SHORT[parseDate(now).getMonth()]} ${parseDate(now).getDate()}, ${parseDate(now).getFullYear()}.` : `${name} is staying.`);
+    await maybeOfferRecompute({}, {
+        fromDate: from.getTime() < today.getTime() ? today : from,
+        message: now
+            ? `${name} is off the schedule after ${MONTHS_SHORT[parseDate(now).getMonth()]} ${parseDate(now).getDate()}. Re-plan everyone's services from then on using the rotation rules?`
+            : `${name} is back on the schedule. Re-plan everyone's services using the rotation rules?`,
+    });
+}
+
+(function wireLastDaySettings() {
+    const list = document.getElementById('lastDayList');
+    if (!list) return;
+    list.addEventListener('change', e => {
+        const el = e.target.closest('[data-last-day]');
+        if (el) _saveLastDay(el.dataset.lastDay, el.value);
+    });
+    list.addEventListener('click', e => {
+        const b = e.target.closest('[data-last-day-clear]');
+        if (b) _saveLastDay(b.dataset.lastDayClear, '');
+    });
+})();
 
 function renderPtoAllotmentSettings() {
     const section = document.getElementById('ptoAllotmentSection');
@@ -1134,12 +1196,70 @@ function workDayIndex(date) {
     return fullWeeks * 5 + remainder;
 }
 
-// Default on-call: cycles through pathologists using the block index
+// Default on-call: cycles through pathologists using the block index. When
+// someone leaves (a last day, set in Settings), call rotates among those
+// still here from the first block they can't cover in full, carrying on in
+// the same order from whoever had the block before — so no one gets two in
+// a row and the rest keep their turns.
+const _defaultOnCallCache = new Map();
 function defaultOnCallId(cycleStart) {
     if (pathologists.length === 0) return null;
+    const key = cycleStart.getTime();
+    if (_defaultOnCallCache.has(key)) return _defaultOnCallCache.get(key);
     const w = callCycleIndex(cycleStart);
-    const idx = ((w % pathologists.length) + pathologists.length) % pathologists.length;
-    return pathologists[idx].id;
+    const breaks = _callBreaks().filter(b => b.w <= w);
+    let id;
+    if (!breaks.length) {
+        const idx = ((w % pathologists.length) + pathologists.length) % pathologists.length;
+        id = pathologists[idx].id;
+    } else {
+        const b = breaks[breaks.length - 1];
+        const end = getCallCycleEnd(cycleStart);
+        const here = pathologists.filter(p => isPathActiveOn(p, end));
+        if (!here.length) id = null;
+        else {
+            const prevId = defaultOnCallId(getCallCycleStart(addDays(b.start, -1)));
+            const pi = pathologists.findIndex(p => String(p.id) === String(prevId));
+            let first = 0;
+            for (let k = 1; k <= pathologists.length; k++) {
+                const j = here.indexOf(pathologists[(pi + k + pathologists.length) % pathologists.length]);
+                if (j >= 0) { first = j; break; }
+            }
+            id = here[(first + (w - b.w)) % here.length].id;
+        }
+    }
+    _defaultOnCallCache.set(key, id);
+    return id;
+}
+
+// The first call block each leaver can't cover in full (it runs past their
+// last day): [{ start, w }], earliest first.
+function _callBreaks() {
+    const out = [];
+    pathologists.forEach(p => {
+        const last = pathLastDay(p);
+        if (!last) return;
+        const cs = getCallCycleStart(parseDate(last));
+        const ce = getCallCycleEnd(cs);
+        const start = fmt(ce) > last ? cs : addDays(ce, 1);
+        const w = callCycleIndex(start);
+        if (!out.some(b => b.w === w)) out.push({ start, w });
+    });
+    return out.sort((a, b) => a.w - b.w);
+}
+
+// ── Leaving the group ── A pathologist's last working day ('YYYY-MM-DD',
+// Settings → Leaving the group). After it they're off the schedule
+// entirely: no row, no service, no call, no consults, no cases. They stay
+// in `pathologists` so everyone else's place in the rotation is unchanged,
+// and their history before the date stays.
+function pathLastDay(p) {
+    return p && p.lastDay ? String(p.lastDay) : null;
+}
+function isPathActiveOn(pathOrId, date) {
+    const p = pathOrId && typeof pathOrId === 'object' ? pathOrId : pathologists.find(x => String(x.id) === String(pathOrId));
+    const last = pathLastDay(p);
+    return !last || fmt(date) <= last;
 }
 
 // Service lookup doesn't change
@@ -1153,15 +1273,18 @@ function defaultServiceId(pathId, date) {
 }
 
 // ────────────── EFFECTIVE LOOKUPS (overrides win) ──────────────
+// Overrides naming someone who has left by then are ignored.
 function onCallIdForCycle(cycleStart) {
     const k = fmt(cycleStart);
-    if (onCallOverrides[k]) return onCallOverrides[k];
+    const ov = onCallOverrides[k];
+    if (ov && isPathActiveOn(ov, getCallCycleEnd(cycleStart))) return ov;
     return defaultOnCallId(cycleStart);
 }
 
 function onCallIdForDay(date) {
     const dk = fmt(date);
-    if (onCallDayOverrides[dk]) return onCallDayOverrides[dk];
+    const ov = onCallDayOverrides[dk];
+    if (ov && isPathActiveOn(ov, date)) return ov;
     return onCallIdForCycle(getCallCycleStart(date));
 }
 
@@ -1213,6 +1336,7 @@ function getNaturalDayAssignments(date) {
     // Weekend or federal holiday: nobody on service, but on-call status applies
     if (isWeekend(date) || getFederalHoliday(date)) {
         pathologists.forEach(p => {
+            if (!isPathActiveOn(p, date)) { result[p.id] = { type: 'blank', service: null, onCall: false }; return; }
             const onPto = !!isOnPto(p.id, date);
             result[p.id] = {
                 type: onPto ? 'pto' : 'off',
@@ -1224,12 +1348,24 @@ function getNaturalDayAssignments(date) {
         return result;
     }
 
-    // Weekday — start with default daily rotation
+    // Weekday — start with default daily rotation. Once someone has left
+    // (a last day in Settings), the rotation runs over those still here:
+    // three people turn through Cyto/Gross → Bigs → Huntley, one step per
+    // workday, as the four did through all four services. Whoever has left
+    // shows no row at all.
+    const here = pathologists.filter(p => isPathActiveOn(p, date));
+    const shrunk = here.length > 0 && here.length < pathologists.length && here.length <= SERVICES.length;
+    const rotationService = p => {
+        if (!shrunk) return defaultServiceId(p.id, date);
+        const n = here.length, i = here.indexOf(p) + workDayIndex(date);
+        return SERVICES[((i % n) + n) % n].id;
+    };
     const slots = pathologists.map((p, pIdx) => ({
         pathId: p.id,
         pIdx,
-        onPto: !!isOnPto(p.id, date),
-        serviceId: defaultServiceId(p.id, date),
+        gone: !isPathActiveOn(p, date),
+        onPto: isPathActiveOn(p, date) && !!isOnPto(p.id, date),
+        serviceId: isPathActiveOn(p, date) ? rotationService(p) : null,
         lockedServiceId: null,   // set below for regular service overrides
         offSiteServiceId: null,   // set below for off-site service overrides
     }));
@@ -1242,7 +1378,7 @@ function getNaturalDayAssignments(date) {
     const dayOv = serviceOverrides[dayKey] || {};
     slots.forEach(s => {
         const ovId = dayOv[s.pathId];
-        if (!ovId) return;
+        if (!ovId || s.gone) return;
 
         if (isOffSiteServiceId(ovId)) {
             // Off-site override: excluded from rotation.  Always wins over any
@@ -1265,7 +1401,7 @@ function getNaturalDayAssignments(date) {
     if (ptoCount > 0) {
         slots.forEach(s => { if (s.onPto) s.serviceId = null; });
         // Only reassign slots that are working AND have no locked service.
-        const unlockedWorking = slots.filter(s => !s.onPto && !s.lockedServiceId);
+        const unlockedWorking = slots.filter(s => !s.onPto && !s.lockedServiceId && !s.gone);
 
         if (unlockedWorking.length === 2) {
             // EXACTLY 2 unlocked working (Huntley + Cyto/Bigs combo)
@@ -1300,7 +1436,9 @@ function getNaturalDayAssignments(date) {
 
     // ── Build result ────────────────────────────────────────────────────────
     slots.forEach(s => {
-        if (s.offSiteServiceId) {
+        if (s.gone) {
+            result[s.pathId] = { type: 'blank', service: null, onCall: false };
+        } else if (s.offSiteServiceId) {
             // Off-site service override: show the named label with its colour.
             result[s.pathId] = {
                 type: 'off_site',
@@ -1519,6 +1657,7 @@ function violationsForDay(date) {
 function clearDayCache() {
     _dayCache.clear();
     _naturalCache.clear();
+    _defaultOnCallCache.clear();
     _violationFlags.clear();
     // Conflicts are derived from the day assignments, so they go stale too.
     _conflicts = null;
@@ -6927,6 +7066,7 @@ function consultQueue() {
     });
     return pathologists
         .map((_, i) => pathologists[(lastIdx + 1 + i) % n])            // rotation order
+        .filter(p => isPathActiveOn(p, today))                          // not anyone who has left
         .map((p, rank) => ({ p, rank, count: count[p.id] || 0 }))
         .sort((a, b) => a.count - b.count || a.rank - b.rank)
         .map(({ p, count: c }) => ({ p, count: c }));
@@ -12501,7 +12641,7 @@ function openOnCallModal(date) {
 
     const sel = document.getElementById('ocPath');
     const currentId = onCallIdForDay(date);
-    sel.innerHTML = pathologists.map(p =>
+    sel.innerHTML = pathologists.filter(p => isPathActiveOn(p, date)).map(p =>
         `<option value="${p.id}" ${p.id === currentId ? 'selected' : ''}>${p.name}</option>`
     ).join('');
     document.getElementById('ocModalBack').classList.add('open');
@@ -14116,6 +14256,7 @@ function renderAll() {
     if (_appEl && _appEl.getAttribute('data-page') === 'settings'
         && typeof renderPtoAllotmentSettings === 'function') {
         try { renderPtoAllotmentSettings(); } catch (_) { /* ignore */ }
+        try { renderLastDaySettings(); } catch (_) { /* ignore */ }
     }
 }
 

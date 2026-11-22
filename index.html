@@ -1307,7 +1307,7 @@
     <div class="modal-back" id="consultModalBack">
         <div class="modal">
             <h3 id="consultModalTitle">Log a consult</h3>
-            <div class="sub" id="consultModalSub">Record an incoming consult case and who takes it.</div>
+            <div class="sub" id="consultModalSub" hidden></div>
 
             <label>Date received</label>
             <input type="date" id="consultDate" />
@@ -1317,11 +1317,11 @@
 
             <label>Pathologist</label>
             <select id="consultPathologist"></select>
-            <div class="consult-rotation-hint" id="consultRotationHint"></div>
+            <!-- The consult order (as on Tracking): next up solid; click one to pick them. -->
+            <div class="trk-consult-strip consult-panel-strip" id="consultRotationHint"></div>
 
             <label>Case number</label>
             <input type="text" id="consultCaseNumber" placeholder="MHSC26-0001" maxlength="20" autocomplete="off" spellcheck="false" />
-            <div class="sub" id="consultCaseHint" style="margin-top:6px;">Numbered automatically from the date — the next in sequence for that year.</div>
 
             <div class="conf-form-error" id="consultFormError" style="display:none;"></div>
 

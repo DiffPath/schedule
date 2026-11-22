@@ -7518,6 +7518,21 @@ function renderTrackingEntries(filteredEntries) {
     listEl.innerHTML = items.map(([kind, k, e]) => _trkHistoryRow(kind, k, e)).join('');
 }
 
+// The consult order as tags: queue order (fewest consults this fiscal
+// year first), equal widths, the next one solid; `pickedId` gets a ring.
+// Buttons when `clickable`.
+function consultTagsHtml(clickable, pickedId) {
+    const queue = consultQueue();
+    return queue.map(({ p, count }, i) => {
+        const isNext = i === 0;
+        const tip = `${p.name} — ${count} consult${count === 1 ? '' : 's'} this fiscal year${isNext ? ' · next up' : ''}`;
+        const tag = clickable ? 'button' : 'span';
+        const arrow = i < queue.length - 1 ? '<span class="trk-consult-arrow" aria-hidden="true">›</span>' : '';
+        const picked = pickedId != null && String(pickedId) === String(p.id);
+        return `<${tag} ${clickable ? 'type="button" ' : ''}class="trk-consult-chip${isNext ? ' is-next' : ''}${picked ? ' is-picked' : ''}" data-pid="${p.id}" style="--c:${p.color};" title="${escapeHtml(tip)}">${escapeHtml(_trkLastName(p))} · ${count}</${tag}>${arrow}`;
+    }).join('');
+}
+
 // ── Consult rotation ── equal tags in queue order (fewest consults this
 // fiscal year first); the next one solid. Those who log consults click a
 // tag to log one for that person (the way down the line).
@@ -7528,15 +7543,7 @@ function renderConsultNext() {
     if (addBtn) addBtn.style.display = canEditConsults() ? '' : 'none';
     if (!pathologists || pathologists.length === 0) { card.innerHTML = ''; return; }
 
-    const queue = consultQueue();
-    const canLog = canEditConsults();
-    card.innerHTML = queue.map(({ p, count }, i) => {
-        const isNext = i === 0;
-        const tip = `${p.name} — ${count} consult${count === 1 ? '' : 's'} this fiscal year${isNext ? ' · next up' : ''}${canLog ? ' · click to log a consult for them' : ''}`;
-        const tag = canLog ? 'button' : 'span';
-        const arrow = i < queue.length - 1 ? '<span class="trk-consult-arrow" aria-hidden="true">›</span>' : '';
-        return `<${tag} ${canLog ? 'type="button" ' : ''}class="trk-consult-chip${isNext ? ' is-next' : ''}" data-pid="${p.id}" style="--c:${p.color};" title="${escapeHtml(tip)}">${escapeHtml(_trkLastName(p))} · ${count}</${tag}>${arrow}`;
-    }).join('');
+    card.innerHTML = consultTagsHtml(canEditConsults(), null);
     card.querySelectorAll('button.trk-consult-chip').forEach(b =>
         b.addEventListener('click', () => openConsultModal(null, Number(b.dataset.pid))));
 }
@@ -7688,7 +7695,6 @@ function openConsultModal(editKey, pickPid) {
         _editingConsultKey = editKey;
         const e = consultLog[editKey];
         titleEl.textContent = 'Edit consult';
-        if (subEl) subEl.textContent = 'Update or remove this consult case.';
         saveBtn.textContent = 'Save changes';
         deleteBtn.style.display = '';
 
@@ -7697,12 +7703,11 @@ function openConsultModal(editKey, pickPid) {
         pathSel.value = String(e.pathologistId);
         caseInput.value = e.caseNumber || '';
         caseInput.dataset.userEdited = '1';   // don't overwrite on date change
-        if (hintEl) hintEl.textContent = '';
+        if (hintEl) { hintEl.innerHTML = ''; hintEl.hidden = true; }
     } else {
         // ── Log a new consult ──
         _editingConsultKey = null;
         titleEl.textContent = 'Log a consult';
-        if (subEl) subEl.textContent = 'Record an incoming consult case and who takes it.';
         saveBtn.textContent = 'Add consult';
         deleteBtn.style.display = 'none';
 
@@ -7714,12 +7719,7 @@ function openConsultModal(editKey, pickPid) {
             ? pathologists.find(p => p.id === pickPid) : null;
         const who = picked || next;
         if (who) pathSel.value = String(who.id);
-        if (hintEl) {
-            hintEl.textContent = !next ? ''
-                : (picked && next && picked.id !== next.id)
-                    ? next.name + ' is next up; logging this one for ' + picked.name + ' instead.'
-                    : 'Next up: ' + next.name + ' (fewest consults this fiscal year) — pick someone else to skip them this round.';
-        }
+        if (hintEl) { hintEl.hidden = false; _consultPanelTags(); }
         caseInput.value = suggestConsultCaseNumber(todayKey, null);
         delete caseInput.dataset.userEdited;
     }
@@ -7727,6 +7727,26 @@ function openConsultModal(editKey, pickPid) {
     back.classList.add('open');
     setTimeout(() => sourceInput.focus(), 50);
 }
+
+// The consult order in the panel; the one picked in the dropdown ringed.
+function _consultPanelTags() {
+    const hintEl = document.getElementById('consultRotationHint');
+    const pathSel = document.getElementById('consultPathologist');
+    if (!hintEl || hintEl.hidden) return;
+    hintEl.innerHTML = consultTagsHtml(true, pathSel ? pathSel.value : null);
+}
+(function wireConsultPanelTags() {
+    const hintEl = document.getElementById('consultRotationHint');
+    const pathSel = document.getElementById('consultPathologist');
+    if (!hintEl || !pathSel) return;
+    hintEl.addEventListener('click', e => {
+        const b = e.target.closest('.trk-consult-chip');
+        if (!b) return;
+        pathSel.value = b.dataset.pid;
+        _consultPanelTags();
+    });
+    pathSel.addEventListener('change', _consultPanelTags);
+})();
 
 // Date changed → refresh the suggested case number for that year, unless
 // the admin already typed their own.

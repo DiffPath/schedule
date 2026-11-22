@@ -2050,6 +2050,7 @@ function cdExportAhk(auto) {
     const now = new Date();
     const hhmm = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
     const name = `case-assignments-${fmt(cdDate)}-${hhmm}.tsv`;
+    if (auto) return cdHandBack(name);
     const url = URL.createObjectURL(new Blob([cdAhkText()], { type: 'text/tab-separated-values;charset=utf-8' }));
     const a = document.createElement('a');
     a.href = url;
@@ -2060,10 +2061,40 @@ function cdExportAhk(auto) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     cdExportedName = name;
     renderCasesPage();
-    showToast(auto
-        ? `Imported ${cdCases.length} cases from the script, recorded them and exported ${name}. The script takes it from here.`
-        : `Exported ${cdCases.length} cases to ${name}`
-            + (cdRecordedKey && !cdRecordedDirty ? '.' : ' — not recorded yet: Record so they count toward the running totals.'));
+    showToast(`Exported ${cdCases.length} cases to ${name}`
+        + (cdRecordedKey && !cdRecordedDirty ? '.' : ' — not recorded yet: Record so they count toward the running totals.'));
+    return true;
+}
+
+// For the script: the same file's text back on the clipboard, behind a first
+// line "CD_BACK_MARK <tab> file name", instead of a download — a download
+// lands wherever the browser last saved a file, which the script can't know.
+// The script saves it in its own folder. Records the batch once it's handed
+// back (these cases are being assigned now).
+function cdHandBack(name) {
+    const text = CD_BACK_MARK + '\t' + name + '\r\n' + cdAhkText().replace(/^﻿/, '');
+    const n = cdCases.length;
+    const ok = () => {
+        cdExportedName = name + ' (to the script)';
+        cdRecord(true);
+        renderCasesPage();
+        showToast(`Imported ${n} cases from the script, recorded them and handed the assignments back. The script takes it from here.`);
+    };
+    const fail = () => showToast(`Imported ${n} cases from the script, but couldn’t hand them back on the clipboard. `
+        + 'Run the script again with this window in front, or Export and use Ctrl+Shift+2.', { type: 'error', duration: 60000 });
+    const fallback = () => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        let copied = false;
+        try { copied = document.execCommand('copy'); } catch (_) { /* blocked */ }
+        ta.remove();
+        copied ? ok() : fail();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fallback);
+    else fallback();
     return true;
 }
 
@@ -2071,11 +2102,12 @@ function cdExportAhk(auto) {
 // The script puts the case list it exported from Epic on the clipboard,
 // behind a first line reading CD_AUTO_MARK, brings this tab to the front and
 // presses Ctrl+V. On any page, for the director: open Cases, take the list as
-// if pasted, split it, export the file the script waits for in Downloads,
-// and record the batch (these cases are being assigned now). When something
-// stops the export (a case no one working can read), the page says so and
-// the script times out telling the director to look here.
+// if pasted, split it, hand the assignments back on the clipboard (above)
+// and record the batch. When something stops the export (a case no one
+// working can read), the page says so and the script times out telling the
+// director to look here.
 const CD_AUTO_MARK = '#PATHSCHED-AUTO';
+const CD_BACK_MARK = '#PATHSCHED-ASSIGNMENTS';
 let cdPendingAuto = null;   // a list that arrived before the settings loaded
 
 function cdAutoRun(text) {
@@ -2096,7 +2128,7 @@ function cdAutoRun(text) {
     // record rather than count the cases twice, and split it as if that
     // record weren't there — as the first time.
     if (cdMatchRecord()) cdRecordedDirty = true;   // the script always re-records
-    if (cdExportAhk(true)) cdRecord(true);
+    cdExportAhk(true);
 }
 
 document.addEventListener('paste', e => {

@@ -1,62 +1,54 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Force
-; The hotkeys go through AutoHotkey's keyboard hook: Citrix catches keys
-; first otherwise, and the hotkeys never fire.
-#UseHook
+#UseHook        ; catch the hotkeys before Citrix does (otherwise they never fire)
 
 ; ════════════════════════════════════════════════════════════════════════
 ; Assign the day's cases in Epic, from start to finish.
 ; ════════════════════════════════════════════════════════════════════════
 ;
-; Before: the schedule is open in the browser, signed in as the director
-; (any page), and Epic shows the case list to assign.
+; Before you start: the schedule is open in the browser, signed in as the
+; director, and Epic is showing the list of cases to assign.
 ;
-; Ctrl+Shift+1, with Epic in front — the whole run:
-;   1. Exports Epic's case log to EPIC_SAVE_DIR           (ExportFromEpic)
-;   2. Opens it in Excel (out of sight) and copies it     (ReadCaseList)
-;   3. Hands it to the Cases page, which splits it, records it and
-;      exports the assignments to Downloads               (HandToApp)
-;   4. Back in Epic, assigns the cases one by one, from the first case of
-;      the list down                                      (RunAssignments)
-;   The start box in step 4 shows how many cases each pathologist gets:
-;   that's the moment to check the split. Cancel there and nothing in Epic
-;   is touched.
+; Ctrl+Shift+1 (with Epic in front) runs all four steps:
+;   1. Export Epic's case log to an Excel file           ExportFromEpic
+;   2. Open that file in a hidden Excel and copy it      CopyFromExcel
+;   3. Paste it into the schedule's Assign page, which   HandToApp,
+;      splits the cases and copies the result back       WaitForAssignments
+;   4. Assign the cases in Epic, one by one              AssignCases
 ;
-; Ctrl+Shift+2 — skip steps 1–3: pick an assignments file yourself (the
-; newest is preselected). Also how to finish a run that stopped: the script
-; says which case to select in Epic and carries on from there.
+; Ctrl+Shift+2 skips steps 1–3: you pick an assignments file and it goes
+; straight to step 4. Also how to finish a run that stopped part-way.
 ;
-; The same two are on the tray icon's menu (the green H): pick one, then
-; click on Epic within 3 seconds. For when the hotkeys don't get through.
+; Before step 4 a box shows how many cases each pathologist gets. That's
+; the moment to check the split: Cancel there and Epic isn't touched.
 ;
-; Esc stops the script at once, at any step (while it's running; the rest
-; of the time Esc goes to Epic as usual). Pause pauses while assigning.
-; Hands off the keyboard and mouse while it runs.
+; While it runs: hands off the keyboard and mouse. Esc stops it at once;
+; Pause pauses step 4. Every step is written to assign-cases.log, beside
+; this script — the place to look when something goes wrong.
 ;
-; Every step is written to assign-cases.log beside this script — the place
-; to look when something doesn't work (tray menu → Open the log).
-;
-; Assigning, per case, is what you'd do by hand:
-;   Alt+G · types the last name · Down · Alt+G   (assigns the case)
-;   Down                                         (selects the next case)
-; It never looks a case up: line N of the assignments file is the Nth case
-; of Epic's list, so the list mustn't change between step 1 and step 4.
-; Each assigned case goes into <file>.done.txt beside the assignments file.
+; How step 4 assigns a case is exactly what you'd do by hand:
+;   Alt+G · type the last name · Down · Alt+G     assign the selected case
+;   Down                                          move to the next case
+; It never searches for a case: line N of the assignments file is the Nth
+; case in Epic's list, so the list mustn't change between steps 1 and 4.
+; Each case it assigns is noted in <assignments file>.done.txt, so a run
+; that stopped carries on where it left off.
 
 ; ── Settings ─────────────────────────────────────────────────────────────
-; Step 1: where Epic saves the case log, as Epic sees the folder.
+; Step 1: the folder Epic saves its export to, as Epic sees it.
 ;  - Epic on this computer: an ordinary folder, e.g. "C:\Users\<you>\Documents".
-;  - Epic in Citrix (the test setup): this computer's C: drive is \\Client\C$
-;    to Epic; the script finds the file at the matching C:\ path here.
+;  - Epic in Citrix: this computer's C: drive is \\Client\C$ to Epic; the
+;    script finds the file at the matching C:\ path here.
 EPIC_SAVE_DIR := "\\Client\C$\Users\Mike\Documents"
 
-; Step 1: keep Epic's own file name (Daily_Case_Log_<date>_<time>.xlsx in
-; EPIC_SAVE_DIR, which must be Epic's default folder) and pick up the newest
-; such file — or type a name over it (true; slow over Citrix, ~3 s).
+; Step 1: false = keep Epic's own file name (EPIC_SAVE_DIR must then be
+; Epic's default folder) and pick up the newest Daily_Case_Log file there.
+; true = type our own full path over it (works whatever Epic's default
+; folder is, but slow over Citrix, ~3 s).
 TYPE_FILE_NAME := false
 EXPORT_FILE_PATTERN := "Daily_Case_Log_*.xlsx"
 
-; Step 1: the export's password (typed twice in Epic, and used to open the
+; Step 1: the export's password (typed twice in Epic, then used to open the
 ; file in Excel) and the export reason typed in Epic.
 EXPORT_PASSWORD := "a"
 EXPORT_REASON := "4"
@@ -66,37 +58,32 @@ MENU_WAIT := 700            ; after Alt+3, for the menu
 EXPORT_SCREEN_WAIT := 3000  ; after choosing export, for the export screen
 FIELD_WAIT := 250           ; between the export screen's fields
 
-; Where the browser saves downloads (the Cases page's export lands here).
-DOWNLOADS := EnvGet("USERPROFILE") "\Downloads"
-
-; The schedule's browser window: its title contains this. The schedule must
-; be the tab showing in that window.
+; Step 3: the schedule's browser window (its title contains this; the
+; schedule must be the tab showing in it).
 APP_WINDOW := "Pathology Group Schedule"
 
-; Seconds to wait for Epic's export file (step 1) and the Cases page (step 3).
+; Step 3: where the script saves the assignments the Assign page hands back.
+; Holds case numbers: keep it on this computer.
+ASSIGNMENTS_DIR := A_ScriptDir "\assignments"
+
+; Ctrl+Shift+2 also offers files from here (the Assign page's Export button
+; downloads to the browser's folder).
+DOWNLOADS := EnvGet("USERPROFILE") "\Downloads"
+
+; Seconds to wait for Epic's export (step 1) and the Assign page (step 3).
 EPIC_EXPORT_TIMEOUT := 120
 APP_TIMEOUT := 60
 
-; Keys that select the first case of Epic's list, e.g. "^{Home}". Blank:
-; the start box asks you to click it.
-FIRST_CASE_KEYS := ""
-
-; Ask before each of the first N cases (Yes / skip / stop); 0 = never.
-CONFIRM_FIRST := 0
-
-; Assign at most this many cases per run, then stop (for trying it out);
-; 0 = the whole list. Run the same file again (Ctrl+Shift+2) to go on.
+; Step 4: assign at most this many cases per run, then stop (for trying it
+; out); 0 = the whole list. Ctrl+Shift+2 with the same file goes on.
 STOP_AFTER := 3
 
-; Waits, in milliseconds. Raise them if Epic is slow and keys get lost.
+; Step 4 waits, in milliseconds. Raise them if Epic is slow and keys get lost.
 OPEN_WAIT   := 500   ; after Alt+G, for the assignment window to open
 NAME_WAIT   := 100    ; after typing the name, for Epic's matches to show
 STEP_WAIT   := 300    ; after the Down arrow that picks the match
 ASSIGN_WAIT := 300   ; after the second Alt+G, for the assignment to save
 MOVE_WAIT   := 100    ; after the Down arrow to the next case
-
-; Dry run: step 4 walks the file and shows each case without pressing keys.
-DRY_RUN := false
 
 ; How keys are sent: one at a time, KEY_DELAY ms apart, each held KEY_HOLD
 ; ms. Citrix drops keys sent all at once; raise these if letters go missing.
@@ -104,252 +91,33 @@ KEY_DELAY := 1
 KEY_HOLD := 1
 
 ; ── Start-up ─────────────────────────────────────────────────────────────
-SendMode "Event"
-SetKeyDelay KEY_DELAY || 0, KEY_HOLD || 0     ; blank = 0
+SendMode "Event"                    ; one key at a time (see KEY_DELAY)
+SetKeyDelay KEY_DELAY, KEY_HOLD
 LOG_FILE := A_ScriptDir "\assign-cases.log"
-busy := false        ; a run is going (Esc stops it)
-running := false     ; step 4 is assigning (Pause pauses it)
+busy := false        ; a run is going (so Esc stops it)
+assigning := false   ; step 4 is going (so Pause pauses it)
 paused := false
 
-A_TrayMenu.Insert("1&", "Run everything (Ctrl+Shift+1)", (*) => StartFromTray(RunEverything))
-A_TrayMenu.Insert("2&", "Assign from a file (Ctrl+Shift+2)", (*) => StartFromTray(RunAssignments))
-A_TrayMenu.Insert("3&", "Open the log", (*) => FileExist(LOG_FILE) ? Run('notepad.exe "' LOG_FILE '"') : MsgBox("Nothing logged yet.", "Assign cases"))
-A_TrayMenu.Insert("4&")
-A_IconTip := "Assign cases — Ctrl+Shift+1 / Ctrl+Shift+2"
-
-Trace("Script loaded (AutoHotkey " A_AhkVersion ")" (A_Args.Length && A_Args[1] = "stopped" ? " — restarted after Esc" : ""))
-if (A_Args.Length && A_Args[1] = "stopped") {
+Trace("Script loaded")
+if (A_Args.Length && A_Args[1] = "stopped") {     ; restarted by Esc
     ToolTip "Stopped."
     SetTimer () => ToolTip(), -2500
 }
 
-; ── Step 1: export Epic's case log ──────────────────────────────────────
-; Epic is in front, showing the case list. Its export, by keyboard:
-;   Alt+3 · Down ×3 · Enter        (export; the export screen loads)
-;   [file name]                    (only with TYPE_FILE_NAME; else Epic's)
-;   Tab ×2 · password · Tab · password again · Tab · export reason
-;   Tab ×2 · Enter                 (accept)
-; Returns the file's path on this computer once Epic has finished it.
-ExportFromEpic(epicWin) {
-    name := "Daily_Case_Log_" FormatTime(, "yyyyMMdd_HHmmss") ".xlsx"
-    epicPath := EPIC_SAVE_DIR "\" name
-    localPath := LocalPathOf(epicPath)
-    localDir := LocalPathOf(EPIC_SAVE_DIR)
-    if !DirExist(localDir)
-        throw Error("This computer can't see the export folder:`n" localDir "`n`nCheck EPIC_SAVE_DIR at the top of the script.")
-    if !FocusEpic(epicWin)
-        throw Error("Epic isn't in front.")
-    since := A_Now
+; ── Hotkeys ──────────────────────────────────────────────────────────────
+; No Alt in the hotkeys: Epic and Citrix use Alt combinations.
+^+1:: StartRun(RunEverything)
+^+2:: StartRun(AssignFromFile)
 
-    Trace("Step 1: Alt+3")
-    Send "!3"
-    Sleep MENU_WAIT
-    Trace("Step 1: Down x3, Enter — waiting " EXPORT_SCREEN_WAIT " ms for the export screen")
-    Send "{Down 3}{Enter}"
-    Sleep EXPORT_SCREEN_WAIT
-    if TYPE_FILE_NAME {
-        Trace("Step 1: file name " epicPath "  (in front: " WinInfo("A") ")")
-        Send "^a"                   ; replace the default file name
-        SendText epicPath
-        Sleep FIELD_WAIT
-    } else
-        Trace("Step 1: keeping Epic's file name  (in front: " WinInfo("A") ")")
-    Trace("Step 1: Tab x2, password, Tab, password, Tab, reason " EXPORT_REASON ", Tab x2, Enter")
-    Send "{Tab 2}"
-    Sleep FIELD_WAIT
-    SendText EXPORT_PASSWORD
-    Sleep FIELD_WAIT
-    Send "{Tab}"
-    Sleep FIELD_WAIT
-    SendText EXPORT_PASSWORD
-    Sleep FIELD_WAIT
-    Send "{Tab}"
-    Sleep FIELD_WAIT
-    SendText EXPORT_REASON
-    Sleep FIELD_WAIT
-    Send "{Tab 2}"
-    Sleep FIELD_WAIT
-    Send "{Enter}"
-
-    if !TYPE_FILE_NAME {
-        ; Epic's own name: the newest matching file since the export began.
-        Trace("Step 1: waiting up to " EPIC_EXPORT_TIMEOUT " s for a new " EXPORT_FILE_PATTERN " in " localDir)
-        localPath := WaitForNewFile(localDir "\" EXPORT_FILE_PATTERN, since, EPIC_EXPORT_TIMEOUT)
-        if (localPath = "")
-            throw Error("Epic's export didn't appear within " EPIC_EXPORT_TIMEOUT " seconds in:`n" localDir
-                . "`n`nIs that Epic's default export folder (EPIC_SAVE_DIR)? If the export screen is still open in Epic, the keys may have landed in the wrong field: raise the waits at the top of the script.")
-    } else
-        Trace("Step 1: waiting up to " EPIC_EXPORT_TIMEOUT " s for " localPath)
-    WaitForFile(localPath, EPIC_EXPORT_TIMEOUT)    ; Epic has finished writing it
-    Trace("Step 1: export found: " localPath " (" FileGetSize(localPath) " bytes)")
-    return localPath
-}
-
-; Epic's path → the same file on this computer: \\Client\C$\x → C:\x.
-LocalPathOf(epicPath) {
-    return RegExReplace(epicPath, "i)^\\\\Client\\([A-Z])\$", "$1:")
-}
-
-; Wait for Epic to finish writing the file: it exists, its size has stopped
-; changing, and nothing else has it open.
-WaitForFile(path, timeout) {
-    deadline := A_TickCount + timeout * 1000
-    lastSize := -1
-    loop {
-        if FileExist(path) {
-            size := FileGetSize(path)
-            if (size > 0 && size = lastSize && CanOpenAlone(path))
-                return path
-            lastSize := size
-        }
-        if (A_TickCount > deadline)
-            throw Error("Epic's export didn't appear within " timeout " seconds at:`n" path
-                . "`n`nIf the export screen is still open in Epic, the keys may have landed in the wrong field: raise the waits at the top of the script.")
-        Sleep 1000
-    }
-}
-
-CanOpenAlone(path) {
-    try {
-        f := FileOpen(path, "r -rwd")
-        if !f
-            return false
-        f.Close()
-        return true
-    }
-    return false
-}
-
-; ── Step 2: read it ─────────────────────────────────────────────────────
-; Epic's export is a password-protected Excel file. Excel opens it out of
-; sight with the password, and its cells are copied — the same text as
-; selecting them and pressing Ctrl+C, which is what the Cases page expects.
-; (Opening it without the password leaves Excel waiting at a hidden
-; password prompt.) Text files (CSV / tab-separated) are read as is.
-ReadCaseList(path) {
-    SplitPath path, , , &ext
-    text := (ext = "xlsx" || ext = "xls" || ext = "xlsm") ? CopyFromExcel(path) : FileRead(path)
-    if (Trim(text, " `t`r`n") = "")
-        throw Error("Epic's export is empty: " path)
-    return text
-}
-
-CopyFromExcel(path) {
-    xl := ComObject("Excel.Application")
-    ; Normally a separate Excel of its own. If it ever comes back as an
-    ; Excel you have open (workbooks in it), leave that one running.
-    ownExcel := (xl.Workbooks.Count = 0)
-    if ownExcel
-        xl.Visible := false
-    xl.DisplayAlerts := false
-    wb := ""
-    try {
-        ; Open(FileName, UpdateLinks, ReadOnly, Format, Password)
-        try
-            wb := xl.Workbooks.Open(path, 0, true, 1, EXPORT_PASSWORD)
-        catch as e
-            throw Error("Excel couldn't open Epic's export (is EXPORT_PASSWORD right?):`n" path "`n`n" e.Message)
-        A_Clipboard := ""
-        wb.Worksheets(1).UsedRange.Copy()
-        if !ClipWait(10)
-            throw Error("Couldn't copy the cells from " path)
-        text := A_Clipboard
-        xl.CutCopyMode := false
-    } finally {
-        try wb.Close(false)
-        if ownExcel {
-            try xl.Quit()
-        } else {
-            xl.DisplayAlerts := true
-        }
-    }
-    return text
-}
-
-; ── Step 3: hand it to the Cases page ───────────────────────────────────
-; The list goes on the clipboard behind a marker line; Ctrl+V in the
-; schedule's tab makes the Cases page take it, split it, record it and
-; export the assignments to Downloads.
-HandToApp(text) {
-    appWin := WinExist(APP_WINDOW)
-    if !appWin
-        throw Error("The schedule isn't open. Open it in the browser, signed in as the director (window title containing `"" APP_WINDOW "`").")
-    Trace("Step 3: schedule window: " WinInfo(appWin))
-    A_Clipboard := ""
-    A_Clipboard := "#PATHSCHED-AUTO`r`n" text
-    if !ClipWait(5)
-        throw Error("Couldn't put the case list on the clipboard.")
-    WinActivate appWin
-    if !WinWaitActive(appWin, , 5)
-        throw Error("Couldn't bring the schedule's window to the front.")
-    ; Keyboard focus into the page, not the address bar (Chrome and Edge).
-    try ControlFocus "Chrome_RenderWidgetHostHWND1", appWin
-    Sleep 300
-    Trace("Step 3: Ctrl+V into the schedule")
-    Send "^v"
-}
-
-; ── Hotkeys, tray menu, Esc ──────────────────────────────────────────────
-; No Alt in the hotkeys (Epic and Citrix use Alt combinations). The script
-; waits until the hotkey's keys are let go before sending anything, so Epic
-; never gets Ctrl or Shift mixed into its keys.
-^+1:: {
-    Trace("Ctrl+Shift+1 pressed — in front: " WinInfo("A"))
-    ReleaseHotkey()
-    StartRun(RunEverything)
-}
-^+2:: {
-    Trace("Ctrl+Shift+2 pressed — in front: " WinInfo("A"))
-    ReleaseHotkey()
-    StartRun(RunAssignments)
-}
-
-ReleaseHotkey() {
-    KeyWait "Control"
-    KeyWait "Shift"
-    KeyWait "1"
-    KeyWait "2"
-}
-
-; From the tray menu: the menu took the focus, so give the user 3 seconds
-; to click on Epic; the run starts with whatever is in front then.
-StartFromTray(fn) {
-    Loop 3 {
-        ToolTip "Click on Epic — starting in " (4 - A_Index) "…"
-        Sleep 1000
-    }
-    ToolTip
-    Trace("Started from the tray menu — in front: " WinInfo("A"))
-    StartRun(fn)
-}
-
-StartRun(fn) {
-    global busy
-    if busy
-        return
-    busy := true
-    try
-        fn()
-    catch as e {
-        Trace("ERROR: " e.Message " (" e.What ", line " e.Line ")")
-        ToolTip
-        MsgBox "Something went wrong:`n`n" e.Message, "Assign cases", "Icon!"
-    }
-    busy := false
-    Trace("Run finished")
-}
-
-; Esc while a run is going: stop everything now. The script restarts itself
-; (ready for the next run) — whatever it was doing ends mid-way, so check
-; Epic: an export screen or an assignment window may be left open.
+; Esc during a run: restart the script, which stops whatever it was doing.
+; Check Epic afterwards: an export screen or assignment window may be open.
 #HotIf busy
 Esc:: {
     Trace("Esc — stopped")
     Run '"' A_AhkPath '" /restart "' A_ScriptFullPath '" stopped'
     ExitApp
 }
-#HotIf
-#HotIf running
+#HotIf assigning
 Pause:: {
     global paused := !paused
     Trace(paused ? "Paused" : "Going on")
@@ -357,196 +125,287 @@ Pause:: {
 }
 #HotIf
 
-; ── Everything ───────────────────────────────────────────────────────────
-RunEverything() {
-    epicWin := WinExist("A")   ; Epic, in front, showing the list
-    Trace("Run everything — Epic window: " WinInfo(epicWin))
-    try {
-        ToolTip "1/4  Exporting the case list from Epic…  (Esc stops)"
-        listFile := ExportFromEpic(epicWin)
-        ToolTip "2/4  Reading " listFile "…  (Esc stops)"
-        Trace("Step 2: reading " listFile)
-        text := ReadCaseList(listFile)
-        Trace("Step 2: " StrSplit(RTrim(text, "`r`n"), "`n").Length " lines copied")
-        ToolTip "3/4  Handing the list to the Cases page…  (Esc stops)"
-        since := A_Now
-        HandToApp(text)
-        Trace("Step 3: waiting up to " APP_TIMEOUT " s for the assignments in " DOWNLOADS)
-        assignFile := WaitForNewFile(DOWNLOADS "\case-assignments-*.tsv", since, APP_TIMEOUT)
-        if (assignFile = "")
-            throw Error("The Cases page didn't export the assignments within " APP_TIMEOUT " seconds. Look at the page: it says why (for example, a case no one working can read).")
-        Trace("Step 3: assignments " assignFile)
-    } catch as e {
+; Runs one of the two jobs. Any step that hits a problem throws an Error;
+; it ends up here, in the log and in a message box.
+StartRun(job) {
+    global busy
+    if busy
+        return
+    ; Wait for the hotkey's keys to be let go, so Ctrl or Shift never gets
+    ; mixed into the keys the script sends to Epic.
+    KeyWait "Control"
+    KeyWait "Shift"
+    KeyWait "1"
+    KeyWait "2"
+    busy := true
+    Trace("Started — in front: " WinInfo("A"))
+    try
+        job()
+    catch as e {
         Trace("STOPPED: " e.Message)
         ToolTip
         MsgBox e.Message, "Assign cases", "Icon!"
-        return
     }
-    ToolTip
-    if !FocusEpic(epicWin)
-        return
-    if (FIRST_CASE_KEYS != "") {
-        Send FIRST_CASE_KEYS
-        Sleep MOVE_WAIT
-    }
-    RunAssignments(assignFile, epicWin)
+    busy := false
+    Trace("Run finished")
 }
 
-; ── Step 4: assign ───────────────────────────────────────────────────────
+; Ctrl+Shift+1
+RunEverything() {
+    epicWin := WinExist("A")        ; Epic: the window in front at the hotkey
+    Progress("1/4  Exporting the case list from Epic…")
+    excelFile := ExportFromEpic(epicWin)
+    Progress("2/4  Reading " excelFile "…")
+    caseList := CopyFromExcel(excelFile)
+    Progress("3/4  Handing the list to the Assign page…")
+    HandToApp(caseList)
+    assignFile := WaitForAssignments()
+    ToolTip
+    AssignCases(assignFile, epicWin)
+}
 
-; path: the assignments file (blank = pick one). epicWin: Epic's window
-; (blank = the window in front now).
-RunAssignments(path := "", epicWin := 0) {
-    global running, paused
-    if !epicWin
-        epicWin := WinExist("A")
+; Ctrl+Shift+2
+AssignFromFile() {
+    epicWin := WinExist("A")
+    path := FileSelect(1, NewestAssignments(), "Case assignments to enter in Epic", "Case assignments (*.tsv)")
+    if (path != "")
+        AssignCases(path, epicWin)
+}
 
-    if (path = "")
-        path := FileSelect(1, NewestExport(), "Case assignments to enter in Epic", "Case assignments (*.tsv)")
-    if (path = "")
-        return
-    Trace("Step 4: assignments " path " — Epic window: " WinInfo(epicWin))
-    try
-        cases := LoadCases(path)
-    catch as e {
-        Trace("Step 4: couldn't read it: " e.Message)
-        MsgBox "Couldn't read " path ":`n`n" e.Message, "Assign cases", "Icon!"
-        return
+; ── Step 1: export Epic's case log ──────────────────────────────────────
+; Returns the Excel file's path on this computer once Epic has written it.
+ExportFromEpic(epicWin) {
+    folder := LocalPathOf(EPIC_SAVE_DIR)
+    if !DirExist(folder)
+        throw Error("This computer can't see the export folder:`n" folder "`n`nCheck EPIC_SAVE_DIR at the top of the script.")
+    FocusEpic(epicWin)
+    started := A_Now
+    ourName := "Daily_Case_Log_" FormatTime(, "yyyyMMdd_HHmmss") ".xlsx"
+
+    Send "!3"                       ; Epic's menu
+    Sleep MENU_WAIT
+    Send "{Down 3}{Enter}"          ; … Export; the export screen loads
+    Sleep EXPORT_SCREEN_WAIT
+    if TYPE_FILE_NAME {
+        Send "^a"                   ; replace Epic's file name with ours
+        SendText EPIC_SAVE_DIR "\" ourName
+        Sleep FIELD_WAIT
+    }
+    ; The rest of the export screen, one field at a time. "{Text}" sends
+    ; what follows as plain text, not as key names.
+    exportScreen := [
+        "{Tab 2}", "{Text}" EXPORT_PASSWORD,    ; password
+        "{Tab}",   "{Text}" EXPORT_PASSWORD,    ; password again
+        "{Tab}",   "{Text}" EXPORT_REASON,      ; export reason
+        "{Tab 2}", "{Enter}"                    ; accept
+    ]
+    for keys in exportScreen {
+        Send keys
+        Sleep FIELD_WAIT
     }
 
-    logPath := path ".done.txt"
-    done := LoadDone(logPath)
-    start := 0
-    for i, c in cases
-        if !done.Has(c.acc) {
-            start := i
-            break
+    return WaitForEpicFile(folder "\" (TYPE_FILE_NAME ? ourName : EXPORT_FILE_PATTERN), started)
+}
+
+; Epic's path → the same file on this computer: \\Client\C$\x → C:\x.
+LocalPathOf(epicPath) {
+    return RegExReplace(epicPath, "i)^\\\\Client\\([A-Z])\$", "$1:")
+}
+
+; The newest file matching `pattern` that's newer than `since`, once Epic
+; has finished writing it: its size has stopped changing and nothing else
+; has it open. Checks once a second.
+WaitForEpicFile(pattern, since) {
+    deadline := A_TickCount + EPIC_EXPORT_TIMEOUT * 1000
+    lastSize := -1
+    Trace("Step 1: waiting up to " EPIC_EXPORT_TIMEOUT " s for " pattern)
+    loop {
+        path := NewestFile([pattern], since)
+        if (path != "") {
+            size := FileGetSize(path)
+            if (size > 0 && size = lastSize && NobodyElseHasOpen(path)) {
+                Trace("Step 1: export found: " path " (" size " bytes)")
+                return path
+            }
+            lastSize := size
         }
-    if (start = 0) {
+        if (A_TickCount > deadline)
+            throw Error("Epic's export didn't appear within " EPIC_EXPORT_TIMEOUT " seconds:`n" pattern
+                . "`n`nIs EPIC_SAVE_DIR Epic's export folder? If the export screen is still open in Epic, the keys may have landed in the wrong field: raise the waits at the top of the script.")
+        Sleep 1000
+    }
+}
+
+NobodyElseHasOpen(path) {
+    try {
+        FileOpen(path, "r -rwd").Close()    ; -rwd: open it, sharing with no one
+        return true
+    }
+    return false
+}
+
+; ── Step 2: copy it out of Excel ─────────────────────────────────────────
+; Epic's export is a password-protected Excel file. A hidden Excel opens it
+; with the password and copies its cells — the same text you'd get by
+; selecting them and pressing Ctrl+C, which is what the Assign page reads.
+CopyFromExcel(path) {
+    excel := ComObject("Excel.Application")
+    ; Normally a new Excel of its own, closed at the end. If it ever turns
+    ; out to be an Excel you have open (it has workbooks), leave that one.
+    ownExcel := (excel.Workbooks.Count = 0)
+    excel.DisplayAlerts := false
+    try {
+        ; Open(file, update links: no, read-only: yes, format, password)
+        try book := excel.Workbooks.Open(path, 0, true, 1, EXPORT_PASSWORD)
+        catch as e
+            throw Error("Excel couldn't open Epic's export (is EXPORT_PASSWORD right?):`n" path "`n`n" e.Message)
+        A_Clipboard := ""
+        book.Worksheets(1).UsedRange.Copy()
+        if !ClipWait(10)
+            throw Error("Couldn't copy the cells from " path)
+        text := A_Clipboard
+        excel.CutCopyMode := false
+    } finally {
+        try book.Close(false)
+        if ownExcel {
+            try excel.Quit()
+        } else {
+            excel.DisplayAlerts := true
+        }
+    }
+    if (Trim(text, " `t`r`n") = "")
+        throw Error("Epic's export is empty: " path)
+    return text
+}
+
+; ── Step 3: hand it to the Assign page and get the assignments back ─────
+; The page and the script talk through the clipboard, each message behind
+; a marker line so neither mistakes something else on the clipboard for it.
+;   Script → page:  "#PATHSCHED-AUTO", then Epic's case list. Ctrl+V in the
+;                   schedule's tab makes the page split and record the cases.
+;   Page → script:  "#PATHSCHED-ASSIGNMENTS <tab> file name", then the file.
+HandToApp(caseList) {
+    appWin := WinExist(APP_WINDOW)
+    if !appWin
+        throw Error("The schedule isn't open. Open it in the browser, signed in as the director (window title containing `"" APP_WINDOW "`").")
+    A_Clipboard := "#PATHSCHED-AUTO`r`n" caseList
+    WinActivate appWin
+    if !WinWaitActive(appWin, , 5)
+        throw Error("Couldn't bring the schedule's window to the front.")
+    try ControlFocus "Chrome_RenderWidgetHostHWND1", appWin    ; into the page, not the address bar
+    Sleep 300
+    Trace("Step 3: Ctrl+V into " WinInfo(appWin))
+    Send "^v"
+}
+
+; Waits for the page's answer and saves it in ASSIGNMENTS_DIR. Returns the
+; file's path. Each run gets a new file, since .done.txt goes by the file.
+WaitForAssignments() {
+    MARK := "#PATHSCHED-ASSIGNMENTS"
+    deadline := A_TickCount + APP_TIMEOUT * 1000
+    loop {
+        clip := ""
+        try clip := A_Clipboard     ; can fail while the browser is writing it
+        if (SubStr(clip, 1, StrLen(MARK)) = MARK)
+            break
+        if (A_TickCount > deadline)
+            throw Error("The Assign page didn't hand the assignments back within " APP_TIMEOUT " seconds. Look at the page: it says why (for example, a case no one working can read).")
+        Sleep 250
+    }
+    A_Clipboard := ""               ; case numbers off the clipboard
+
+    parts := StrSplit(clip, "`n", "`r", 2)          ; [marker line, the file]
+    name := Trim(StrReplace(parts[1], MARK), " `t")
+    if !RegExMatch(name, "^case-assignments-[\w-]+\.tsv$")
+        name := "case-assignments-" FormatTime(, "yyyy-MM-dd-HHmm") ".tsv"
+    DirCreate ASSIGNMENTS_DIR       ; (nothing happens if it's already there)
+    SplitPath name, , , , &stem
+    path := ASSIGNMENTS_DIR "\" name
+    n := 1
+    while FileExist(path)
+        path := ASSIGNMENTS_DIR "\" stem " (" (++n) ").tsv"
+    FileAppend parts.Length > 1 ? parts[2] : "", path, "UTF-8"
+    Trace("Step 3: assignments saved to " path)
+    return path
+}
+
+; ── Step 4: assign the cases in Epic ─────────────────────────────────────
+AssignCases(path, epicWin) {
+    global assigning, paused
+    cases := LoadCases(path)
+    doneLog := path ".done.txt"
+
+    ; Skip the cases already assigned from this file on an earlier run.
+    done := LoadDone(doneLog)
+    start := 1
+    while (start <= cases.Length && done.Has(cases[start].acc))
+        start++
+    if (start > cases.Length) {
         MsgBox "All " cases.Length " cases in this file are already assigned.", "Assign cases", "Iconi"
         return
     }
-    first := cases[start]
-    todo := []
-    for i, c in cases
-        if (i >= start && !done.Has(c.acc))
-            todo.Push(c)
 
-    msg := (DRY_RUN ? "DRY RUN — no keys will be pressed.`n`n" : "")
-        . todo.Length " of " cases.Length " cases to assign:`n`n" Summary(todo) "`n"
-        . (STOP_AFTER > 0 && STOP_AFTER < todo.Length ? "This run assigns the next " STOP_AFTER " cases only, then stops.`n`n" : "")
-        . (start = 1
-            ? "In Epic, case 1 (" first.acc ") must be selected."
-            : "Cases before " start " are done. In Epic, select case " start " (" first.acc ").")
+    ; The start box: the split, and which case to select in Epic.
+    FocusEpic(epicWin)
+    toDo := cases.Length - start + 1
+    msg := toDo " of " cases.Length " cases to assign:`n`n" CasesPerPathologist(cases, start) "`n"
+    if (STOP_AFTER > 0 && STOP_AFTER < toDo)
+        msg .= "This run assigns the next " STOP_AFTER " cases only, then stops.`n`n"
+    msg .= (start = 1 ? "" : "Cases 1–" (start - 1) " are done. ")
+        . "In Epic, select case " start " (" cases[start].acc ")."
         . "`n`nEsc stops the script; Pause pauses.`n`nStart?"
-    if (MsgBox(msg, "Assign cases — " WinTitleOf(epicWin), "OKCancel Iconi") != "OK") {
-        Trace("Step 4: cancelled at the start box (" todo.Length " cases)")
+    if (MsgBox(msg, "Assign cases", "OKCancel Iconi") != "OK") {
+        Trace("Step 4: cancelled at the start box")
         return
     }
-    Trace("Step 4: starting at case " start " of " cases.Length)
-    if !DRY_RUN && !FocusEpic(epicWin)
-        return
+    Trace("Step 4: " path " — starting at case " start " of " cases.Length)
 
-    running := true, paused := false
-    assigned := 0, skipped := 0, asked := 0, nextUp := 0
-    Loop cases.Length - start + 1 {
-        i := start + A_Index - 1
-        c := cases[i]
+    assigning := true, paused := false
+    assigned := 0, problem := ""
+    i := start
+    while (i <= cases.Length) {
         while paused
             Sleep 100
-        isLast := (i = cases.Length)
-
-        ; Assigned on an earlier run (a case skipped back then sits between
-        ; them): just move past it.
-        if done.Has(c.acc) {
-            if !DRY_RUN && !isLast {
-                if !FocusEpic(epicWin) {
-                    nextUp := i
-                    break
-                }
-                NextCase()
-            }
-            continue
-        }
-
+        c := cases[i]
         ToolTip i "/" cases.Length "   " c.acc "  →  " c.name
-
-        if (asked < CONFIRM_FIRST) {
-            asked++
-            r := MsgBox("Case " i ": " c.acc " → " c.name "`n`nCheck that " c.acc " is the case selected in Epic.`n`n"
-                . "Yes = assign it · No = skip it (move to the next case) · Cancel = stop",
-                "Assign cases (" i "/" cases.Length ")", "YesNoCancel Icon?")
-            if (r = "Cancel") {
-                Trace("Step 4: stopped at case " i " (" c.acc ")")
-                nextUp := i
-                break
-            }
-            if (r = "No") {
-                Trace("Step 4: skipped case " i " (" c.acc ")")
-                skipped++
-                if !DRY_RUN && !isLast {
-                    if !FocusEpic(epicWin) {
-                        nextUp := i + 1
-                        break
-                    }
-                    NextCase()
-                }
-                continue
-            }
-        }
-
-        if DRY_RUN {
-            Sleep 250
-            assigned++
-            continue
-        }
-        if !FocusEpic(epicWin) {
-            nextUp := i
-            break
-        }
-        try
+        try {
+            FocusEpic(epicWin)
             AssignCase(c)
-        catch as e {
-            Trace("Step 4: ERROR at case " i " (" c.acc "): " e.Message)
-            MsgBox "Stopped at case " i " (" c.acc "):`n`n" e.Message, "Assign cases", "Icon!"
-            nextUp := i
+        } catch as e {
+            problem := e.Message
             break
         }
-        FileAppend c.acc "`t" c.epic "`t" FormatTime(, "yyyy-MM-dd HH:mm:ss") "`n", logPath, "UTF-8"
+        FileAppend c.acc "`t" c.epic "`t" FormatTime(, "yyyy-MM-dd HH:mm:ss") "`n", doneLog, "UTF-8"
         Trace("Step 4: case " i " " c.acc " → " c.epic)
         assigned++
-        if !isLast
-            NextCase()
-        if (STOP_AFTER > 0 && assigned >= STOP_AFTER && !isLast) {
-            Trace("Step 4: stopping after " STOP_AFTER " cases (STOP_AFTER)")
-            nextUp := i + 1
+        i++
+        if (i > cases.Length)
             break
-        }
+        NextCase()
+        if (STOP_AFTER > 0 && assigned >= STOP_AFTER)
+            break
     }
-    running := false
+    assigning := false
     ToolTip
-    Trace("Step 4: done — " assigned " assigned, " skipped " skipped" (nextUp ? ", stopped before case " nextUp : ""))
 
-    msg := (DRY_RUN ? "Dry run finished — nothing was assigned.`n`n" : "")
-        . assigned (DRY_RUN ? " checked" : " assigned")
-        . (skipped ? ", " skipped " skipped" : "") "."
-    if nextUp
-        msg .= "`n`nStopped before case " nextUp " (" cases[nextUp].acc ")."
-    if !DRY_RUN && (nextUp || skipped)
-        msg .= "`n`nTo finish: Ctrl+Shift+2 and the same file; the script tells you which case to select."
-    MsgBox(msg, "Assign cases", "Iconi")
+    msg := assigned " assigned."
+    if (problem != "")
+        msg .= "`n`n" problem
+    if (i <= cases.Length)
+        msg .= "`n`nStopped before case " i " (" cases[i].acc "). To finish: Ctrl+Shift+2 and the same file."
+    Trace("Step 4: " StrReplace(msg, "`n`n", " "))
+    MsgBox msg, "Assign cases", problem != "" ? "Icon!" : "Iconi"
 }
 
-; One case, already selected in Epic. c.epic is what to type (the last
-; name, from the Cases page). Throw to stop the run.
+; One case, already selected in Epic. c.epic is what to type (the last name).
 AssignCase(c) {
-    Send "!g"
+    Send "!g"                       ; open the assignment window
     Sleep OPEN_WAIT
-    SendText c.epic
+    SendText c.epic                 ; the pathologist's name
     Sleep NAME_WAIT
-    Send "{Down}"
+    Send "{Down}"                   ; pick the match
     Sleep STEP_WAIT
-    Send "!g"
+    Send "!g"                       ; assign
     Sleep ASSIGN_WAIT
 }
 
@@ -556,19 +415,83 @@ NextCase() {
     Sleep MOVE_WAIT
 }
 
-; ── Helpers ──────────────────────────────────────────────────────────────
-; Bring Epic (the window that was in front at the hotkey) back to the front.
+; The assignments file → a list of {acc, epic, name}, in Epic's order.
+; Its columns: Seq · Case · EpicUser · Pathologist · Minutes. Lines that
+; don't start with a number (the header) are skipped.
+LoadCases(path) {
+    cases := []
+    for n, line in StrSplit(FileRead(path, "UTF-8"), "`n", "`r") {
+        f := StrSplit(line, "`t", " ")
+        if (Trim(line) = "" || !IsInteger(f[1]))
+            continue
+        if (f.Length < 4 || f[2] = "" || f[3] = "")
+            throw Error("Line " n " of " path " is missing a case number or a name:`n" line)
+        if (Integer(f[1]) != cases.Length + 1)
+            throw Error("Line " n " of " path " is case " f[1] ", expected " (cases.Length + 1) ". The file must list every case in Epic's order.")
+        cases.Push({ acc: f[2], epic: f[3], name: f[4] })
+    }
+    if (cases.Length = 0)
+        throw Error("No cases in " path ". Is it an export from the Assign page?")
+    return cases
+}
+
+; The case numbers already assigned (the first column of the .done.txt).
+LoadDone(doneLog) {
+    done := Map()
+    if FileExist(doneLog)
+        for line in StrSplit(FileRead(doneLog, "UTF-8"), "`n", "`r")
+            if (line != "")
+                done[StrSplit(line, "`t")[1]] := true
+    return done
+}
+
+; "Dr. Moravek: 22" lines for the start box, from case `start` on.
+CasesPerPathologist(cases, start) {
+    counts := Map()
+    Loop cases.Length - start + 1 {
+        name := cases[start + A_Index - 1].name
+        counts[name] := counts.Get(name, 0) + 1
+    }
+    s := ""
+    for name, n in counts
+        s .= "     " name ": " n "`n"
+    return s
+}
+
+; ── Small helpers ────────────────────────────────────────────────────────
+; Bring Epic (the window in front at the hotkey) back to the front.
 FocusEpic(win) {
-    if !WinExist(win) {
-        MsgBox "The Epic window is gone.", "Assign cases", "Icon!"
-        return false
-    }
+    if !WinExist(win)
+        throw Error("The Epic window is gone.")
     WinActivate win
-    if !WinWaitActive(win, , 3) {
-        MsgBox "Couldn't bring Epic to the front.", "Assign cases", "Icon!"
-        return false
-    }
-    return true
+    if !WinWaitActive(win, , 3)
+        throw Error("Couldn't bring Epic to the front.")
+}
+
+; The newest file matching any of `patterns`, modified at or after `since`
+; (a date-time like A_Now); "" when there's none. File times are compared as
+; numbers, YYYYMMDDHHMISS.
+NewestFile(patterns, since := 0) {
+    newest := "", newestTime := Number(since)
+    for pattern in patterns
+        Loop Files pattern {
+            t := Number(A_LoopFileTimeModified)
+            if (t >= newestTime)
+                newestTime := t, newest := A_LoopFileFullPath
+        }
+    return newest
+}
+
+; The newest assignments file, to preselect in Ctrl+Shift+2's picker.
+NewestAssignments() {
+    newest := NewestFile([ASSIGNMENTS_DIR "\case-assignments-*.tsv", DOWNLOADS "\case-assignments-*.tsv"])
+    return newest != "" ? newest : ASSIGNMENTS_DIR "\"
+}
+
+; A tooltip for the person watching, and a line in the log.
+Progress(msg) {
+    ToolTip msg "  (Esc stops)"
+    Trace(msg)
 }
 
 ; One line in assign-cases.log.
@@ -580,108 +503,4 @@ Trace(msg) {
 WinInfo(win) {
     try return WinGetTitle(win) " | " WinGetProcessName(win) " | " WinGetClass(win)
     return "(no window)"
-}
-
-WinTitleOf(win) {
-    try return WinGetTitle(win)
-    return "Epic"
-}
-
-; The newest file matching pattern modified at or after `since` (A_Now
-; format), waiting up to `timeout` seconds; "" when none turns up. A
-; browser download only gets its final name once it's complete. If the
-; browser asks where to save it, Save is pressed (it offers Downloads).
-; (File times are compared as numbers: AutoHotkey refuses to compare a
-; number with an empty string.)
-WaitForNewFile(pattern, since, timeout) {
-    deadline := A_TickCount + timeout * 1000
-    since := Number(since)
-    loop {
-        newest := "", newestTime := 0
-        Loop Files pattern {
-            t := Number(A_LoopFileTimeModified)
-            if (t >= since && t > newestTime)
-                newestTime := t, newest := A_LoopFileFullPath
-        }
-        if (newest != "") {
-            Sleep 500     ; let the writer finish
-            return newest
-        }
-        AcceptSaveDialog()
-        if (A_TickCount > deadline)
-            return ""
-        Sleep 500
-    }
-}
-
-; The browser's "Save As" box for the Cases page's download: press Save.
-AcceptSaveDialog() {
-    for exe in ["chrome.exe", "msedge.exe"] {
-        dlg := WinExist("Save As ahk_class #32770 ahk_exe " exe)
-        if !dlg
-            continue
-        Trace("Step 3: the browser asked where to save — pressing Save")
-        WinActivate dlg
-        if WinWaitActive(dlg, , 2)
-            Send "{Enter}"
-        Sleep 1000
-        return
-    }
-}
-
-; The newest assignments file in Downloads, to preselect in the picker.
-NewestExport() {
-    newest := "", newestTime := 0
-    Loop Files DOWNLOADS "\case-assignments-*.tsv" {
-        t := Number(A_LoopFileTimeModified)
-        if (t > newestTime)
-            newestTime := t, newest := A_LoopFileFullPath
-    }
-    return newest != "" ? newest : DOWNLOADS "\"
-}
-
-; The assignments file → [{seq, acc, epic, name}], in file order (= Epic's
-; order). Lines whose first field isn't a number (the header, blanks) are
-; skipped.
-LoadCases(path) {
-    cases := []
-    for n, line in StrSplit(FileRead(path, "UTF-8"), "`n", "`r") {
-        line := LTrim(line, Chr(0xFEFF))      ; the file's byte-order mark
-        if (Trim(line) = "")
-            continue
-        f := StrSplit(line, "`t")
-        if !RegExMatch(f[1], "^\s*\d+\s*$")
-            continue
-        if (f.Length < 4 || Trim(f[2]) = "" || Trim(f[3]) = "")
-            throw Error("Line " n " is missing a case number or a name:`n" line)
-        seq := Integer(Trim(f[1]))
-        if (seq != cases.Length + 1)
-            throw Error("Line " n " is case " seq ", expected " (cases.Length + 1) ". The file must list every case in Epic's order.")
-        cases.Push({ seq: seq, acc: Trim(f[2]), epic: Trim(f[3]), name: Trim(f[4]) })
-    }
-    if (cases.Length = 0)
-        throw Error("No cases in it. Is this an export from the Cases page?")
-    return cases
-}
-
-; Case numbers already assigned from this file (the first field of each
-; line of the .done.txt log).
-LoadDone(logPath) {
-    done := Map()
-    if FileExist(logPath)
-        for line in StrSplit(FileRead(logPath, "UTF-8"), "`n", "`r")
-            if (line != "")
-                done[StrSplit(line, "`t")[1]] := true
-    return done
-}
-
-; "Dr. Moravek: 22" lines, for the start box.
-Summary(todo) {
-    counts := Map()
-    for c in todo
-        counts[c.name] := (counts.Has(c.name) ? counts[c.name] : 0) + 1
-    s := ""
-    for name, n in counts
-        s .= "     " name ": " n "`n"
-    return s
 }

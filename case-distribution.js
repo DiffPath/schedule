@@ -1929,7 +1929,8 @@ function cdPeopleViewHtml() {
     const lcLines = (typeof locumRosterList === 'function' ? locumRosterList() : []).map(r => cdLineHtml('people', 'l:' + r.lid, cdTag('l:' + r.lid),
         `<b>Locum</b><span class="ch-dates"> · types “${escapeHtml(cdEpicName('l:' + r.lid))}” in Epic</span>`, null,
         () => `<div class="cd-form">
-            <label>Name</label><span>${escapeHtml(r.name)} <span class="cd-muted">(locums are added from a day on the schedule)</span></span>
+            <label for="cdln-${r.lid}">Name</label>
+            <input type="text" class="cd-input cd-input-epic" id="cdln-${r.lid}" data-lc-name="${r.lid}" value="${escapeHtml(r.name)}" autocomplete="off">
             <label for="cdle-${r.lid}">Typed in Epic</label>
             <input type="text" class="cd-input cd-input-epic" id="cdle-${r.lid}" data-lc-epic="${r.lid}" value="${escapeHtml(r.epic || '')}" placeholder="${escapeHtml(cdLastName(r))}" spellcheck="false" autocomplete="off">
           </div>`, r.name));
@@ -2361,6 +2362,12 @@ function cdAfterSettingsChange() {
         } else if (el.dataset.cdDn) {
             db.ref('scheduler/caseDist/types/' + el.dataset.cdDn + '/delnor').set(el.checked ? true : null)
                 .then(cdAfterSettingsChange)
+                .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
+        } else if (el.dataset.lcName) {
+            const v = el.value.replace(/[\t\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+            const problem = typeof locumNameProblem === 'function' ? locumNameProblem(el.dataset.lcName, v) : (v ? '' : 'Enter a name.');
+            if (problem) { showToast(problem, { type: 'error' }); el.value = (locumRoster[el.dataset.lcName] || {}).name || ''; return; }
+            db.ref('scheduler/locums/roster/' + el.dataset.lcName + '/name').set(v)
                 .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
         } else if (el.dataset.lcEpic) {
             const v = el.value.replace(/[\t\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();

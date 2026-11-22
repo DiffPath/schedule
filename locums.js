@@ -46,7 +46,7 @@ regListener('scheduler/locums', snap => {
     if (typeof cdDelnorChanged === 'function') cdDelnorChanged();   // re-splits when the day's people change
     if (typeof renderAll === 'function' && pathologistsReady && vacationsReady) renderAll();
     const back = document.getElementById('locumBack');
-    if (back && back.classList.contains('open') && _locumDate) openLocumPanel(_locumDate, true);
+    if (back && back.classList.contains('open') && _locumDate && !_locumRenaming) openLocumPanel(_locumDate, true);
 });
 
 // ── What the rest of the app reads ──────────────────────────────────────
@@ -181,10 +181,12 @@ function _locumRange(start, end) {
 // From the day editor: the day's locums (take one off this day, or their
 // whole stretch) and adding a locum for a range of days.
 let _locumDate = null;
+let _locumRenaming = null;     // the locum whose name is being changed in the panel
 
 function openLocumPanel(date, keepForm) {
     if (!isAdmin()) return;
     _locumDate = date;
+    _locumRenaming = null;
     const dk = fmt(date);
     let back = document.getElementById('locumBack');
     if (!back) {
@@ -196,8 +198,15 @@ function openLocumPanel(date, keepForm) {
             if (e.target === back || e.target.closest('[data-lc-close]')) { back.classList.remove('open'); return; }
             const b = e.target.closest('[data-lc-remove]');
             if (b) _locumRemove(b.dataset.lcRemove, b.dataset.lcScope, fmt(_locumDate));
+            const rn = e.target.closest('[data-lc-rename]');
+            if (rn) openLocumRename(rn.dataset.lcRename);
+            if (e.target.closest('[data-lc-back]')) openLocumPanel(_locumDate);
+            if (e.target.closest('#locumRenameSave')) _locumSaveRename();
         });
-        back.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); back.classList.remove('open'); } });
+        back.addEventListener('keydown', e => {
+            if (e.key === 'Escape') { e.stopPropagation(); back.classList.remove('open'); }
+            if (e.key === 'Enter' && _locumRenaming && e.target.matches('input')) _locumSaveRename();
+        });
         back.addEventListener('change', e => { if (e.target.id === 'locumWho') _locumSyncWho(); });
     }
     // Keep what was typed when the roster updates under an open panel.
@@ -213,6 +222,7 @@ function openLocumPanel(date, keepForm) {
           <div class="lc-here-row">
             <span class="ch-tag ch-tag-locum">${escapeHtml('Dr. ' + locumLastName(l.name))}</span>
             <span class="lc-here-when">${escapeHtml(_locumRange(l.start, l.end))}</span>
+            <button type="button" class="cd-btn cd-btn-sm" data-lc-rename="${escapeHtml(l.lid)}">Rename</button>
             <button type="button" class="cd-btn cd-btn-sm" data-lc-remove="${escapeHtml(l.sid)}" data-lc-scope="day">Remove this day</button>
             ${l.start !== l.end ? `<button type="button" class="cd-btn cd-btn-sm cd-del" data-lc-remove="${escapeHtml(l.sid)}" data-lc-scope="all">Remove ${escapeHtml(_locumRange(l.start, l.end))}</button>` : ''}
           </div>`).join('')}</div>` : '';
@@ -257,6 +267,52 @@ function openLocumPanel(date, keepForm) {
     _locumSyncWho();
     document.getElementById('locumAdd').onclick = _locumAdd;
     back.classList.add('open');
+}
+
+// Rename a locum (and what the script types for them in Epic). Everything
+// refers to a locum by its id, so the new name shows everywhere at once —
+// the schedule, the day editor, the Assign page.
+function openLocumRename(lid) {
+    const r = locumRoster[lid];
+    const back = document.getElementById('locumBack');
+    if (!r || !back) return;
+    _locumRenaming = lid;
+    back.innerHTML = `<div class="modal lc-modal" role="dialog" aria-labelledby="locumRenameTitle">
+        <button type="button" class="modal-close-x" data-lc-close aria-label="Close" title="Close">&times;</button>
+        <h3 id="locumRenameTitle">Rename locum</h3>
+        <div class="sub">The new name shows everywhere — the schedule, the day editor and the Assign page.</div>
+        <div class="lc-form">
+          <label for="locumRenameName">Name</label>
+          <input type="text" id="locumRenameName" value="${escapeHtml(r.name || '')}" placeholder="e.g. Dr. Jane Smith" autocomplete="off">
+          <label for="locumRenameEpic">Typed in Epic <span class="label-optional">(blank: their last name)</span></label>
+          <input type="text" id="locumRenameEpic" value="${escapeHtml(r.epic || '')}" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="modal-actions">
+          <button type="button" data-lc-back>Back</button>
+          <button type="button" class="primary" id="locumRenameSave">Save</button>
+        </div>
+      </div>`;
+    back.classList.add('open');
+    setTimeout(() => { const i = document.getElementById('locumRenameName'); if (i) { i.focus(); i.select(); } }, 0);
+}
+
+function _locumSaveRename() {
+    const lid = _locumRenaming;
+    if (!lid) return;
+    const name = document.getElementById('locumRenameName').value.replace(/\s+/g, ' ').trim();
+    const epic = document.getElementById('locumRenameEpic').value.replace(/\s+/g, ' ').trim();
+    const err = locumNameProblem(lid, name);
+    if (err) { showToast(err, { type: 'error' }); return; }
+    db.ref('scheduler/locums/roster/' + lid).update({ name, epic: epic || null })
+        .then(() => { showToast('Renamed to ' + name + '.'); _locumRenaming = null; openLocumPanel(_locumDate); })
+        .catch(e => showToast('Could not save: ' + e.message, { type: 'error' }));
+}
+
+// Why a name can't be used for this locum, or '' when it can.
+function locumNameProblem(lid, name) {
+    if (!name) return 'Enter the locum’s name.';
+    const clash = locumRosterList().find(r => r.lid !== lid && r.name.toLowerCase() === name.toLowerCase());
+    return clash ? 'Another locum already has that name.' : '';
 }
 
 // "New locum…" shows the name fields.

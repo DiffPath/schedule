@@ -778,7 +778,7 @@ function cdPath(pid) {
 }
 
 // A person's tag: the pathologist's schedule colour, Delnor's teal, a
-// locum's slate.
+// locum's indigo.
 function cdTag(pid) {
     const p = cdPath(pid);
     if (p && p.delnor) return `<span class="ch-tag ch-tag-delnor" title="Delnor">${escapeHtml(cdShortName(p))}</span>`;

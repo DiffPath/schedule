@@ -2529,6 +2529,75 @@ main {
     cursor: default;
 }
 
+/* The Lock control as a padlock: the checkbox stays (it's what Save reads,
+   and it keeps the keyboard and screen readers working) but is invisible,
+   laid over the icon. Unlocked: an open grey padlock. Locking it snaps the
+   shackle shut and turns it red. */
+.modal .svc-lock-toggle {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    justify-content: center;
+    border-radius: 6px;
+    transition: background-color 0.2s ease;
+}
+.modal .svc-lock-toggle:hover { background: color-mix(in srgb, var(--ink-3) 14%, transparent); }
+.modal .svc-lock-toggle:has(input:disabled):hover { background: none; }
+.svc-lock-toggle input[type="checkbox"].svc-lock-cb {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    z-index: 1;
+}
+.svc-lock-toggle .lock-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+.svc-lock-toggle .lock-icon {
+    display: block;
+    width: 19px;
+    height: 19px;
+    color: var(--ink-3);
+    transition: color 0.25s ease, transform 0.25s ease;
+}
+.svc-lock-toggle .lock-icon svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.svc-lock-toggle .lock-shackle {
+    transform-box: view-box;
+    transform-origin: 10.5px 7.5px;          /* the right leg: the shackle swings on it */
+    transform: translateY(-1.5px) rotate(24deg);
+    transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.svc-lock-toggle .lock-body { fill: transparent; transition: fill 0.25s ease; }
+.svc-lock-toggle:hover .lock-icon { color: var(--ink-2); }
+.svc-lock-toggle input:checked ~ .lock-icon { color: #b92a2a; }
+.svc-lock-toggle input:checked ~ .lock-icon .lock-shackle { transform: none; }
+.svc-lock-toggle input:checked ~ .lock-icon .lock-body { fill: rgba(185, 42, 42, 0.14); }
+.svc-lock-toggle input:active:not(:disabled) ~ .lock-icon { transform: scale(0.88); }
+.svc-lock-toggle input:checked:disabled ~ .lock-icon { color: #c9706a; }
+.svc-lock-toggle input:focus-visible ~ .lock-icon { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+@media (prefers-reduced-motion: reduce) {
+    .svc-lock-toggle .lock-shackle, .svc-lock-toggle .lock-icon { transition: none; }
+}
+
+/* Dropdowns in panels: the arrow drawn by the app, set in from the right
+   edge (the browser's own sits tight against it). !important because many
+   panel selects set the `background` shorthand, which would clear it. */
+.modal select:not([multiple]):not([size]) {
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 32px !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%233d5166' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") !important;
+    background-repeat: no-repeat !important;
+    background-position: right 12px center !important;
+    background-size: 10px 6px !important;
+}
+
 /* Freetext "Custom service…" input under a service-modal row. */
 #svcAssignments .svc-ft-input {
     width: 100%;
@@ -2797,14 +2866,22 @@ main {
     border-color: #b94e2a;
 }
 
-.day-edit-row {
-    flex-wrap: wrap;
+/* Every row in the day editor on one grid — dot · name · service · lock —
+   so the columns line up, locums included (their dates sit in the lock
+   column). The custom-service box drops onto its own line. */
+.modal .day-edit-row {
+    display: grid;
+    grid-template-columns: 12px minmax(0, 1fr) 220px 56px;
+    column-gap: 12px;
     row-gap: 6px;
 }
 .day-edit-row .dname {
-    flex: 1 1 150px;
     min-width: 0;
 }
+.modal .day-edit-row .svc-lock-toggle { justify-self: center; }
+.day-edit-row .locum-dates { justify-self: center; font-size: 11.5px; font-weight: 500; color: var(--locum); white-space: nowrap; }
+.day-detail-row .locum-pill { background: var(--locum); color: #fff; }
+.day-detail-row.locum-detail-row { border-color: color-mix(in srgb, var(--locum) 25%, transparent); }
 .day-edit-row .dtag {
     font-family: var(--mono);
     font-size: 8.5px;
@@ -2815,10 +2892,11 @@ main {
     margin-left: 4px;
 }
 /* Outranks `.modal select` (width:100%). */
-.modal .day-edit-row .day-edit-sel {
-    flex: 0 1 230px;
-    width: auto;
-    min-width: 160px;
+.modal .day-edit-row .day-edit-sel,
+.modal .day-edit-row .locum-day-svc {
+    width: 100%;
+    min-width: 0;
+    height: 32px;
     padding: 6px 8px;
     font-size: 12.5px;
     border-radius: 5px;
@@ -2840,7 +2918,7 @@ main {
     margin-left: 6px;
 }
 .modal .day-edit-row .svc-ft-input {
-    flex-basis: 100%;
+    grid-column: 2 / -1;
     width: 100%;
     padding: 7px 10px;
     border: 1px solid var(--rule);
@@ -2875,7 +2953,14 @@ main {
 }
 .day-edit-row .dname .doc-pill { margin-left: 6px; vertical-align: 1px; }
 @media (max-width: 480px) {
-    .modal .day-edit-row .day-edit-sel { flex: 1 1 100%; }
+    /* Phones: name and lock on top, the service box underneath. */
+    .modal .day-edit-row { grid-template-columns: 12px minmax(0, 1fr) 56px; }
+    .modal .day-edit-row .ddot { grid-row: 1; }
+    .modal .day-edit-row .dname { grid-row: 1; grid-column: 2; }
+    .modal .day-edit-row .svc-lock-toggle,
+    .modal .day-edit-row .locum-dates { grid-row: 1; grid-column: 3; }
+    .modal .day-edit-row .day-edit-sel,
+    .modal .day-edit-row .locum-day-svc { grid-row: 2; grid-column: 2 / -1; }
     /* Bottom bar: Reset + Horizon on one line; Save, Save & recompute and
        Close share the next. */
     .day-modal-actions { gap: 6px; }
@@ -9576,15 +9661,14 @@ body.cd-resizing, body.cd-resizing * { cursor: col-resize !important; user-selec
 .last-day-clear:hover { border-color: var(--ink-3); color: var(--ink); }
 @media (max-width: 600px) { .last-day-row { grid-template-columns: 1fr auto; } .last-day-name { grid-column: 1 / -1; } }
 
-/* Locums (locums.js): slate, so they never read as one of ours or Delnor. */
-:root { --locum: #475569; --locum-bg: #e2e8f0; --svc-locum: #475569; }
+/* Locums (locums.js): indigo (the director's pick), apart from ours and Delnor's teal. */
+:root { --locum: #4338ca; --locum-bg: #e0e7ff; --svc-locum: #4338ca; }
 .ch-tag.ch-tag-locum { background: var(--locum-bg); color: var(--locum); font-weight: 600; }
 .cd-person-locum { background: var(--locum-bg); border-color: transparent; }
 .wd-row.locum-row { --c: var(--locum); --c-bg: var(--locum-bg); }
 .wd-row.locum-row:not([style*="--sc"]) .svc { font-style: italic; color: var(--locum); }
 .locum-mark { margin-left: auto; font: 600 8.5px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--locum); }
 .day-detail-row .locum-mark { margin-left: 6px; }
-.locum-day-svc { justify-self: end; height: 30px; padding: 0 8px; border: 1px solid var(--rule-soft); border-radius: 6px; background: var(--paper); font: 12.5px var(--sans); color: var(--ink); }
 .lc-modal { width: min(520px, 94vw); }
 .lc-here { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; padding-bottom: 12px; border-bottom: 1px solid var(--rule-soft); }
 .lc-here-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

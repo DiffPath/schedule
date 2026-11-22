@@ -10818,7 +10818,7 @@ function _dayEditRowsHtml(date, dayAssign) {
           <select class="day-edit-sel" data-pid="${p.id}" data-initial="${escapeHtml(currentId)}" aria-label="Service for ${escapeHtml(p.name)}">${noneOpt}${opts}${customOpt}</select>
           <label class="svc-lock-toggle" title="Lock this assignment in place — recompute won't move it. Custom &amp; off-site services are always locked.">
             <input type="checkbox" class="svc-lock-cb" data-lock-pid="${p.id}" data-initial-lock="${lockId ? '1' : '0'}" ${lockId ? 'checked' : ''} />
-            <span>Lock</span>
+            <span class="lock-icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path class="lock-shackle" d="M5.5 7.5V5.25a2.5 2.5 0 0 1 5 0V7.5"/><rect class="lock-body" x="3" y="7.5" width="10" height="7" rx="1.6"/></svg></span><span class="lock-text">Lock</span>
           </label>
           <input type="text" class="svc-ft-input" data-ft-pid="${p.id}"
                  list="ftServiceNames" maxlength="40" autocomplete="off" spellcheck="false"
@@ -13766,9 +13766,10 @@ function openServiceModal(date, mode, keepNote) {
 
     // Non-admin: only render their own row (they can only request changes
     // to their own service slot)
-    const visiblePaths = admin
+    // Not anyone who has left by then (a last day in Settings).
+    const visiblePaths = (admin
         ? pathologists
-        : pathologists.filter(p => p.id === loggedInPathId);
+        : pathologists.filter(p => p.id === loggedInPathId)).filter(p => isPathActiveOn(p, date));
 
     container.innerHTML = visiblePaths.map(p => {
         const a = dayAssign[p.id];
@@ -13804,7 +13805,7 @@ function openServiceModal(date, mode, keepNote) {
             ? `<label class="svc-lock-toggle" title="Lock this assignment in place — recompute won't move it. Custom & off-site services are always locked.">
                    <input type="checkbox" class="svc-lock-cb" data-lock-pid="${p.id}"
                           data-initial-lock="${lockId ? '1' : '0'}" ${lockId ? 'checked' : ''} />
-                   <span>Lock</span>
+                   <span class="lock-icon" aria-hidden="true"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path class="lock-shackle" d="M5.5 7.5V5.25a2.5 2.5 0 0 1 5 0V7.5"/><rect class="lock-body" x="3" y="7.5" width="10" height="7" rx="1.6"/></svg></span><span class="lock-text">Lock</span>
                </label>`
             : '';
         const ftInputHtml = admin

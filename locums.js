@@ -100,7 +100,7 @@ function locumServicesOn(date) {
     return locumsOnDay(date).map(l => l.svc).filter(id => id && id !== LOCUM_NO_SVC);
 }
 
-// The schedule's "Locum" rows for a day (week, day and month views).
+// The schedule's locum rows for a day (week, day and month views), in indigo.
 function locumRowsHtml(date) {
     return locumsOnDay(date).map(l => {
         const svc = l.svc !== LOCUM_NO_SVC ? SERVICE_BY_ID[l.svc] : null;
@@ -125,11 +125,18 @@ function locumDetailRowsHtml(date) {
     return locumsOnDay(date).map(l => {
         const svc = l.svc !== LOCUM_NO_SVC ? SERVICE_BY_ID[l.svc] : null;
         const changed = !!(locumDays[fmt(date)] && locumDays[fmt(date)][l.lid]);
-        return `<div class="day-detail-row locum-detail-row" title="Locum — no call, consults or conferences">
-          <div class="ddot" style="background:var(--locum)"></div>
-          <div class="dname">${escapeHtml(l.name)} <span class="locum-mark">Locum</span></div>
-          ${edit ? `<select class="locum-day-svc" data-locum-day="${escapeHtml(l.lid)}" aria-label="${escapeHtml(l.name)}'s service">${_locumSvcOptions(changed ? l.svc : '', 'Usual (' + _locumUsualLabel(locumStints[l.sid], date) + ')')}</select>`
-            : `<div class="dservice">${svc ? `<span class="swatch" style="background:var(${svc.cssVar})"></span>${escapeHtml(svc.name)}` : 'Cases only'} · ${escapeHtml(_locumRange(l.start, l.end))}</div>`}
+        if (edit) {
+            return `<div class="day-detail-row day-edit-row locum-detail-row" style="--c:var(--locum); --c-bg:var(--locum-bg)" title="Locum — no call, consults or conferences">
+          <div class="ddot"></div>
+          <div class="dname">${escapeHtml(l.name)} <span class="doc-pill locum-pill">Locum</span></div>
+          <select class="locum-day-svc" data-locum-day="${escapeHtml(l.lid)}" aria-label="${escapeHtml(l.name)}'s service">${_locumSvcOptions(changed ? l.svc : '', 'Usual (' + _locumUsualLabel(locumStints[l.sid], date) + ')')}</select>
+          <span class="locum-dates">${escapeHtml(_locumRange(l.start, l.end))}</span>
+        </div>`;
+        }
+        return `<div class="day-detail-row locum-detail-row" style="--c:var(--locum); --c-bg:var(--locum-bg)" title="Locum — no call, consults or conferences">
+          <div class="ddot"></div>
+          <div class="dname">${escapeHtml(l.name)} <span class="doc-pill locum-pill">Locum</span></div>
+          <div class="dservice">${svc ? `<span class="swatch" style="background:var(${svc.cssVar})"></span>${escapeHtml(svc.name)}` : 'Cases only'} · ${escapeHtml(_locumRange(l.start, l.end))}</div>
         </div>`;
     }).join('');
 }

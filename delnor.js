@@ -8,22 +8,27 @@
 // case-distribution.js, which reads who is signed up.
 //
 // Delnor's own pathologists cover Delnor and sign out cases from our region,
-// nothing else. From DELNOR_START each working day has DELNOR_SLOTS slots;
-// the Delnor login (and the director) fills them from Delnor's roster. The
-// sheet is a month view with nothing else on it. The Cases page reads it:
-// about a quarter of the day's case minutes, from the case types allowed to
-// go to Delnor, split among whoever is signed up (see cdDelnorWorkers).
+// nothing else. The director ticks "Sendout" on the working days (from
+// DELNOR_START) we want to send cases to Delnor; those days get DELNOR_SLOTS
+// slots, which the Delnor login (and the director) fills from Delnor's
+// roster. A requested day with someone signed up shows a "Delnor sendout"
+// bar on the main schedule (delnorSendoutDay), and the Assign page sends
+// Delnor about a quarter of that day's work, from the case types allowed to
+// go there (see cdDelnorWorkers / cdDistribute). The sheet is a month view
+// with nothing else on it.
 //
 // Firebase:
 //   scheduler/delnor/roster/<rid>            { name, epic? }  Delnor's pathologists
 //                                            epic: what the AutoHotkey script
 //                                            types in Epic (blank = last name)
+//   scheduler/delnor/requested/<YYYY-MM-DD>  true             the director asked for a sendout
 //   scheduler/delnor/slots/<YYYY-MM-DD>/<n>  rid              n = 1..DELNOR_SLOTS
 
 const DELNOR_START = '2026-11-30';
 const DELNOR_SLOTS = 3;
 let delnorRoster = {};
 let delnorSlots = {};
+let delnorRequested = {};
 let delnorReady = false;
 let _dnMonth = null;          // first of the month the sheet shows
 let _dnAddFor = null;         // { dk, n } — the slot the add panel fills
@@ -32,9 +37,12 @@ regListener('scheduler/delnor', snap => {
     const v = snap.exists() ? snap.val() : {};
     delnorRoster = v.roster || {};
     delnorSlots = v.slots || {};
+    delnorRequested = v.requested || {};
     delnorReady = true;
     if (_dnPageActive()) renderDelnorPage();
     if (typeof cdDelnorChanged === 'function') cdDelnorChanged();
+    // The main schedule's "Delnor sendout" bars.
+    if (typeof renderAll === 'function' && pathologistsReady && vacationsReady) renderAll();
 });
 
 function _dnPageActive() {
@@ -43,9 +51,19 @@ function _dnPageActive() {
 }
 
 // ── What the rest of the app reads ──────────────────────────────────────
-// A working day on or after the start: it has slots.
-function delnorIsSlotDay(date) {
+// A working day on or after the start: the director may request a sendout.
+function delnorCanRequest(date) {
     return fmt(date) >= DELNOR_START && !isWeekend(date) && !getFederalHoliday(date);
+}
+
+// A day the director requested a sendout for: it has slots.
+function delnorIsSlotDay(date) {
+    return !!date && delnorCanRequest(date) && !!delnorRequested[fmt(date)];
+}
+
+// The main schedule's "Delnor sendout" bar: requested, and someone signed up.
+function delnorSendoutDay(date) {
+    return delnorOnDay(date).length > 0;
 }
 
 function delnorLastName(name) {
@@ -274,14 +292,20 @@ function _dnMonthHtml(month) {
             const day = addDays(d, i);
             const dk = fmt(day);
             const inMonth = day.getMonth() === month.getMonth();
-            const slotDay = inMonth && delnorIsSlotDay(day);
+            const canReq = inMonth && delnorCanRequest(day);
+            const slotDay = canReq && delnorIsSlotDay(day);
             const isToday = fmt(today) === dk;
             const holiday = inMonth && getFederalHoliday(day);
             const slots = slotDay ? (delnorSlots[dk] || {}) : null;
             const filled = slots ? Object.values(slots).filter(rid => rid && delnorRoster[rid]).length : 0;
-            cells.push(`<div class="dn-day${inMonth ? '' : ' is-out'}${slotDay ? '' : ' no-slots'}${isToday ? ' is-today' : ''}" data-date="${dk}">
-                <div class="dn-day-head"><span class="dn-num">${day.getDate()}<span class="dn-wd"> · ${escapeHtml(_cfDayShort(day))}</span></span>${slotDay ? `<span class="dn-count${filled === DELNOR_SLOTS ? ' is-full' : ''}">${filled}/${DELNOR_SLOTS}</span>` : (holiday ? `<span class="dn-note">${escapeHtml(holiday)}</span>` : '')}</div>
-                ${slotDay ? `<div class="dn-slots">${Array.from({ length: DELNOR_SLOTS }, (_, k) => _dnSlotHtml(dk, k + 1, slots)).join('')}</div>` : ''}
+            const req = canReq && isAdmin()
+                ? `<label class="dn-req" title="Ask Delnor's pathologists to sign up for this day"><input type="checkbox" data-dn-req="${dk}"${slotDay ? ' checked' : ''}>Sendout</label>` : '';
+            const right = slotDay ? `<span class="dn-count${filled === DELNOR_SLOTS ? ' is-full' : ''}">${filled}/${DELNOR_SLOTS}</span>`
+                : holiday ? `<span class="dn-note">${escapeHtml(holiday)}</span>` : '';
+            cells.push(`<div class="dn-day${inMonth ? '' : ' is-out'}${canReq ? (slotDay ? '' : ' is-off') : ' no-slots'}${isToday ? ' is-today' : ''}" data-date="${dk}">
+                <div class="dn-day-head"><span class="dn-num">${day.getDate()}<span class="dn-wd"> · ${escapeHtml(_cfDayShort(day))}</span></span><span class="dn-head-right">${req}${right}</span></div>
+                ${slotDay ? `<div class="dn-slots">${Array.from({ length: DELNOR_SLOTS }, (_, k) => _dnSlotHtml(dk, k + 1, slots)).join('')}</div>`
+                  : canReq ? '<div class="dn-off">No sendout</div>' : ''}
               </div>`);
         }
         d = addDays(d, 7);
@@ -302,7 +326,7 @@ function renderDelnorPage() {
     }
     // Don't redraw under an open picker or a field being typed in.
     const active = document.activeElement;
-    if (active && root.contains(active) && active.matches('select, input')) return;
+    if (active && root.contains(active) && active.matches('select, input:not([type="checkbox"])')) return;
     const html = `<header class="tl-header">
           <h2 class="tl-title">Delnor sign-up</h2>
           <div class="cf-nav dn-nav">
@@ -322,6 +346,27 @@ function _dnSetRoot(root, html) {
     if (root._dnHtml === html) return;
     root.innerHTML = html;
     root._dnHtml = html;
+}
+
+// The director ticks or unticks a day's Sendout box. Unticking a day
+// someone has signed up for asks first, and takes their sign-ups off.
+function _dnSetRequested(input) {
+    const dk = input.dataset.dnReq;
+    if (input.checked) {
+        db.ref('scheduler/delnor/requested/' + dk).set(true)
+            .catch(err => { input.checked = false; showToast('Could not save: ' + err.message, { type: 'error' }); });
+        return;
+    }
+    const cancel = () => db.ref('scheduler/delnor').update({ ['requested/' + dk]: null, ['slots/' + dk]: null })
+        .catch(err => showToast('Could not save: ' + err.message, { type: 'error' }));
+    const who = delnorOnDay(parseDate(dk));
+    if (!who.length) { cancel(); return; }
+    input.checked = true;   // until they say so
+    const names = who.map(r => r.name).join(', ');
+    const back = _dnPanel('dnCancelBack', 'Cancel this sendout?', _cfDayShort(parseDate(dk)) + '.',
+        `<p class="dn-panel-text">${escapeHtml(names)} ${who.length === 1 ? 'is' : 'are'} signed up. Cancelling takes ${who.length === 1 ? 'them' : 'them all'} off this day.</p>`,
+        '<button type="button" data-dn-close>Keep it</button><button type="button" class="danger" id="dnCancelYes">Cancel sendout</button>');
+    document.getElementById('dnCancelYes').onclick = () => { back.classList.remove('open'); cancel(); };
 }
 
 function _dnSetSlot(dk, n, rid) {
@@ -495,6 +540,10 @@ function _dnOpenRoster() {
             if (!root.contains(document.activeElement)) renderDelnorPage();
         }, 0);
     });
+    root.addEventListener('change', e => {
+        if (e.target.matches('[data-dn-req]') && isAdmin()) _dnSetRequested(e.target);
+    });
+
     // The list follows its box when the page moves.
     window.addEventListener('resize', () => { if (_dnSug.input) _dnDrawSuggest(); });
     root.addEventListener('scroll', () => { if (_dnSug.input) _dnDrawSuggest(); }, true);

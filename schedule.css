@@ -867,15 +867,38 @@ main {
     letter-spacing: 0.08em;
 }
 
+/* Delnor sendout banner: same shape, Delnor's teal — on requested days
+   someone at Delnor signed up for (delnorSendoutDay). */
+.wd-row.dn-sendout {
+    background: var(--delnor, #0f766e);
+    border: 1px solid var(--delnor, #0f766e);
+    color: white;
+    padding: 5px 7px;
+    min-height: 13.8px;
+    box-sizing: border-box;
+    justify-content: center;
+}
+.wd-row.dn-sendout .lf-label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: white;
+    line-height: 1.2;
+}
+.month-view .day .wd-row.dn-sendout { padding: 3px 6px; min-height: 12.6px; box-sizing: border-box; }
+.month-view .day .wd-row.dn-sendout .lf-label { font-size: 8.5px; letter-spacing: 0.08em; }
+
 /* Reserve the banner's footprint with a transparent spacer on days without
-   .lf-sendout (:has() matches a .wd-rows lacking the banner) so day heights match. */
-.wd-rows:not(:has(.wd-row.lf-sendout))::after {
+   a sendout banner (:has() matches a .wd-rows lacking one) so day heights match. */
+.wd-rows:not(:has(.wd-row.lf-sendout, .wd-row.dn-sendout))::after {
     content: "";
     display: block;
     height: 23.8px;        /* one row's height + the .wd-rows row gap */
     flex-shrink: 0;
 }
-.month-view .day .wd-rows:not(:has(.wd-row.lf-sendout))::after {
+.month-view .day .wd-rows:not(:has(.wd-row.lf-sendout, .wd-row.dn-sendout))::after {
     height: 16.6px;        /* tighter row + gap in the month view */
 }
 
@@ -3646,10 +3669,12 @@ main {
 
     /* LF sendout banner: swap to the abbreviated "LF sendout" label so it
        fits inside the narrow mobile day cell. */
-    .month-view .day .wd-row.lf-sendout .lf-label-full {
+    .month-view .day .wd-row.lf-sendout .lf-label-full,
+    .month-view .day .wd-row.dn-sendout .lf-label-full {
         display: none;
     }
-    .month-view .day .wd-row.lf-sendout .lf-label-abbr {
+    .month-view .day .wd-row.lf-sendout .lf-label-abbr,
+    .month-view .day .wd-row.dn-sendout .lf-label-abbr {
         display: inline;
     }
 
@@ -9132,25 +9157,7 @@ span.ch-day { box-sizing: border-box; cursor: default; }
     white-space: nowrap;
 }
 
-/* Paste box + column pickers */
-.cd-paste {
-    width: 100%;
-    min-height: 92px;
-    max-height: 220px;
-    resize: vertical;
-    box-sizing: border-box;
-    padding: 10px 12px;
-    border: 1px dashed var(--rule);
-    border-radius: 8px;
-    background: var(--paper);
-    font-family: var(--mono);
-    font-size: 11.5px;
-    line-height: 1.5;
-    color: var(--ink-2);
-    white-space: pre;
-}
-.cd-paste:focus { outline: none; border-style: solid; border-color: var(--ink-3); }
-.cd-paste-meta:not(:empty) { margin-top: 12px; }
+/* Column pickers */
 .cd-field {
     display: flex;
     flex-direction: column;
@@ -9366,12 +9373,11 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
 #casesPage .cf-cal { padding: 0; }
 
 .cd-head-right { display: flex; align-items: center; gap: 14px; margin-left: auto; min-width: 0; }
-.cd-head-right .requests-page-bar { margin: 0; }
-.tl-header .cd-list-group .req-new-btn::before { content: none; }
-.tl-header .cd-list-group .req-new-btn:disabled { opacity: 0.45; cursor: default; background: transparent; box-shadow: none; }
 .cd-day-nav { display: flex; align-items: center; gap: 4px; }
 .cd-day-nav .current-period { font-size: 18px; min-width: 0; padding: 2px 10px; white-space: nowrap; cursor: pointer; }
 .cd-day-nav .current-period:hover { background: var(--paper); }
+.cd-day-nav .cd-day-fixed { cursor: default; }
+.cd-day-nav .cd-day-fixed:hover { background: transparent; }
 
 /* Right-hand cards */
 .cd-panel { display: flex; flex-direction: column; gap: 14px; }
@@ -9394,6 +9400,44 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
 
 /* Sections that carry a pathologist */
 .cd-sec-path { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+/* Day: the workload rows (who · bar · time), no +/- column. */
+.cd-load.cd-load-day { grid-template-columns: auto minmax(60px, 1fr) auto; }
+
+/* Day: who's working, as even tiles — the name, the service under it; two
+   to a row in the side panel, one on narrow screens. */
+.cd-panel .cd-working { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+.cd-panel .cd-working > .cd-muted { grid-column: 1 / -1; }
+.cd-panel .cd-person {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 5px 8px;
+    width: auto;
+    min-width: 0;
+}
+.cd-panel .cd-person-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cd-panel .cd-person .cd-svc { grid-column: 2; justify-self: start; }
+
+/* Day: Find a case, at the top of the side panel above Workload, with a
+   magnifying glass inside on the left. */
+.cd-search-wrap { position: relative; }
+.cd-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--ink-3); pointer-events: none; }
+.cd-search {
+    width: 100%;
+    height: 38px;
+    box-sizing: border-box;
+    padding: 0 12px 0 34px;
+    border: 1px solid var(--rule-soft);
+    border-radius: 10px;
+    background: var(--paper);
+    font: 13px var(--sans);
+    color: var(--ink);
+}
+.cd-search::placeholder { color: var(--ink-3); }
+.cd-search:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.cd-search:disabled { opacity: 0.5; }
+.cd-found .cf-item { border-bottom: 1px solid var(--rule-soft); }
 .cd-sec-meta { margin-left: auto; display: flex; align-items: center; gap: 10px; font-weight: 400; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
 
 /* Case lines: the case number is the tag; its place in Epic's list leads the text. */
@@ -9418,10 +9462,10 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
 .cd-form .cd-chips { flex-wrap: wrap; }
 .cd-form-narrow { grid-template-columns: 120px minmax(0, 1fr); }
 
-/* The paste panel */
-#cdPasteBack .modal-stable { height: min(620px, 90vh); width: min(760px, 94vw); max-width: none; }
-#cdPasteBack .modal-scroll { display: flex; }
-#cdPasteBack .cd-paste { flex: 1 1 auto; min-height: 240px; resize: none; }
+/* No list yet: click here, then Ctrl+V (the paste goes to the page). */
+.cd-paste-zone { margin: 14px; border: 1.5px dashed var(--rule); border-radius: 10px; cursor: text; }
+.cd-paste-zone:hover { border-color: var(--ink-3); }
+.cd-paste-zone:focus { outline: none; border-color: var(--accent); background: var(--accent-soft); }
 
 @media (max-width: 800px) {
     .cd-head-right { width: 100%; flex-wrap: wrap; margin-left: 0; }
@@ -9552,6 +9596,14 @@ body.cd-resizing, body.cd-resizing * { cursor: col-resize !important; user-selec
 .dn-count { font-size: 11.5px; color: var(--ink-3); }
 .dn-count.is-full { color: var(--delnor); font-weight: 600; }
 .dn-note { font-size: 11px; color: var(--ink-3); text-align: right; }
+/* The director's Sendout box (ticked: the day has slots), and days not requested. */
+.dn-head-right { display: inline-flex; align-items: baseline; gap: 10px; }
+.dn-req { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink-2); cursor: pointer; user-select: none; }
+.dn-req input { width: 14px; height: 14px; margin: 0; accent-color: var(--delnor); cursor: pointer; }
+.dn-day.is-off { background: transparent; }
+.dn-day.is-off .dn-num { color: var(--ink-3); }
+.dn-off { font-size: 12px; color: var(--ink-4); }
+.dn-panel-text { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
 .dn-slots { display: flex; flex-direction: column; gap: 5px; }
 .dn-slot {
     width: 100%; box-sizing: border-box; min-width: 0;

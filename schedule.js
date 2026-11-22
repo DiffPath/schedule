@@ -8852,6 +8852,12 @@ function renderDay() {
         <span class="lf-label">Lake Forest sendout</span>
       </div>`;
     }
+    // Delnor sendout: a requested day someone at Delnor signed up for.
+    if (typeof delnorSendoutDay === 'function' && delnorSendoutDay(d)) {
+        rows += `<div class="wd-row dn-sendout" title="Delnor sendout: ${escapeHtml(delnorOnDay(d).map(r => r.name).join(', '))}">
+            <span class="lf-label">Delnor sendout</span>
+          </div>`;
+    }
 
     activePathologists.forEach(p => {
         const a = dayAssign[p.id];
@@ -8939,6 +8945,11 @@ function renderWeek() {
             rows += `<div class="wd-row lf-sendout" title="Lake Forest sendout">
             <span class="lf-label">Lake Forest sendout</span>
           </div>`;
+        }
+        if (typeof delnorSendoutDay === 'function' && delnorSendoutDay(d)) {
+            rows += `<div class="wd-row dn-sendout" title="Delnor sendout: ${escapeHtml(delnorOnDay(d).map(r => r.name).join(', '))}">
+                <span class="lf-label">Delnor sendout</span>
+              </div>`;
         }
 
         activePathologists.forEach(p => {
@@ -10020,6 +10031,14 @@ function monthCellRowsHtml(date, inMonth, people, decorate) {
             <span class="lf-label lf-label-full">Lake Forest sendout</span>
             <span class="lf-label lf-label-abbr">LF sendout</span>
           </div>`;
+    }
+    if (inMonth) {
+        if (typeof delnorSendoutDay === 'function' && delnorSendoutDay(date)) {
+            rows += `<div class="wd-row dn-sendout" title="Delnor sendout: ${escapeHtml(delnorOnDay(date).map(r => r.name).join(', '))}">
+                <span class="lf-label lf-label-full">Delnor sendout</span>
+                <span class="lf-label lf-label-abbr">Delnor</span>
+              </div>`;
+        }
     }
 
     people.forEach(p => {

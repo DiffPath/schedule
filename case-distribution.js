@@ -19,9 +19,10 @@
 //
 // Routing: a case type may name services — first choice and backup (breast
 // cores → Breast bx/WFH, else Huntley). Those cases go to whoever is on the
-// service; everything else is shared so each pathologist's minutes for the
-// day come out equal, in proportion to their daily share (FTE, adjusted for
-// PTO). Case types can also be limited to certain readers (bone marrows).
+// service, up to an even day's work; everything else (and a service's cases
+// beyond that) is shared so each pathologist's minutes for the day come out
+// equal, in proportion to their daily share (FTE, adjusted for PTO). Case
+// types can also be limited to certain readers (bone marrows).
 //
 // The pasted list stays in this browser's memory and is never saved —
 // Firebase only holds the settings and per-pathologist minute totals:
@@ -573,7 +574,8 @@ let _cdRef = null;
 let _cdSplitInputs = '';       // what the split depends on, as last loaded
 
 let cdTab = 'day';            // 'day' | 'types' | 'people'
-let cdDate = null;             // Date the cases are distributed for
+let cdSearch = '';             // the Day tab's "Find a case" text
+let cdDate = null;             // the day the cases are for (cdDefaultDate, kept current by cdSyncDay)
 let cdTable = null;            // { rows: [[cell]], hasHeader } — the paste, memory only
 let cdRawText = '';            // the pasted text, restored when the paste box is rebuilt
 let cdCols = null;             // { id, type, extra } column indexes (-1 = none)
@@ -620,9 +622,6 @@ function cdSignedOut() {
     cdRecordedKey = null; cdRecordedDirty = false; cdRecordedAt = null;
     cdListFrom = null; cdExportedName = null;
     cdSel.day = cdSel.types = cdSel.people = null;
-    Object.keys(cdSplits).forEach(k => delete cdSplits[k]);
-    const ta = document.getElementById('cdPaste');
-    if (ta) ta.value = '';
 }
 
 // A starter type as stored: services as { id: tier }, readers matched to
@@ -793,16 +792,19 @@ function cdDefaultMinutes() {
     return Number.isFinite(v) && v >= 0 ? v : CD_DEFAULT_MINUTES;
 }
 
-// Today in Central time, or the next working day from 5 pm on — the list
-// pulled in the evening is the next day's work. A weekend or holiday is
-// never the day: a list pulled then is for the next working day.
+// The day the cases are for, in Central time (director, Nov 2026): today
+// before 3 pm, the next business day from 3 pm on. A weekend or holiday is
+// never the day: a list pulled then is for the next business day. The page
+// has no day picker — this alone decides it.
+const CD_CUTOFF_HOUR = 15;   // 3 pm
+const CD_CENTRAL_TIME = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hourCycle: 'h23',
+});
 function cdDefaultDate(now = new Date()) {
     const p = {};
-    new Intl.DateTimeFormat('en-US', {
-        timeZone: 'America/Chicago', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hourCycle: 'h23',
-    }).formatToParts(now).forEach(x => { p[x.type] = Number(x.value); });
+    CD_CENTRAL_TIME.formatToParts(now).forEach(x => { p[x.type] = Number(x.value); });
     const d = new Date(p.year, p.month - 1, p.day);
-    if (p.hour >= 17 || isWeekend(d) || getFederalHoliday(d)) return nextWorkday(d);
+    if (p.hour >= CD_CUTOFF_HOUR || isWeekend(d) || getFederalHoliday(d)) return nextWorkday(d);
     return d;
 }
 
@@ -954,7 +956,7 @@ function cdDelnorChanged() {
     const sig = cdDelnorSig();
     if (sig !== _cdDelnorSig) {
         _cdDelnorSig = sig;
-        if (cdTable) { cdDistribute(); if (cdRecordedKey) cdRecordedDirty = true; }
+        if (cdTable) { cdDistribute(); cdSplitChanged(); }
     }
     if (cdPageActive()) renderCasesPage();
 }
@@ -1227,10 +1229,12 @@ function cdBuildCases() {
 }
 
 // ── The distribution ─────────────────────────────────────────────────────
-// Weighted greedy: cases with the fewest possible readers go first, then
-// the longest; each goes to the eligible pathologist whose time — counting
-// part of their running surplus/deficit — is lowest relative to their
-// daily share. Cases the director reassigned by hand stay put.
+// Weighted greedy. Service cases go first, to whoever is on the service,
+// while that keeps them within an even day; then everything left, cases
+// with the fewest possible readers first, then the longest, each to the
+// pathologist whose time — counting part of their running surplus/deficit
+// — is lowest relative to their daily share. Cases the director reassigned
+// by hand stay put.
 function cdDistribute() {
     const working = cdWorking();
     const { bal } = cdBalances(cdDate, cdRecordedKey);
@@ -1239,69 +1243,177 @@ function cdDistribute() {
     working.forEach(w => { load[w.p.id] = w.delnor ? 0 : CD_CARRY * (bal[w.p.id] || 0); });
     const ours = working.filter(w => !w.delnor), delnor = working.filter(w => w.delnor);
 
-    // Our pathologists by readers and services. (Delnor's take their
-    // quarter first, below; they get one of the rest only when none of ours
-    // can read it.)
-    const eligible = c => {
-        let el = ours.filter(w => !c.readers || c.readers.has(String(w.p.id)));
-        if (!el.length) {
-            if (c.delnorOK && delnor.length) return delnor;
-            c.note = c.readers ? 'No reader for this case type is working' : 'No one is working';
-            return el;
-        }
-        // First-choice services, then the backup, then everyone.
-        if (c.services) {
-            const [first, backup] = c.services;
-            const on = set => el.filter(w => w.svcIds.some(id => set.has(id)));
-            const firstEl = on(first);
-            if (firstEl.length) return firstEl;
-            const backupEl = backup.size ? on(backup) : [];
-            if (backupEl.length) return backupEl;
-            c.note = 'No one on ' + cdSvcNames(backup.size ? new Set([...first, ...backup]) : first) + ' — shared with all';
-        }
+    // Who may read a case: our pathologists, by the case type's readers.
+    // (Delnor's take their quarter first, below; they get one of the rest
+    // only when none of ours can read it.)
+    const readersOf = c => {
+        const el = ours.filter(w => !c.readers || c.readers.has(String(w.p.id)));
+        if (el.length) return el;
+        if (c.delnorOK && delnor.length) return delnor;
+        c.note = c.readers ? 'No reader for this case type is working' : 'No one is working';
         return el;
     };
+    // Of those, whoever is on the case's service: first choice, else the
+    // backup. null when the case has no service, or no one is on it.
+    const onService = (c, el) => {
+        if (!c.services || !el.length || el[0].delnor) return null;
+        const [first, backup] = c.services;
+        const on = set => el.filter(w => w.svcIds.some(id => set.has(id)));
+        const firstEl = on(first);
+        if (firstEl.length) return { el: firstEl, svc: first };
+        const backupEl = backup.size ? on(backup) : [];
+        if (backupEl.length) return { el: backupEl, svc: backup };
+        c.note = 'No one on ' + cdSvcNames(backup.size ? new Set([...first, ...backup]) : first) + ' — shared with all';
+        return null;
+    };
+    const score = (w, c) => (load[w.p.id] + c.minutes) / w.share;
+    const lowest = (el, c) => el.reduce((best, w) => (score(w, c) < score(best, c) - 1e-9 ? w : best));
+    const give = (c, w) => { c.assigned = w.p.id; load[w.p.id] += c.minutes; };
 
-    cdCases.forEach(c => { c.note = ''; c.assigned = null; });
+    cdCases.forEach(c => { c.note = ''; c.shared = ''; c.assigned = null; });
     cdCases.filter(c => c.pinned !== undefined).forEach(c => {
         c.assigned = c.pinned;
         if (c.pinned !== null && load[c.pinned] !== undefined) load[c.pinned] += c.minutes;
     });
 
-    // Delnor first: a quarter of the day's case minutes, from the cases
-    // allowed to go there, largest first, each to whichever of Delnor's
-    // pathologists has least so far — skipping a case that would overshoot
-    // by more than half of itself. Less only when not enough is allowed.
+    // Delnor first, in two steps (director, Nov 2026). The divisions'
+    // workload comes first; evening out Delnor's own pathologists comes
+    // second and never changes what the divisions get.
+    //  1. Which cases: Delnor, as one division, takes about a quarter of the
+    //     day's case minutes, from the cases allowed to go there, largest
+    //     first — skipping a case that would overshoot by more than half of
+    //     itself. Less only when not enough is allowed.
+    //  2. Who reads which: exactly those cases, dealt among Delnor's
+    //     pathologists so their work RVUs come out as even as possible
+    //     (cdDealDelnor). No case moves to or from ours to even them out.
     if (delnor.length) {
         const target = cdCases.reduce((t, c) => t + c.minutes, 0) * CD_DELNOR_FRACTION;
         let have = delnor.reduce((t, w) => t + load[w.p.id], 0);
+        const picked = [];
         cdCases.filter(c => c.pinned === undefined && c.delnorOK)
             .sort((a, b) => b.minutes - a.minutes || a.seq - b.seq)
             .forEach(c => {
                 if (have >= target || have + c.minutes / 2 > target) return;
-                const w = delnor.reduce((a, b) => (load[b.p.id] < load[a.p.id] ? b : a));
-                c.assigned = w.p.id;
-                load[w.p.id] += c.minutes;
+                picked.push(c);
                 have += c.minutes;
             });
+        cdDealDelnor(picked, delnor).forEach(([c, w]) => give(c, w));
     }
 
     const todo = cdCases.filter(c => c.pinned === undefined && c.assigned == null)
-        .map(c => ({ c, el: eligible(c) }))
-        .sort((a, b) => (a.el.length - b.el.length) || (b.c.minutes - a.c.minutes));
-    todo.forEach(({ c, el }) => {
-        if (!el.length) return;
-        let best = null, bestScore = Infinity;
-        el.forEach(w => {
-            const score = (load[w.p.id] + c.minutes) / w.share;
-            if (score < bestScore - 1e-9) { bestScore = score; best = w; }
-        });
-        c.assigned = best.p.id;
-        load[best.p.id] += c.minutes;
+        .map(c => { const el = readersOf(c); return { c, el, svc: onService(c, el) }; });
+
+    // An even day: where everyone's minutes would land, relative to their
+    // daily share, if all of today's cases (of ours) were split evenly.
+    const shareSum = ours.reduce((s, w) => s + w.share, 0);
+    const ourMinutes = todo.filter(t => t.el.length && !t.el[0].delnor).reduce((s, t) => s + t.c.minutes, 0);
+    const evenDay = shareSum ? (ours.reduce((s, w) => s + load[w.p.id], 0) + ourMinutes) / shareSum : 0;
+
+    // Service cases first, largest first, to whoever is on the service —
+    // until that would put them over an even day by more than half the
+    // case. The rest are shared like any other case, among everyone who may
+    // read them (director, Nov 2026: being on Bigs mustn't mean a far
+    // heavier day than everyone else's).
+    todo.filter(t => t.svc).sort((a, b) => b.c.minutes - a.c.minutes || a.c.seq - b.c.seq).forEach(t => {
+        const w = lowest(t.svc.el, t.c);
+        if ((load[w.p.id] + t.c.minutes / 2) / w.share <= evenDay) give(t.c, w);
+        else t.c.shared = cdShortName(w.p) + ' (' + cdSvcNames(t.svc.svc) + ') already had a full day — shared';
     });
+
+    // Everything else: fewest possible readers first, then the longest, each
+    // to whoever has least so far for their share.
+    todo.filter(t => t.c.assigned == null && t.el.length)
+        .sort((a, b) => (a.el.length - b.el.length) || (b.c.minutes - a.c.minutes))
+        .forEach(t => give(t.c, lowest(t.el, t.c)));
     // The Delnor sign-ups this split used: only a real change to them
     // re-splits (cdDelnorChanged), not the first Delnor update after it.
     _cdDelnorSig = cdDelnorSig();
+}
+
+// A case's work RVUs: the CPT codes billed on its specimens, × units (stains
+// left out — they're ordered after the cases are split); a specimen with no
+// charge line counts its case type's first billing code.
+function cdCaseRvu(c) {
+    return c.parts.reduce((s, pt) => {
+        if (pt.code && CD_STAIN_RE.test(pt.code)) return s;
+        const code = pt.code || (pt.type ? cdCodeList(pt.type)[0] : null);
+        const r = code ? cdCodeRvu(code) : null;
+        return s + (r ? r[0] * Math.max(1, pt.units || 1) : 0);
+    }, 0);
+}
+
+// A small seeded random generator (mulberry32) and a shuffle with it.
+function cdRandom(seedText) {
+    let a = 2166136261;
+    for (let i = 0; i < seedText.length; i++) { a ^= seedText.charCodeAt(i); a = Math.imul(a, 16777619) >>> 0; }
+    return () => {
+        a = (a + 0x6D2B79F5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+function cdShuffle(list, rand) {
+    for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
+    return list;
+}
+
+// Deal Delnor's cases among Delnor's pathologists that day, evening out
+// their work RVUs (counting any case already set by hand). Many tries of
+// "highest RVUs first, each to whoever has least", in a random order, each
+// then polished by moving or swapping a case between the most and least
+// loaded; the evenest try is kept (then the evenest case counts). The
+// randomness is seeded by the list and the day, so no one is favoured by
+// roster order, yet the same list deals the same way each time it's split.
+// Returns [[case, worker], …].
+const CD_DEAL_TRIES = 40;
+function cdDealDelnor(cases, people) {
+    if (!cases.length) return [];
+    if (people.length === 1) return cases.map(c => [c, people[0]]);
+    const rvu = new Map(cases.map(c => [c, cdCaseRvu(c)]));
+    // A sliver per case, so cases with no RVUs still spread out.
+    const weight = c => rvu.get(c) + 0.01;
+    const base = people.map(w => cdCases.filter(c => c.pinned !== undefined && String(c.pinned) === String(w.p.id)).reduce((s, c) => s + cdCaseRvu(c), 0));
+    const rand = cdRandom(cdListSig() + '|' + fmt(cdDate) + '|' + people.map(w => w.p.id).join(','));
+    const spread = xs => Math.max(...xs) - Math.min(...xs);
+    let best = null;
+    for (let t = 0; t < CD_DEAL_TRIES; t++) {
+        const order = cdShuffle(cases.slice(), rand).sort((a, b) => weight(b) - weight(a));   // stable: ties stay shuffled
+        const prefer = cdShuffle(people.map((_, i) => i), rand);
+        const tot = base.slice(), mine = people.map(() => []);
+        order.forEach(c => {
+            const i = prefer.reduce((a, b) => (tot[b] < tot[a] - 1e-9 ? b : a));
+            mine[i].push(c);
+            tot[i] += weight(c);
+        });
+        // Polish: move one case, or swap two, between the most and least loaded.
+        for (let step = 0; step < 200; step++) {
+            const hi = tot.indexOf(Math.max(...tot)), lo = tot.indexOf(Math.min(...tot));
+            const gap = tot[hi] - tot[lo];
+            let bestMove = null, bestLeft = gap - 1e-6;
+            mine[hi].forEach(a => {
+                const d = weight(a);
+                if (Math.abs(gap - 2 * d) < bestLeft) { bestLeft = Math.abs(gap - 2 * d); bestMove = { a, b: null, d }; }
+                mine[lo].forEach(b => {
+                    const dd = weight(a) - weight(b);
+                    if (dd > 0 && Math.abs(gap - 2 * dd) < bestLeft) { bestLeft = Math.abs(gap - 2 * dd); bestMove = { a, b, d: dd }; }
+                });
+            });
+            if (!bestMove) break;
+            mine[hi].splice(mine[hi].indexOf(bestMove.a), 1); mine[lo].push(bestMove.a);
+            if (bestMove.b) { mine[lo].splice(mine[lo].indexOf(bestMove.b), 1); mine[hi].push(bestMove.b); }
+            tot[hi] -= bestMove.d; tot[lo] += bestMove.d;
+        }
+        const rv = people.map((_, i) => base[i] + mine[i].reduce((s, c) => s + rvu.get(c), 0));
+        const score = [spread(rv), spread(mine.map((m, i) => m.length))];
+        if (!best || score[0] < best.score[0] - 1e-6 || (Math.abs(score[0] - best.score[0]) <= 1e-6 && score[1] < best.score[1])) {
+            best = { score, mine: mine.map(m => m.slice()) };
+        }
+    }
+    const out = [];
+    best.mine.forEach((m, i) => m.forEach(c => out.push([c, people[i]])));
+    return out;
 }
 
 // Per-pathologist totals for the current distribution; `expected` is the
@@ -1356,47 +1468,19 @@ function cdDayLabel(d) {
         + (d.getFullYear() !== today.getFullYear() ? ', ' + d.getFullYear() : '');
 }
 
-// The next / previous working day.
-function cdStepWorkday(d, dir) {
-    let x = addDays(d, dir);
-    while (isWeekend(x) || getFederalHoliday(x)) x = addDays(x, dir);
-    return x;
-}
-
-// This list's split on each day it was shown, so coming back to a day
-// restores what was there (hand-set cases, and the split that was recorded
-// and exported) instead of splitting it afresh. Memory only, like the list.
-const cdSplits = {};   // dateKey → { sig, split: { caseKey: { a, p, n } } }
-
-function cdKeepSplit() {
-    if (!cdCases.length) return;
-    cdSplits[fmt(cdDate)] = { sig: cdListSig(),
-        split: Object.fromEntries(cdCases.map(c => [c.key, { a: c.assigned, p: c.pinned, n: c.note }])) };
-}
-
-function cdRestoreSplit() {
-    const k = cdSplits[fmt(cdDate)];
-    if (!k || !cdCases.length || k.sig !== cdListSig()) return false;
-    cdCases.forEach(c => {
-        const x = k.split[c.key];
-        if (!x) return;
-        c.assigned = x.a; c.note = x.n || '';
-        if (x.p === undefined) delete c.pinned; else c.pinned = x.p;
-    });
-    return true;
-}
-
-function cdSetDate(d) {
-    cdKeepSplit();
+// Keep cdDate on the right day — it moves on at 3 pm even with the page
+// left open. When it moves, a list already here is split again for
+// the new day (who's working, their services and shares). True if it moved.
+function cdSyncDay() {
+    const d = cdDefaultDate();
+    if (cdDate && fmt(d) === fmt(cdDate)) return false;
+    const first = !cdDate;
     cdDate = d;
+    if (first) return true;
     _cdDelnorSig = cdDelnorSig();
     cdRecordedKey = null; cdRecordedDirty = false; cdRecordedAt = null;
-    if (cdTable) {
-        const restored = cdRestoreSplit();
-        if (!restored) cdDistribute();
-        cdMatchRecord(!restored);
-    }
-    renderCasesPage();
+    if (cdTable) { cdDistribute(); cdMatchRecord(); }
+    return true;
 }
 
 // This exact list already recorded for the day (same case numbers — back on
@@ -1426,9 +1510,10 @@ function cdSecHtml(id, labelHtml, count, items, emptyText) {
       </section>`;
 }
 
-// One ledger line; the open one shows detailFn() under it.
-function cdLineHtml(tab, key, tagHtml, textHtml, status, detailFn, label) {
-    const on = cdSel[tab] === key;
+// One ledger line; the open one (or every one, with open) shows detailFn()
+// under it.
+function cdLineHtml(tab, key, tagHtml, textHtml, status, detailFn, label, open) {
+    const on = open || cdSel[tab] === key;
     return `<div class="cf-item ch-row${on ? ' is-selected' : ''}">
         <button type="button" class="ch-row-main" data-cd-pick="${escapeHtml(key)}" aria-expanded="${on}"${label ? ` aria-label="${escapeHtml(label)}"` : ''}>
           ${tagHtml}<span class="ch-text">${textHtml}</span>${status ? `<span class="ch-status${status.tone ? ' tone-' + status.tone : ''}">${escapeHtml(status.text)}</span>` : ''}
@@ -1449,10 +1534,6 @@ function cdAccTag(c) {
     return p
         ? `<span class="ch-tag ch-tag-path cd-acc-tag" style="--c:${p.color}${bg ? `; --c-bg:${bg}` : ''}">${escapeHtml(c.id || '—')}</span>`
         : `<span class="ch-tag ch-tag-lock cd-acc-tag">${escapeHtml(c.id || '—')}</span>`;
-}
-
-function cdDiffHtml(d) {
-    return `<span class="cd-diff${d > 15 ? ' over' : d < -15 ? ' under' : ''}">${Math.abs(d) < 1 ? 'even' : (d > 0 ? '+' : '') + cdFmtMin(d)}</span>`;
 }
 
 // Specimens no case type knew (stains and zero-minute lines aside).
@@ -1522,7 +1603,7 @@ function cdCaseDetail(c) {
         ? 'Goes to ' + cdSvcNames(c.services[0]) + (c.services[1].size ? ', else ' + cdSvcNames(c.services[1]) : '')
         : c.readers ? 'Read by ' + [...c.readers].map(id => cdPath(id)).filter(Boolean).map(cdShortName).join(' or ')
             : 'Shared to even out the day';
-    const routeTxt = route + (c.delnorOK ? ' · Delnor may read it' : '');
+    const routeTxt = route + (c.shared ? ' · ' + c.shared : '') + (c.delnorOK ? ' · Delnor may read it' : '');
     // Our pathologists, then Delnor's signed up that day (and whoever has it).
     const pathOpts = [...pathologists.filter(p => typeof p.id === 'number'), ...cdDelnorWorkers(cdDate).map(w => w.p)];
     if (c.assigned != null && !pathOpts.some(p => String(p.id) === String(c.assigned)) && cdPath(c.assigned)) pathOpts.push(cdPath(c.assigned));
@@ -1547,33 +1628,31 @@ function cdCaseDetail(c) {
 function cdHeaderHtml() {
     const day = cdTab === 'day';
     const has = cdCases.length > 0;
-    let recordTxt = 'Record', recordTip = 'Add this list to each pathologist’s running total, so later lists even out';
-    if (cdRecordedKey && !cdRecordedDirty) { recordTxt = 'Recorded'; recordTip = 'Recorded at ' + cdTime(cdRecordedAt); }
-    else if (cdRecordedKey) { recordTxt = 'Update record'; recordTip = 'The split changed since it was recorded'; }
-    const problems = has ? cdExportProblems() : [];
-    const exportTip = !has ? 'No case list yet' : problems.length ? 'Before exporting: ' + problems.join('; ')
-        : 'Download the cases for the AutoHotkey script, in the same order as the Epic list';
     const nTypes = Object.keys(cdTypes).length;
     const tab = (k, label, n) => `<button class="req-tab${cdTab === k ? ' active' : ''}" type="button" data-cd-tab="${k}"><span>${label}</span>${n != null ? `<span class="req-tab-count">${n}</span>` : ''}</button>`;
     return `<header class="tl-header">
         <h2 class="tl-title">Assign</h2>
         <div class="cd-head-right">
           ${day ? `<div class="cd-day-nav">
-              <button class="nav-btn" type="button" data-cd-day="-1" title="Previous working day" aria-label="Previous working day">‹</button>
-              <button class="current-period" type="button" id="cdPeriod" title="Pick a day" aria-haspopup="dialog" aria-expanded="false">${escapeHtml(cdDayLabel(cdDate))}</button>
-              <button class="nav-btn" type="button" data-cd-day="1" title="Next working day" aria-label="Next working day">›</button>
-            </div>
-            <div class="requests-page-bar"><div class="req-new-group cd-list-group" role="group" aria-label="Case list">
-              <span class="req-new-label">Case list</span>
-              <button type="button" class="req-new-btn" id="cdPasteBtn" title="Paste the case list copied from Epic’s export">Paste</button>
-              <button type="button" class="req-new-btn" id="cdExportAhk" title="${escapeHtml(exportTip)}"${has ? '' : ' disabled'}>Export</button>
-              <button type="button" class="req-new-btn" id="cdRecord" title="${escapeHtml(recordTip)}"${has && !(cdRecordedKey && !cdRecordedDirty) ? '' : ' disabled'}>${recordTxt}</button>
-            </div></div>` : ''}
+              <span class="current-period cd-day-fixed" id="cdPeriod" title="Today until 3 pm, then the next business day">${escapeHtml(cdDayLabel(cdDate))}</span>
+            </div>` : ''}
           <div class="req-tabs requests-page-tabs" id="cdTabs" role="tablist">
             ${tab('day', 'Day', has ? cdCases.length : null)}${tab('types', 'Case types', nTypes)}${tab('people', 'Pathologists', null)}
           </div>
         </div>
       </header>`;
+}
+
+// The cases matching the Find a case box, in list order: by case number
+// (punctuation and case ignored, so "7003" finds XXS26-07003), or for words
+// of three letters or more, by specimen too.
+function cdFind(q) {
+    const norm = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const nq = norm(q), words = q.trim().toLowerCase();
+    if (!nq) return [];
+    const byText = /[a-z]{3}/.test(words);
+    return cdCases.filter(c => norm(c.id).includes(nq)
+        || (byText && (c.label + ' ' + c.detail).toLowerCase().includes(words))).sort((a, b) => a.seq - b.seq);
 }
 
 // ── Day ──
@@ -1582,13 +1661,19 @@ function cdDayHtml() {
     const t = cdTotals();
     let list;
     if (!has) {
-        list = `<div class="cf-empty"><span class="split-empty-headline">No case list for ${escapeHtml(cdDayLabel(cdDate))} yet.</span>In Epic, press Ctrl+Shift+1 to run the AutoHotkey script — or export the list from Epic and Paste it here.</div>`;
+        list = `<div class="cf-empty cd-paste-zone" tabindex="0" aria-label="Paste the case log here"><span class="split-empty-headline">No case list for ${escapeHtml(cdDayLabel(cdDate))} yet.</span>In Epic, press Ctrl+Shift+1 to run the AutoHotkey script — or copy Epic’s case log in Excel (headers included), click here and press Ctrl+V.</div>`;
+    } else if (cdSearch.trim()) {
+        // Find a case: only the cases that match, each opened.
+        const found = cdFind(cdSearch);
+        list = found.length
+            ? `<div class="cd-found">${found.map(c => cdLineHtml('day', 'find|' + c.key, cdAccTag(c), cdCaseText(c), cdLookStatus(c), () => cdCaseDetail(c), cdCaseLabel(c), true)).join('')}</div>`
+            : `<div class="cf-empty"><span class="split-empty-headline">No case matches “${escapeHtml(cdSearch.trim())}”.</span>Search by case number — all of it or just its end, like 7003.</div>`;
     } else {
         const secs = [];
         const look = cdCases.filter(cdLookStatus).sort((a, b) => a.seq - b.seq);
         const unknown = cdUnknownSpecimens();
         if (look.length || unknown.length) {
-            secs.push(cdSecHtml('look', 'Needs a look', look.length + unknown.length, [
+            secs.push(cdSecHtml('look', 'Needs a look', null, [
                 ...look.map(c => cdLineHtml('day', 'look|' + c.key, cdAccTag(c), cdCaseText(c), cdLookStatus(c), () => cdCaseDetail(c), cdCaseLabel(c))),
                 ...unknown.map(cdUnknownLine),
             ]));
@@ -1597,8 +1682,7 @@ function cdDayHtml() {
         rows.forEach(r => {
             const p = cdPath(r.pid);
             const mine = cdCases.filter(c => String(c.assigned) === String(r.pid)).sort((a, b) => a.seq - b.seq);
-            const head = `<span class="cd-sec-path">${cdTag(p.id)}${r.w ? cdSvcPill(r.w.svc) : '<span class="cd-muted">not working</span>'}
-                <span class="cd-sec-meta">${mine.length} case${mine.length === 1 ? '' : 's'} · ${escapeHtml(cdFmtMin(r.minutes))} ${cdDiffHtml(r.minutes - r.expected)}</span></span>`;
+            const head = `<span class="cd-sec-path">${cdTag(p.id)}${r.w ? cdSvcPill(r.w.svc) : '<span class="cd-muted">not working</span>'}</span>`;
             secs.push(cdSecHtml('p' + p.id, head, null,
                 mine.map(c => cdLineHtml('day', 'p' + p.id + '|' + c.key, cdAccTag(c), cdCaseText(c), null, () => cdCaseDetail(c), cdCaseLabel(c))),
                 'No cases'));
@@ -1608,7 +1692,11 @@ function cdDayHtml() {
     return `<div class="cf-body">
         <div class="cf-side"><div class="cf-list" aria-label="Assign">${list}</div></div>
         <section class="cf-cal" aria-label="The day"><div class="cd-panel">
-          ${has ? cdWorkloadCard(t) : ''}${cdWorkingCard()}${has ? cdListCard() : ''}
+          ${has ? `<div class="cd-search-wrap">
+              <svg class="cd-search-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.75"/><path d="M10.5 10.5 14 14"/></svg>
+              <input type="search" class="cd-search" id="cdSearch" placeholder="Find a case" aria-label="Find a case by its number"
+                value="${escapeHtml(cdSearch)}" spellcheck="false" autocomplete="off">
+            </div>` : ''}${has ? cdWorkloadCard(t) : ''}${cdWorkingCard()}${has ? cdListCard() : ''}
         </div></section>
       </div>`;
 }
@@ -1618,55 +1706,49 @@ function cdWorkloadCard(t) {
     const max = Math.max(1, ...rows.map(r => Math.max(r.minutes, r.expected))) * 1.04;
     return `<section class="cd-card">
         <h3 class="cd-card-h">Workload <span>${cdCases.length} cases · ${escapeHtml(cdFmtMin(t.total))}</span></h3>
-        <div class="cd-load" title="Bar: estimated time · tick: fair share">
+        <div class="cd-load cd-load-day" title="Bar: estimated time · tick: an even share">
           ${rows.map(r => {
               const p = cdPath(r.pid);
               return `<button type="button" class="cd-load-who" data-cd-jump="${p.id}" title="Show ${escapeHtml(cdShortName(p))}’s cases">${cdTag(p.id)}</button>
                 <div class="cd-bar"><span class="cd-bar-fill" style="width:${(r.minutes / max * 100).toFixed(1)}%;--c:${p.color};"></span><span class="cd-bar-target" style="left:${(r.expected / max * 100).toFixed(1)}%;"></span></div>
-                <span class="cd-load-num">${escapeHtml(cdFmtMin(r.minutes))}</span>${cdDiffHtml(r.minutes - r.expected)}`;
+                <span class="cd-load-num">${escapeHtml(cdFmtMin(r.minutes))}</span>`;
           }).join('')}
-          ${t.unassigned ? `<span class="ch-tag ch-tag-lock">Not assigned</span><span></span><span class="cd-load-num">${t.unassigned} case${t.unassigned === 1 ? '' : 's'}</span><span></span>` : ''}
+          ${t.unassigned ? `<span class="ch-tag ch-tag-lock">Not assigned</span><span></span><span class="cd-load-num">${t.unassigned} case${t.unassigned === 1 ? '' : 's'}</span>` : ''}
         </div>
       </section>`;
 }
 
+// Who's working: one even tile each — name, and the service on the right.
 function cdWorkingCard() {
     const sched = cdScheduled(cdDate);
-    const { bal } = cdBalances(cdDate, cdRecordedKey);
-    return `<section class="cd-card">
-        <h3 class="cd-card-h">Working <span>from the schedule</span></h3>
-        <div class="cd-working">${sched.length ? sched.map(w => {
-            const b = bal[w.p.id] || 0;
-            const balTxt = Math.abs(b) < 1 ? 'even' : (b > 0 ? cdFmtMin(b) + ' ahead' : cdFmtMin(-b) + ' behind');
-            return `<span class="cd-person">
-                <span class="cd-dot" style="--c:${w.p.color};"></span>
+    const tile = (w, color, cls) => `<span class="cd-person${cls}">
+                <span class="cd-dot" style="--c:${color};"></span>
                 <span class="cd-person-name">${escapeHtml(cdShortName(w.p))}</span>${cdSvcPill(w.svc)}
-                <span class="cd-person-meta">${(w.share < 1 ? 'share ' + w.share.toFixed(2) + ' · ' : '') + balTxt}</span>
               </span>`;
-        }).join('') : '<span class="cd-muted">No one is on a service this day.</span>'}${cdDelnorWorkers(cdDate).map(w => `<span class="cd-person cd-person-delnor">
-                <span class="cd-dot" style="--c:var(--delnor);"></span>
-                <span class="cd-person-name">${escapeHtml(cdShortName(w.p))}</span>${cdSvcPill(w.svc)}
-                <span class="cd-person-meta">signed up</span>
-              </span>`).join('')}</div>
+    return `<section class="cd-card">
+        <h3 class="cd-card-h">Working</h3>
+        <div class="cd-working">${sched.length ? sched.map(w => tile(w, w.p.color, '')).join('') : '<span class="cd-muted">No one is on a service this day.</span>'}${cdDelnorWorkers(cdDate).map(w => tile(w, 'var(--delnor)', ' cd-person-delnor')).join('')}</div>
       </section>`;
 }
 
 function cdListCard() {
-    const batches = Object.keys(cdLedger[fmt(cdDate)] || {}).length;
     const from = cdListFrom ? (cdListFrom.how === 'script' ? 'The AutoHotkey script, ' : 'Pasted, ') + cdTime(cdListFrom.at) : 'Pasted';
-    const recorded = !cdRecordedKey ? 'Not yet' : cdRecordedDirty ? 'Changed since — Update record' : cdTime(cdRecordedAt) || 'Yes';
+    const recorded = !cdRecordedKey ? 'Not yet' : cdTime(cdRecordedAt) || 'Yes';
+    const problems = cdExportProblems();
+    const exportTip = problems.length ? 'Before exporting: ' + problems.join('; ')
+        : 'Download the cases for the AutoHotkey script, in the same order as the Epic list';
     return `<section class="cd-card">
-        <h3 class="cd-card-h">This list <span>${batches} recorded for this day</span></h3>
+        <h3 class="cd-card-h">This list</h3>
         <div class="cd-facts">
           <span>From</span><b>${escapeHtml(from)}</b>
           <span>Recorded</span><b>${escapeHtml(recorded)}</b>
           <span>Exported</span><b>${escapeHtml(cdExportedName || 'Not yet')}</b>
         </div>
         <div class="cd-card-actions">
+          <button type="button" class="cd-btn cd-btn-sm" id="cdExportAhk" title="${escapeHtml(exportTip)}">Export</button>
           <button type="button" class="cd-btn cd-btn-sm" id="cdRedistribute" title="Re-split the cases the app chose (cases set by hand stay)">Redistribute</button>
           <button type="button" class="cd-btn cd-btn-sm" id="cdCopy">Copy for Excel</button>
-          ${cdRecordedKey ? '<button type="button" class="cd-btn cd-btn-sm" id="cdUnrecord">Undo record</button>' : ''}
-          <button type="button" class="cd-btn cd-btn-sm" id="cdClear">Clear list</button>
+          <button type="button" class="cd-btn cd-btn-sm" id="cdClear" title="Remove this list, and take its minutes off the running totals (for a list pasted by mistake)">Clear list</button>
         </div>
       </section>`;
 }
@@ -1828,7 +1910,7 @@ function renderCasesPage() {
     if (!root) return;
     if (!isAdmin()) { cdSetRoot(root, ''); return; }
     cdEnsureListener();
-    if (!cdDate) cdDate = cdDefaultDate();
+    cdSyncDay();
     if (!cdLoaded) { cdSetRoot(root, cdHeaderHtml() + '<div class="cd-empty">Loading…</div>'); return; }
 
     // Don't yank an input out from under the director mid-edit; the commit
@@ -1846,7 +1928,13 @@ function renderCasesPage() {
     const list = root.querySelector('.cf-list'), side = root.querySelector('.cf-cal');
     const ls = keep && list ? list.scrollTop : 0, ss = keep && side ? side.scrollTop : 0;
     root.dataset.tab = cdTab;
+    const typing = document.activeElement && document.activeElement.id === 'cdSearch' ? document.activeElement : null;
+    const caret = typing ? [typing.selectionStart, typing.selectionEnd] : null;
     cdSetRoot(root, html);
+    if (typing) {
+        const s = root.querySelector('#cdSearch');
+        if (s) { s.focus(); try { s.setSelectionRange(...caret); } catch (_) { /* not a text field */ } }
+    }
     const l2 = root.querySelector('.cf-list'), s2 = root.querySelector('.cf-cal');
     if (l2) l2.scrollTop = ls;
     if (s2) s2.scrollTop = ss;
@@ -1858,47 +1946,11 @@ function cdSetRoot(root, html) {
     root._cdHtml = html;
 }
 
-// The paste panel (in the app's panel style): the list copied from Epic's
-// export, kept in this browser only.
-function cdOpenPaste() {
-    let back = document.getElementById('cdPasteBack');
-    if (!back) {
-        back = document.createElement('div');
-        back.className = 'modal-back';
-        back.id = 'cdPasteBack';
-        back.innerHTML = `<div class="modal modal-stable cd-paste-modal" role="dialog" aria-labelledby="cdPasteTitle">
-            <button type="button" class="modal-close-x" data-cd-paste="cancel" aria-label="Close" title="Close">&times;</button>
-            <h3 id="cdPasteTitle">Paste the case list</h3>
-            <div class="sub">In Excel, select the cells of Epic’s export (headers included), copy, and paste them here. The list stays in this browser and isn’t saved.</div>
-            <div class="modal-scroll"><textarea id="cdPaste" class="cd-paste" spellcheck="false" aria-label="Case list"></textarea></div>
-            <div class="modal-actions">
-              <button type="button" data-cd-paste="clear">Clear</button>
-              <button type="button" data-cd-paste="cancel">Cancel</button>
-              <button type="button" class="primary" data-cd-paste="ok">Use this list</button>
-            </div>
-          </div>`;
-        document.body.appendChild(back);
-        back.addEventListener('click', e => {
-            const b = e.target.closest('[data-cd-paste]');
-            if (e.target === back || (b && b.dataset.cdPaste === 'cancel')) { back.classList.remove('open'); return; }
-            if (!b) return;
-            const ta = document.getElementById('cdPaste');
-            if (b.dataset.cdPaste === 'clear') { ta.value = ''; ta.focus(); return; }
-            back.classList.remove('open');
-            cdUseList(ta.value, 'paste');
-        });
-        back.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); back.classList.remove('open'); } });
-    }
-    const ta = document.getElementById('cdPaste');
-    ta.value = cdRawText;
-    back.classList.add('open');
-    setTimeout(() => { ta.focus(); ta.select(); }, 0);
-}
-
 // A new list (pasted, or handed over by the script).
 function cdUseList(text, how) {
     cdSetPaste(text);
     cdListFrom = text.trim() ? { how, at: Date.now() } : null;
+    cdAutoRecord();
     renderCasesPage();
 }
 
@@ -1927,7 +1979,9 @@ function cdChips(kind, typeId, selected) {
 
 // ── Actions ──────────────────────────────────────────────────────────────
 function cdSetPaste(text) {
+    cdSyncDay();
     cdRawText = text;
+    cdSearch = '';
     const rows = cdDropTitleRows(cdParseTable(text));
     cdRecordedKey = null; cdRecordedDirty = false; cdRecordedAt = null; cdExportedName = null;
     cdSel.day = null;
@@ -1959,32 +2013,46 @@ function cdListSig() {
     return h.toString(36) + '-' + cdCases.length;
 }
 
-function cdRecord(quiet) {
+// The list's minutes go into each pathologist's running total (the ledger)
+// on their own (director, Nov 2026): when the list arrives, and again —
+// the same record, updated — whenever its split changes.
+function cdRecord() {
     if (!cdCases.length) return;
     const dk = fmt(cdDate);
     const ref = cdRecordedKey
         ? db.ref('scheduler/caseDist/ledger/' + dk + '/' + cdRecordedKey)
         : db.ref('scheduler/caseDist/ledger/' + dk).push();
-    const key = ref.key;
+    cdRecordedKey = ref.key;
+    cdRecordedDirty = false;
     ref.set(cdRecordedBatch()).then(() => {
-        cdRecordedKey = key;
-        cdRecordedDirty = false;
         cdRecordedAt = Date.now();
-        if (!quiet) showToast('Recorded — these minutes now count toward each pathologist’s total.');
         renderCasesPage();
-    }).catch(err => showToast('Could not record: ' + err.message, { type: 'error' }));
+    }).catch(err => {
+        cdRecordedDirty = true;
+        showToast('Could not record the list: ' + err.message, { type: 'error' });
+    });
 }
 
-function cdUnrecord() {
-    if (!cdRecordedKey) return;
-    const dk = fmt(cdDate);
-    db.ref('scheduler/caseDist/ledger/' + dk + '/' + cdRecordedKey).remove().then(() => {
-        cdRecordedKey = null;
-        cdRecordedDirty = false;
-        cdRecordedAt = null;
-        showToast('Record removed.');
-        renderCasesPage();
-    }).catch(err => showToast('Could not remove the record: ' + err.message, { type: 'error' }));
+function cdAutoRecord() {
+    if (cdCases.length && (!cdRecordedKey || cdRecordedDirty)) cdRecord();
+}
+
+// The split changed (a case moved, Redistribute, new settings): update the
+// list's record.
+function cdSplitChanged() {
+    if (cdRecordedKey) cdRecordedDirty = true;
+    cdAutoRecord();
+}
+
+// Clear list: the list goes, and its record with it — clearing is for a
+// list pasted by mistake.
+function cdClearList() {
+    const key = cdRecordedKey, dk = fmt(cdDate);
+    cdUseList('', 'paste');
+    if (!key) return;
+    db.ref('scheduler/caseDist/ledger/' + dk + '/' + key).remove()
+        .then(() => showToast('Cleared the list and took its minutes off the running totals.'))
+        .catch(err => showToast('Could not remove the list’s record: ' + err.message, { type: 'error' }));
 }
 
 function cdCopy() {
@@ -2061,8 +2129,7 @@ function cdExportAhk(auto) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     cdExportedName = name;
     renderCasesPage();
-    showToast(`Exported ${cdCases.length} cases to ${name}`
-        + (cdRecordedKey && !cdRecordedDirty ? '.' : ' — not recorded yet: Record so they count toward the running totals.'));
+    showToast(`Exported ${cdCases.length} cases to ${name}.`);
     return true;
 }
 
@@ -2076,7 +2143,7 @@ function cdHandBack(name) {
     const n = cdCases.length;
     const ok = () => {
         cdExportedName = name + ' (to the script)';
-        cdRecord(true);
+        cdRecord();
         renderCasesPage();
         showToast(`Imported ${n} cases from the script, recorded them and handed the assignments back. The script takes it from here.`);
     };
@@ -2116,8 +2183,6 @@ function cdAutoRun(text) {
     cdPendingAuto = null;
     cdTab = 'day';
     renderCasesPage();
-    const ta = document.getElementById('cdPaste');
-    if (ta) ta.value = text;
     cdSetPaste(text);
     cdListFrom = text.trim() ? { how: 'script', at: Date.now() } : null;
     if (!cdCases.length) {
@@ -2144,6 +2209,29 @@ document.addEventListener('paste', e => {
     const nl = body.indexOf('\n');
     cdAutoRun(nl < 0 ? '' : body.slice(nl + 1));
 }, true);
+
+// Pasting the case log straight onto the Assign page: copy Epic's export in
+// Excel, click the page (anywhere but a text box) and press Ctrl+V. A new
+// list replaces the one there. Text with no case numbers in it is turned
+// away, so a stray paste can't wipe the list.
+document.addEventListener('paste', e => {
+    if (e.defaultPrevented || !cdPageActive() || typeof isAdmin !== 'function' || !isAdmin()) return;
+    const t = e.target;
+    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"], .modal-back.open')) return;
+    if (document.querySelector('.modal-back.open')) return;
+    const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+    if (!String(text || '').trim()) return;
+    e.preventDefault();
+    const hasCases = cdParseTable(text).some(r => r.some(cell => CD_ACC_RE.test(String(cell).split('\n')[0].trim())));
+    if (!hasCases) {
+        showToast('That isn’t a case log — in Excel, copy the cells of Epic’s export, headers included, then paste here.', { type: 'error' });
+        return;
+    }
+    const replacing = cdCases.length > 0;
+    cdTab = 'day';
+    cdUseList(text, 'paste');
+    showToast((replacing ? 'Replaced the list: ' : 'Pasted ') + cdCases.length + ' case' + (cdCases.length === 1 ? '' : 's') + '.');
+});
 
 function cdCopyFallback(text, done) {
     const ta = document.createElement('textarea');
@@ -2181,7 +2269,7 @@ function cdAddType(fromText, code) {
 
 // Settings changed (types, FTE) → re-split whatever is pasted.
 function cdAfterSettingsChange() {
-    if (cdTable) { cdBuildCases(); if (cdRecordedKey) cdRecordedDirty = true; }
+    if (cdTable) { cdBuildCases(); cdSplitChanged(); }
 }
 
 // ── Wiring ───────────────────────────────────────────────────────────────
@@ -2196,7 +2284,7 @@ function cdAfterSettingsChange() {
             if (!c) return;
             c.pinned = el.value === '' ? null : (/^d:/.test(el.value) ? el.value : Number(el.value));
             c.assigned = c.pinned;
-            if (cdRecordedKey) cdRecordedDirty = true;
+            cdSplitChanged();
             // Opened in a pathologist's section: follow it to the new one.
             if (cdSel.day && /^p\d+\|/.test(cdSel.day) && cdSel.day.endsWith('|' + c.key)) {
                 cdSel.day = c.assigned != null ? 'p' + c.assigned + '|' + c.key : 'look|' + c.key;
@@ -2269,6 +2357,18 @@ function cdAfterSettingsChange() {
 
     root.addEventListener('keydown', e => {
         if (e.key === 'Enter' && e.target.matches('.cd-input')) e.target.blur();
+        if (e.key === 'Escape' && e.target.id === 'cdSearch' && cdSearch) {
+            e.preventDefault();
+            cdSearch = '';
+            renderCasesPage();
+        }
+    });
+
+    // Find a case: the list filters as you type.
+    root.addEventListener('input', e => {
+        if (e.target.id !== 'cdSearch') return;
+        cdSearch = e.target.value;
+        renderCasesPage();
     });
 
     root.addEventListener('click', e => {
@@ -2278,13 +2378,6 @@ function cdAfterSettingsChange() {
         if (d.cdTab) {
             cdTab = d.cdTab;
             renderCasesPage();
-        } else if (d.cdDay) {
-            cdSetDate(cdStepWorkday(cdDate, Number(d.cdDay)));
-        } else if (t.id === 'cdPeriod') {
-            // The schedule's date picker; days with a recorded list are marked.
-            e.stopPropagation();
-            toggleMiniCal({ anchor: t, month: cdDate, range: null, pick: day => cdSetDate(day),
-                mark: day => (cdLedger[fmt(day)] ? 'mc-rq' : '') });
         } else if (d.cdSec) {
             cdSecStore.set(d.cdSec, !cdSecStore.closed[d.cdSec]);
             renderCasesPage();
@@ -2305,22 +2398,19 @@ function cdAfterSettingsChange() {
             const key = d.cdTsort;
             cdTypeSort = cdTypeSort.key === key ? { key, dir: -cdTypeSort.dir } : { key, dir: key === 'name' ? 1 : -1 };
             renderCasesPage();
-        } else if (t.id === 'cdPasteBtn') cdOpenPaste();
-        else if (t.id === 'cdExportAhk') cdExportAhk();
-        else if (t.id === 'cdRecord') cdRecord();
-        else if (t.id === 'cdUnrecord') cdUnrecord();
+        } else if (t.id === 'cdExportAhk') cdExportAhk();
         else if (t.id === 'cdCopy') cdCopy();
         else if (t.id === 'cdRedistribute') {
             cdDistribute();
-            if (cdRecordedKey) cdRecordedDirty = true;
+            cdSplitChanged();
             renderCasesPage();
         } else if (t.id === 'cdClear') {
-            cdUseList('', 'paste');
+            cdClearList();
         } else if (d.cdUnpin) {
             const c = cdCases.find(x => x.key === d.cdUnpin);
             if (c) delete c.pinned;
             cdDistribute();
-            if (cdRecordedKey) cdRecordedDirty = true;
+            cdSplitChanged();
             renderCasesPage();
         } else if (d.cdAddtype !== undefined) cdAddType(d.cdAddtype, d.cdAddcode);
         else if (t.id === 'cdAddType') cdAddType(null);

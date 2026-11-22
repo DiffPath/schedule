@@ -6991,7 +6991,7 @@ let conferencePresenters = {};        // { pathId: true } — allow-list
 let consultLog = {};                  // { pushKey: entry }
 
 // ── UI state ─────────────────────────────────────────────────────────────
-let activeTrackingTab = 'breast';
+let activeTrackingTab = 'all';
 // Period filter: '<startYearShort>' string like '2025' (= academic year
 // Sept 2025 – Aug 2026), or 'all' for no filter.
 let trackingPeriod = null;            // set on first render
@@ -7229,94 +7229,26 @@ function populateTrackingYearSelect() {
     }
 }
 
-// ── PTO usage tracker (left column) ── per-pathologist working days used
-// in the selected fiscal year vs allotted; 'all' shows lifetime with no
-// denominator (allotments are per-year).
-function renderTrackingPto() {
-    const listEl = document.getElementById('trackingPtoList');
-    const periodLabelEl = document.getElementById('trackingPtoPeriod');
-    if (!listEl) return;
-
-    if (!pathologists || pathologists.length === 0) {
-        listEl.innerHTML = '<div class="tracking-pto-empty">No pathologists loaded.</div>';
-        if (periodLabelEl) periodLabelEl.textContent = '';
-        return;
-    }
-
-    // Determine the range to count over from the active period filter.
-    // For 'all', leave the range unbounded and skip the allotted denominator.
-    let range = null;
-    let fiscalYear = null;
-    let periodLabel = '';
-    let showAllotted = true;
+// ── The period on show ── { range, fiscalYear, label, fy } for the year
+// picker: a fiscal year (Sept → Aug), or 'all' from the first scheduled day
+// to the end of this fiscal year. "So far" stops at today.
+function trackingRange() {
+    let range, fiscalYear = null;
     if (trackingPeriod === 'all') {
-        showAllotted = false;
-        periodLabel = 'All time';
+        range = { start: EARLIEST_DATE, end: getFiscalYearRange(getAcademicYearOfDate(today)).end };
     } else {
         const yr = parseInt(trackingPeriod, 10);
-        if (Number.isFinite(yr)) {
-            range = getFiscalYearRange(yr);
-            fiscalYear = yr;
-            periodLabel = 'Sep ' + yr + ' – Aug ' + (yr + 1);
-        }
+        fiscalYear = Number.isFinite(yr) ? yr : getAcademicYearOfDate(today);
+        range = getFiscalYearRange(fiscalYear);
     }
-    // "So far" stops at today.
-    if (trackingSoFar()) {
-        if (!range) range = { start: EARLIEST_DATE, end: new Date(today) };
-        else if (range.end.getTime() > today.getTime()) {
-            range = { start: range.start, end: new Date(today) };
-            periodLabel += ' · through today';
-        }
-    }
-    if (periodLabelEl) periodLabelEl.textContent = periodLabel;
-
-    // "All time" has no allotment to measure against: bars scale to the most
-    // PTO anyone has taken, so every period draws the same rows.
-    const usedById = {};
-    pathologists.forEach(p => { usedById[p.id] = ptoDaysScheduled(p.id, range ? { start: range.start, end: range.end } : undefined); });
-    const maxUsed = Math.max(1, ...Object.values(usedById));
-    listEl.innerHTML = pathologists.map(p => {
-        const used = usedById[p.id];
-        // Allotments are per fiscal year (legacy value = fallback default) —
-        // resolve against the selected period.
-        const allot = fiscalYear !== null ? ptoAllotmentFor(p.id, fiscalYear) : 0;
-        const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
-
-        let pctRaw = showAllotted ? (allot > 0 ? used / allot : 0) : used / maxUsed;
-        if (!Number.isFinite(pctRaw)) pctRaw = 0;
-        const pct = Math.max(0, Math.min(1, pctRaw));
-        const isOver = showAllotted && allot > 0 && used > allot;
-
-        const numbersHtml = showAllotted
-            ? `<span class="tracking-pto-numbers${isOver ? ' is-over' : ''}">
-                   <span class="tracking-pto-used">${used}</span>
-                   <span class="tracking-pto-allot"> / ${allot} days</span>
-               </span>`
-            : `<span class="tracking-pto-numbers">
-                   <span class="tracking-pto-used">${used}</span>
-                   <span class="tracking-pto-allot"> days</span>
-               </span>`;
-
-        const barHtml = `<div class="tracking-pto-bar" aria-hidden="true">
-                   <div class="tracking-pto-bar-fill${isOver ? ' is-over' : ''}" style="width:${(pct * 100).toFixed(1)}%;"></div>
-               </div>`;
-
-        return `
-            <div class="tracking-pto-row" style="--c:${p.color};" title="Dr. ${escapeHtml(lastName)} — ${used}${showAllotted ? ' of ' + allot : ''} working days of PTO">
-                <span class="tracking-pto-dot" aria-hidden="true"></span>
-                <span class="tracking-pto-name">Dr. ${escapeHtml(lastName)}</span>
-                ${numbersHtml}
-                ${barHtml}
-            </div>`;
-    }).join('');
+    const end = trackingSoFar() && range.end.getTime() > today.getTime() ? new Date(today) : range.end;
+    return { start: range.start, end, fiscalYear, fyLabel: fiscalYear === null ? 'all time' : 'FY' + (fiscalYear + 1) };
 }
 
 // ── Days by assignment ── per pathologist, working days (weekdays that
 // aren't holidays) on each service, off service, PTO and leave in the
-// selected fiscal year, read from the schedule itself (rotation, overrides,
-// swaps and recomputes all count). "So far" stops at today; "Full year"
-// includes what's scheduled. 'all' runs from the first scheduled day to the
-// end of the current fiscal year.
+// selected period, read from the schedule itself (rotation, overrides,
+// swaps and recomputes all count).
 let trackingDaysMode = 'sofar';
 const TRACKING_DAY_COLS = [
     { key: 'cyto', label: 'Cyto/​Gross' },
@@ -7355,70 +7287,28 @@ function daysByAssignment(start, end) {
     return out;
 }
 
-function renderTrackingDays() {
-    const headEl = document.getElementById('trackingDaysHead');
-    const bodyEl = document.getElementById('trackingDaysBody');
-    const periodEl = document.getElementById('trackingDaysPeriod');
-    if (!headEl || !bodyEl) return;
-    if (!pathologists || pathologists.length === 0) {
-        headEl.innerHTML = '';
-        bodyEl.innerHTML = '<tr><td class="t-sum-empty">No pathologists loaded.</td></tr>';
-        return;
-    }
-    let range, label;
-    if (trackingPeriod === 'all') {
-        range = { start: EARLIEST_DATE, end: getFiscalYearRange(getAcademicYearOfDate(today)).end };
-        label = 'All time';
-    } else {
-        const yr = parseInt(trackingPeriod, 10);
-        range = getFiscalYearRange(Number.isFinite(yr) ? yr : getAcademicYearOfDate(today));
-        label = 'Sep ' + range.start.getFullYear() + ' – Aug ' + range.end.getFullYear();
-    }
-    const end = trackingDaysMode === 'sofar' && range.end.getTime() > today.getTime() ? today : range.end;
-    if (periodEl) periodEl.textContent = label + (trackingDaysMode === 'sofar' && end === today ? ' · through today' : '');
-
-    const counts = daysByAssignment(range.start, end);
-    const cols = TRACKING_DAY_COLS.filter(c => !c.onlyIfUsed || pathologists.some(p => counts[p.id][c.key] > 0));
-    headEl.innerHTML = '<th class="t-sum-name-col">Pathologist</th>'
-        + cols.map(c => `<th>${escapeHtml(c.label)}</th>`).join('');
-    bodyEl.innerHTML = pathologists.map(p => {
-        const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
-        return `<tr>
-            <td class="t-sum-name" style="--c:${p.color};">
-                <span class="t-sum-dot"></span>
-                <span>Dr. ${escapeHtml(lastName)}</span>
-            </td>
-            ${cols.map(c => { const n = counts[p.id][c.key]; return `<td class="${n === 0 ? 't-sum-zero' : ''}">${n}</td>`; }).join('')}
-        </tr>`;
-    }).join('');
-}
-
 document.querySelectorAll('input[name="trackingDaysMode"]').forEach(r => r.addEventListener('change', () => {
     trackingDaysMode = r.value;
     renderTrackingPage();
 }));
 
 // ── Holiday call tracker ─────────────────────────────────────────────────
-// Who is on call for each of the six federal holidays from the fixed start
-// of FY26 (Sept 1, 2025) through 12 months from today — past holidays stay
-// counted forever, upcoming ones are projected from the rotation, but never
-// more than a year ahead. Independent of the Period selector. Derived from
-// onCallIdForDay (rotation + overrides), so swaps credit the actual coverer;
-// nothing is logged by hand. Counted on the true calendar date (July 4 even
-// on a Saturday — weekly call covers weekends).
+// Who is on call for each of the six federal holidays. Derived from
+// onCallIdForDay (rotation + overrides), so swaps credit the actual
+// coverer; nothing is logged by hand. Counted on the true calendar date
+// (July 4 even on a Saturday — weekly call covers weekends). The scorecard
+// counts the year on show (director, Nov 2026: "Holiday call (FY2027)").
 const HOLIDAY_CALL_START = new Date(2025, 8, 1);   // Sept 1, 2025 (month 0-indexed)
 
 // Six federal holidays in calendar order (Jan → Dec). `name` matches what
-// getActualFederalHoliday returns; `label` is the column heading. Single
-// source of truth for both the header row and the per-holiday columns, so a
-// count can never land under the wrong holiday.
+// getActualFederalHoliday returns; `label`/`short` head the columns.
 const HOLIDAY_ORDER = [
-    { name: "New Year's Day",   label: 'New Year' },
-    { name: 'Memorial Day',     label: 'Memorial' },
-    { name: 'Independence Day', label: 'July 4' },
-    { name: 'Labor Day',        label: 'Labor Day' },
-    { name: 'Thanksgiving',     label: 'Thanksgiving' },
-    { name: 'Christmas Day',    label: 'Christmas' },
+    { name: "New Year's Day",   label: 'New Year',     short: 'NY' },
+    { name: 'Memorial Day',     label: 'Memorial',     short: 'Mem.' },
+    { name: 'Independence Day', label: 'July 4',       short: 'Jul 4' },
+    { name: 'Labor Day',        label: 'Labor Day',    short: 'Labor' },
+    { name: 'Thanksgiving',     label: 'Thanksgiving', short: 'Thanks.' },
+    { name: 'Christmas Day',    label: 'Christmas',    short: 'Xmas' },
 ];
 
 // Every actual federal holiday from HOLIDAY_CALL_START (Sept 1, 2025)
@@ -7430,141 +7320,120 @@ function holidayCallEntries(now) {
     today.setHours(0, 0, 0, 0);
     const end = new Date(today);
     end.setFullYear(end.getFullYear() + 1);
+    return holidayCallsBetween(HOLIDAY_CALL_START, end);
+}
+
+// The federal holidays between two dates, each with whoever is on call.
+function holidayCallsBetween(start, end) {
     const out = [];
-    for (let d = new Date(HOLIDAY_CALL_START); d <= end; d = addDays(d, 1)) {
+    const from = start.getTime() < HOLIDAY_CALL_START.getTime() ? new Date(HOLIDAY_CALL_START) : new Date(start);
+    for (let d = from; d <= end; d = addDays(d, 1)) {
         const name = getActualFederalHoliday(d);
         if (name) out.push({ date: new Date(d), name: name, pathId: onCallIdForDay(d) });
     }
     return out;
 }
 
-// Matrix view: one row per pathologist, one column per holiday, each cell a
-// count of holidays that person has covered. A trailing Total sums the row.
-// Header and columns both come from HOLIDAY_ORDER (see above).
-function renderTrackingHolidayCall() {
-    const headEl = document.getElementById('trackingHolidayHead');
-    const bodyEl = document.getElementById('trackingHolidayBody');
-    const capEl = document.getElementById('trackingHolidayPeriod');
-    if (!bodyEl) return;
+// ── The scorecard ── one table, one row per pathologist: PTO used (of the
+// allotment), days on each service, holiday call by holiday, tumor boards
+// by type, consults. Grouped headings over the columns; zeros show as a
+// faint dot so the real numbers stand out; totals in bold.
+const TRK_SVC_COLS = [
+    { key: 'cyto', short: 'Cyto', title: 'McHenry Cyto / Gross', color: 'var(--svc-cyto)' },
+    { key: 'bigs', short: 'Bigs', title: 'McHenry Bigs', color: 'var(--svc-bigs)' },
+    { key: 'cytobigs', short: 'C/G/B', title: 'McHenry Cyto / Gross / Bigs (one person)', color: 'var(--svc-cyto)', onlyIfUsed: true },
+    { key: 'huntley', short: 'Hunt.', title: 'Huntley', color: 'var(--svc-huntley)' },
+    { key: 'wfh', short: 'WFH', title: 'Breast Bx / WFH', color: 'var(--svc-wfh)' },
+    { key: 'off', short: 'Off', title: 'Off service', color: 'var(--ink-2)', onlyIfUsed: true },
+    { key: 'leave', short: 'Leave', title: 'Leave', color: 'var(--ink-2)', onlyIfUsed: true },
+];
+const TRK_TB_COLS = [
+    { key: 'breast', short: 'Breast', title: 'Breast conference' },
+    { key: 'lung', short: 'Lung', title: 'Lung conference' },
+    { key: 'thoracic', short: 'Thor.', title: 'Thoracic conference' },
+    { key: 'cdh', short: 'CDH', title: 'Morning conference / CDH' },
+    { key: 'other', short: 'Other', title: 'Other tumor boards' },
+];
 
-    if (capEl) {
-        const end = new Date();
-        end.setFullYear(end.getFullYear() + 1);
-        capEl.textContent = trackingSoFar()
-            ? 'Sep 1, 2025 – today'
-            : 'Sep 1, 2025 – ' + MONTHS_SHORT[end.getMonth()] + ' '
-                + end.getDate() + ', ' + end.getFullYear() + ' · includes upcoming call';
-    }
-
-    // Header row: Pathologist | <each holiday> | Total.
-    if (headEl) {
-        headEl.innerHTML =
-            '<th class="t-sum-name-col">Pathologist</th>' +
-            HOLIDAY_ORDER.map(h => `<th>${escapeHtml(h.label)}</th>`).join('') +
-            '<th class="t-sum-total-col">Total</th>';
-    }
-
-    if (!pathologists || pathologists.length === 0) {
-        bodyEl.innerHTML = `<tr><td class="t-sum-empty" colspan="${HOLIDAY_ORDER.length + 2}">No pathologists loaded.</td></tr>`;
-        return;
-    }
-
-    const entries = holidayCallEntries().filter(e => trackingKeepDate(fmt(e.date)));
-
-    // (pathId → { holidayName → count, total }); a separate `former` bucket
-    // collects holidays credited to ids no longer in the roster (departed
-    // staff still named by old overrides) so the tally is surfaced, not lost.
-    const counts = {};
-    pathologists.forEach(p => { counts[p.id] = { total: 0 }; });
-    const former = { total: 0 };
-    entries.forEach(e => {
-        const bucket = counts[e.pathId] || former;
-        bucket[e.name] = (bucket[e.name] || 0) + 1;
-        bucket.total += 1;
-    });
-
-    const rowFor = (label, initials, color, bucket, extraCls) => {
-        const cells = HOLIDAY_ORDER.map(h => {
-            const n = bucket[h.name] || 0;
-            return `<td class="${n === 0 ? 't-sum-zero' : ''}">${n}</td>`;
-        }).join('');
-        const initialsHtml = initials
-            ? `<span class="t-sum-initials">${escapeHtml(initials)}</span>` : '';
-        return `
-            <tr class="${extraCls}">
-                <td class="t-sum-name" style="--c:${color};">
-                    <span class="t-sum-dot"></span>
-                    <span>${escapeHtml(label)}</span>
-                    ${initialsHtml}
-                </td>
-                ${cells}
-                <td class="t-sum-total">${bucket.total}</td>
-            </tr>`;
-    };
-
-    let html = pathologists.map(p => {
-        const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
-        return rowFor('Dr. ' + lastName, p.initials || '', p.color, counts[p.id], '');
-    }).join('');
-
-    if (former.total > 0) {
-        html += rowFor('Former staff', '', 'var(--rule)', former, 'tracking-hc-former');
-    }
-
-    bodyEl.innerHTML = html;
+function _trkLastName(p) {
+    return (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
 }
 
-// ── Summary count grid ───────────────────────────────────────────────────
-function renderTrackingSummary(filteredEntries, filteredConsults) {
-    const body = document.getElementById('trackingSummaryBody');
-    if (!body) return;
+function renderTrackingScore(filteredEntries, filteredConsults) {
+    const el = document.getElementById('trackingScore');
+    if (!el) return;
+    if (!pathologists || pathologists.length === 0) { el.innerHTML = '<p class="trk-empty">No pathologists loaded.</p>'; return; }
+    const r = trackingRange();
 
-    if (!pathologists || pathologists.length === 0) {
-        body.innerHTML = '';
-        return;
+    // PTO: working days used of the year's allotment ('all': no allotment,
+    // bars scale to the most anyone has taken).
+    const used = {};
+    pathologists.forEach(p => { used[p.id] = ptoDaysScheduled(p.id, { start: r.start, end: r.end }); });
+    const maxUsed = Math.max(1, ...Object.values(used));
+
+    const days = daysByAssignment(r.start, r.end);
+    const svcCols = TRK_SVC_COLS.filter(c => !c.onlyIfUsed || pathologists.some(p => days[p.id][c.key] > 0));
+
+    // Holiday call in the period; holidays credited to someone no longer in
+    // the list (old overrides) are kept on a "Former staff" row.
+    const hol = {}, former = { total: 0 };
+    pathologists.forEach(p => { hol[p.id] = { total: 0 }; });
+    holidayCallsBetween(r.start, r.end).forEach(h => {
+        const b = hol[h.pathId] || former;
+        b[h.name] = (b[h.name] || 0) + 1;
+        b.total += 1;
+    });
+
+    const tb = {}, consults = {};
+    pathologists.forEach(p => { tb[p.id] = { total: 0 }; consults[p.id] = 0; });
+    filteredEntries.forEach(([, e]) => {
+        const c = tb[e.pathologistId];
+        if (c && CONF_TYPE_BY_ID[e.type]) { c[e.type] = (c[e.type] || 0) + 1; c.total += 1; }
+    });
+    (filteredConsults || []).forEach(([, e]) => { if (consults[e.pathologistId] !== undefined) consults[e.pathologistId] += 1; });
+
+    const num = (n, cls) => n ? `<td class="trk-n${cls ? ' ' + cls : ''}">${n}</td>` : `<td class="trk-n trk-zero${cls ? ' ' + cls : ''}">${cls ? '0' : '·'}</td>`;
+    const gap = '<td class="trk-gap"></td>';
+    const nameCell = (label, color) => `<td class="trk-name"><span class="trk-dot" style="background:${color}"></span>${escapeHtml(label)}</td>`;
+
+    const rows = pathologists.map(p => {
+        const allot = r.fiscalYear !== null ? ptoAllotmentFor(p.id, r.fiscalYear) : 0;
+        const u = used[p.id];
+        const pct = Math.max(0, Math.min(1, r.fiscalYear !== null ? (allot > 0 ? u / allot : 0) : u / maxUsed));
+        const over = r.fiscalYear !== null && allot > 0 && u > allot;
+        const pto = `<td class="trk-pto" title="${escapeHtml(p.name)} — ${u}${r.fiscalYear !== null ? ' of ' + allot : ''} working days of PTO">
+                <span class="trk-pto-bar"><span class="trk-pto-fill${over ? ' is-over' : ''}" style="width:${(pct * 100).toFixed(1)}%;background:${over ? '' : p.color}"></span></span>
+                <span class="trk-pto-num${over ? ' is-over' : ''}">${u}${r.fiscalYear !== null ? '/' + allot : ''}</span></td>`;
+        return `<tr>${nameCell('Dr. ' + _trkLastName(p), p.color)}${pto}${gap}`
+            + svcCols.map(c => num(days[p.id][c.key])).join('') + gap
+            + HOLIDAY_ORDER.map(h => num(hol[p.id][h.name] || 0)).join('') + num(hol[p.id].total, 'trk-total') + gap
+            + TRK_TB_COLS.map(c => num(tb[p.id][c.key] || 0)).join('') + num(tb[p.id].total, 'trk-total') + gap
+            + num(consults[p.id], 'trk-total') + '</tr>';
+    });
+    if (former.total > 0) {
+        rows.push(`<tr class="trk-former">${nameCell('Former staff', 'var(--rule)')}<td class="trk-pto"></td>${gap}`
+            + svcCols.map(() => '<td class="trk-n trk-zero">·</td>').join('') + gap
+            + HOLIDAY_ORDER.map(h => num(former[h.name] || 0)).join('') + num(former.total, 'trk-total') + gap
+            + TRK_TB_COLS.map(() => '<td class="trk-n trk-zero">·</td>').join('') + '<td class="trk-n trk-zero">·</td>' + gap
+            + '<td class="trk-n trk-zero">·</td></tr>');
     }
 
-    // Build a (pathId, type) → count map
-    const counts = {};
-    pathologists.forEach(p => {
-        counts[p.id] = { breast: 0, lung: 0, thoracic: 0, cdh: 0, other: 0, total: 0, consult: 0 };
-    });
-    filteredEntries.forEach(([, e]) => {
-        const c = counts[e.pathologistId];
-        if (!c) return;
-        if (CONF_TYPE_BY_ID[e.type]) {
-            c[e.type] = (c[e.type] || 0) + 1;
-            c.total += 1;
-        }
-    });
-    // Consults tally separately (they aren't presentations, so they don't
-    // feed the presentation Total — the column shows rotation fairness).
-    (filteredConsults || []).forEach(([, e]) => {
-        const c = counts[e.pathologistId];
-        if (c) c.consult += 1;
-    });
-
-    body.innerHTML = pathologists.map(p => {
-        const c = counts[p.id];
-        const lastName = (p.name || '').replace(/^Dr\.\s*/, '').split(/\s+/).pop() || p.name;
-        const cell = (val) =>
-            `<td class="${val === 0 ? 't-sum-zero' : ''}">${val}</td>`;
-        return `
-            <tr>
-                <td class="t-sum-name" style="--c:${p.color};">
-                    <span class="t-sum-dot"></span>
-                    <span>Dr. ${escapeHtml(lastName)}</span>
-                    <span class="t-sum-initials">${escapeHtml(p.initials || '')}</span>
-                </td>
-                ${cell(c.breast)}
-                ${cell(c.lung)}
-                ${cell(c.thoracic)}
-                ${cell(c.cdh)}
-                ${cell(c.other)}
-                <td class="t-sum-total">${c.total}</td>
-                <td class="t-sum-consult${c.consult === 0 ? ' t-sum-zero' : ''}">${c.consult}</td>
-            </tr>`;
-    }).join('');
+    const head = (c, extra) => `<th class="trk-sub${extra || ''}" title="${escapeHtml(c.title)}"${c.color ? ` style="color:${c.color}"` : ''}>${escapeHtml(c.short)}</th>`;
+    const nSvc = svcCols.length;
+    el.innerHTML = `<table class="trk-score">
+        <colgroup><col class="trk-c-name"><col class="trk-c-pto"><col class="trk-c-gap">${'<col class="trk-c-n">'.repeat(nSvc)}<col class="trk-c-gap">${'<col class="trk-c-n">'.repeat(7)}<col class="trk-c-gap">${'<col class="trk-c-n">'.repeat(6)}<col class="trk-c-gap"><col class="trk-c-last"></colgroup>
+        <thead>
+          <tr class="trk-groups"><th colspan="3"></th><th colspan="${nSvc}" class="trk-group">Days on each service</th><th></th>
+            <th colspan="7" class="trk-group">Holiday call (${escapeHtml(r.fyLabel.replace(/^FY/, 'FY'))})</th><th></th>
+            <th colspan="6" class="trk-group">Tumor boards</th><th colspan="2"></th></tr>
+          <tr class="trk-heads"><th class="trk-head">Pathologist</th><th class="trk-head">PTO used</th><th class="trk-gap"></th>
+            ${svcCols.map(c => head(c, ' trk-sub-svc')).join('')}<th class="trk-gap"></th>
+            ${HOLIDAY_ORDER.map(h => head({ short: h.short, title: h.label })).join('')}${head({ short: 'Total', title: 'Holiday call, total' }, ' trk-sub-total')}<th class="trk-gap"></th>
+            ${TRK_TB_COLS.map(c => head(c)).join('')}${head({ short: 'Total', title: 'Tumor boards, total' }, ' trk-sub-total')}<th class="trk-gap"></th>
+            <th class="trk-head">Consults</th></tr>
+        </thead>
+        <tbody>${rows.join('')}</tbody>
+      </table>`;
 }
 
 // ── Tab counts ───────────────────────────────────────────────────────────
@@ -7577,6 +7446,7 @@ function renderTrackingTabCounts(filteredEntries, consultCount) {
         const el = document.getElementById(id);
         if (el) el.textContent = String(val);
     };
+    set('trackingTabCountAll', filteredEntries.filter(([, e]) => counts[e.type] !== undefined).length + (consultCount || 0));
     set('trackingTabCountBreast', counts.breast);
     set('trackingTabCountLung', counts.lung);
     set('trackingTabCountThoracic', counts.thoracic);
@@ -7585,175 +7455,89 @@ function renderTrackingTabCounts(filteredEntries, consultCount) {
     set('trackingTabCountConsult', consultCount || 0);
 }
 
-// ── Entries list (per active tab) ────────────────────────────────────────
+// ── History (per tab) ── one line per logged tumor board or consult:
+// date · type tag · detail · who · Edit. "All" mixes both, newest first.
+function _trkDateLabel(dateKey) {
+    try {
+        const d = parseDate(dateKey);
+        const opts = { weekday: 'short', month: 'short', day: 'numeric' };
+        if (d.getFullYear() !== today.getFullYear()) opts.year = 'numeric';
+        return d.toLocaleDateString('en-US', opts).replace(/,/g, '');
+    } catch (_) { return dateKey; }
+}
+
+function _trkHistoryRow(kind, key, e) {
+    const p = pathologists.find(x => String(x.id) === String(e.pathologistId));
+    const who = p ? 'Dr. ' + _trkLastName(p) : 'Unknown';
+    const color = p ? p.color : 'var(--ink-3)';
+    let tag, detail = [], editAttr, canEdit;
+    if (kind === 'consult') {
+        tag = `<span class="trk-tag" style="--tc:var(--trk-consult)">Consult</span>`;
+        if (e.caseNumber) detail.push(`<span class="trk-e-case">${escapeHtml(e.caseNumber)}</span>`);
+        if (e.source) detail.push(`from ${escapeHtml(e.source)}`);
+        editAttr = `data-consult-edit="${escapeHtml(key)}"`;
+        canEdit = canEditConsults();
+    } else {
+        const t = CONF_TYPE_BY_ID[e.type];
+        tag = `<span class="trk-tag" style="--tc:var(--trk-${e.type})">${escapeHtml(t ? t.label : e.type)}</span>`;
+        if (e.type === 'cdh' && e.subtype) detail.push(escapeHtml(e.subtype));
+        if (e.type === 'other' && e.otherTitle) detail.push(escapeHtml(e.otherTitle));
+        if (e.note) detail.push(`<span class="trk-e-note">${escapeHtml(e.note)}</span>`);
+        editAttr = `data-conf-edit="${escapeHtml(key)}"`;
+        canEdit = canEditConferences();
+    }
+    return `<div class="trk-entry">
+        <span class="trk-e-date">${escapeHtml(_trkDateLabel(e.date))}</span>${tag}
+        <span class="trk-e-detail">${detail.join(' · ')}</span>
+        <span class="trk-e-who" style="color:${color}">${escapeHtml(who)}</span>
+        ${canEdit ? `<button class="trk-edit" type="button" ${editAttr}>Edit</button>` : '<span></span>'}
+      </div>`;
+}
+
 function renderTrackingEntries(filteredEntries) {
     const listEl = document.getElementById('trackingEntries');
     if (!listEl) return;
-
-    // ── Consults tab: its own entry shape (case number + source) ──
+    let items;
     if (activeTrackingTab === 'consult') {
-        const consults = getFilteredConsults();
-        const editable = canEditConsults();
-
-        if (consults.length === 0) {
-            listEl.innerHTML = `
-                <div class="empty">
-                    <span class="empty-headline">No consults yet.</span>
-                    Logged consult cases will appear here.
-                </div>`;
-            return;
-        }
-
-        listEl.innerHTML = consults.map(([key, e]) => {
-            const p = pathologists.find(x => String(x.id) === String(e.pathologistId));
-            const dateLabel = (function () {
-                try {
-                    const d = parseDate(e.date);
-                    return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-                } catch (_) {
-                    return e.date;
-                }
-            })();
-            const who = p ? p.name : 'Unknown pathologist';
-            const color = p ? p.color : 'var(--ink-3)';
-
-            const metaParts = [];
-            if (e.caseNumber) {
-                metaParts.push(`<span class="te-case">${escapeHtml(e.caseNumber)}</span>`);
-            }
-            if (e.source) {
-                metaParts.push(`<span class="te-source">from ${escapeHtml(e.source)}</span>`);
-            }
-            const metaHtml = metaParts.length
-                ? `<div class="te-meta">${metaParts.join(' ')}</div>`
-                : '';
-
-            const editBtn = editable
-                ? `<button class="te-edit-btn" data-consult-edit="${escapeHtml(key)}" type="button">Edit</button>`
-                : '';
-
-            return `
-                <div class="tracking-entry" style="--c:${color};">
-                    <div class="te-date">${escapeHtml(dateLabel)}</div>
-                    <div class="te-main">
-                        <div class="te-presenter">
-                            <span class="te-dot"></span>
-                            <span>${escapeHtml(who)}</span>
-                        </div>
-                        ${metaHtml}
-                    </div>
-                    ${editBtn}
-                </div>`;
-        }).join('');
+        items = getFilteredConsults().map(([k, e]) => ['consult', k, e]);
+    } else if (activeTrackingTab === 'all') {
+        items = [
+            ...filteredEntries.filter(([, e]) => CONF_TYPE_BY_ID[e.type]).map(([k, e]) => ['conf', k, e]),
+            ...getFilteredConsults().map(([k, e]) => ['consult', k, e]),
+        ].sort((a, b) => (a[2].date !== b[2].date ? (a[2].date < b[2].date ? 1 : -1) : (b[2].createdAt || 0) - (a[2].createdAt || 0)));
+    } else {
+        items = filteredEntries.filter(([, e]) => e.type === activeTrackingTab).map(([k, e]) => ['conf', k, e]);
+    }
+    if (!items.length) {
+        const what = activeTrackingTab === 'consult' ? 'consults'
+            : activeTrackingTab === 'all' ? 'tumor boards or consults'
+            : (CONF_TYPE_BY_ID[activeTrackingTab] ? CONF_TYPE_BY_ID[activeTrackingTab].singular.toLowerCase() + 's' : 'entries');
+        listEl.innerHTML = `<div class="empty"><span class="empty-headline">Nothing logged yet.</span>No ${escapeHtml(what)} in this period.</div>`;
         return;
     }
-
-    const tabEntries = filteredEntries.filter(([, e]) => e.type === activeTrackingTab);
-    const editable = canEditConferences();
-
-    if (tabEntries.length === 0) {
-        const typeLabel = CONF_TYPE_BY_ID[activeTrackingTab]
-            ? CONF_TYPE_BY_ID[activeTrackingTab].singular
-            : 'this conference';
-        listEl.innerHTML = `
-            <div class="empty">
-                <span class="empty-headline">No entries yet.</span>
-                Logged ${escapeHtml(typeLabel.toLowerCase())} sessions will appear here.
-            </div>`;
-        return;
-    }
-
-    listEl.innerHTML = tabEntries.map(([key, e]) => {
-        const p = pathologists.find(x => x.id === e.pathologistId);
-        const dateLabel = (function() {
-            try {
-                const d = parseDate(e.date);
-                return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
-            } catch (_) {
-                return e.date;
-            }
-        })();
-        const presenterName = p ? p.name : 'Unknown pathologist';
-        const presenterColor = p ? p.color : 'var(--ink-3)';
-
-        // Meta line: subtype tag (cdh), title (other), and note
-        const metaParts = [];
-        if (e.type === 'cdh' && e.subtype) {
-            metaParts.push(`<span class="te-tag">${escapeHtml(e.subtype)}</span>`);
-        }
-        if (e.type === 'other' && e.otherTitle) {
-            metaParts.push(`<span class="te-title">${escapeHtml(e.otherTitle)}</span>`);
-        }
-        if (e.note) {
-            metaParts.push(`<span class="te-note">${escapeHtml(e.note)}</span>`);
-        }
-
-        const metaHtml = metaParts.length
-            ? `<div class="te-meta">${metaParts.join(' ')}</div>`
-            : '';
-
-        const editBtn = editable
-            ? `<button class="te-edit-btn" data-conf-edit="${escapeHtml(key)}" type="button">Edit</button>`
-            : '';
-
-        return `
-            <div class="tracking-entry" style="--c:${presenterColor};">
-                <div class="te-date">${escapeHtml(dateLabel)}</div>
-                <div class="te-main">
-                    <div class="te-presenter">
-                        <span class="te-dot"></span>
-                        <span>${escapeHtml(presenterName)}</span>
-                    </div>
-                    ${metaHtml}
-                </div>
-                ${editBtn}
-            </div>`;
-    }).join('');
+    listEl.innerHTML = items.map(([kind, k, e]) => _trkHistoryRow(kind, k, e)).join('');
 }
 
-// ── Consult rotation card (left column) ── full cycle order, next
-// recipient highlighted; "Log a consult" only for Kathleen / admin.
+// ── Consult rotation ── equal tags in queue order (fewest consults this
+// fiscal year first); the next one solid. Those who log consults click a
+// tag to log one for that person (the way down the line).
 function renderConsultNext() {
     const card = document.getElementById('consultNextCard');
     const addBtn = document.getElementById('consultAddBtn');
     if (!card) return;
-
     if (addBtn) addBtn.style.display = canEditConsults() ? '' : 'none';
+    if (!pathologists || pathologists.length === 0) { card.innerHTML = ''; return; }
 
-    if (!pathologists || pathologists.length === 0) {
-        card.innerHTML = '';
-        return;
-    }
-
-    // Boxes in queue order (fewest consults this fiscal year first), each
-    // with its count; those who can log consults click one to log it for
-    // that person — the way to go down the line when someone can't take it.
     const queue = consultQueue();
-    const next = queue.length ? queue[0].p : null;
     const canLog = canEditConsults();
-    const chips = queue.map(({ p, count }, i) => {
+    card.innerHTML = queue.map(({ p, count }, i) => {
         const isNext = i === 0;
-        const arrow = i < queue.length - 1
-            ? '<span class="consult-rot-arrow" aria-hidden="true">›</span>'
-            : '';
         const tip = `${p.name} — ${count} consult${count === 1 ? '' : 's'} this fiscal year${isNext ? ' · next up' : ''}${canLog ? ' · click to log a consult for them' : ''}`;
         const tag = canLog ? 'button' : 'span';
-        return `<${tag} ${canLog ? 'type="button" ' : ''}class="consult-rot-chip${isNext ? ' is-next' : ''}${canLog ? ' is-clickable' : ''}"
-                    data-pid="${p.id}" style="--c:${p.color};"
-                    title="${escapeHtml(tip)}">${escapeHtml(p.initials || '')}<span class="consult-rot-count">${count}</span></${tag}>${arrow}`;
+        const arrow = i < queue.length - 1 ? '<span class="trk-consult-arrow" aria-hidden="true">›</span>' : '';
+        return `<${tag} ${canLog ? 'type="button" ' : ''}class="trk-consult-chip${isNext ? ' is-next' : ''}" data-pid="${p.id}" style="--c:${p.color};" title="${escapeHtml(tip)}">${escapeHtml(_trkLastName(p))} · ${count}</${tag}>${arrow}`;
     }).join('');
-
-    const nextLine = next
-        ? `<div class="consult-next-line">Next consult
-               <span class="consult-next-arrow" aria-hidden="true">→</span>
-               <strong style="--c:${next.color};">${escapeHtml(next.name)}</strong>
-           </div>`
-        : '';
-
-    card.innerHTML = `
-        <div class="consult-rot-strip" title="Next up first: fewest consults this fiscal year; ties follow the rotation">${chips}</div>
-        ${nextLine}`;
-    card.querySelectorAll('.consult-rot-chip.is-clickable').forEach(b =>
+    card.querySelectorAll('button.trk-consult-chip').forEach(b =>
         b.addEventListener('click', () => openConsultModal(null, Number(b.dataset.pid))));
 }
 
@@ -7770,6 +7554,13 @@ function renderTrackingPage() {
     if (yearSel && trackingPeriod !== null && yearSel.value !== trackingPeriod) {
         yearSel.value = trackingPeriod;
     }
+    // ‹ › step through the years; disabled at either end.
+    const opts = yearSel ? [...yearSel.options].map(o => o.value) : [];
+    const at = opts.indexOf(trackingPeriod);
+    const prevBtn = document.getElementById('trackingYearPrev');
+    const nextBtn = document.getElementById('trackingYearNext');
+    if (prevBtn) prevBtn.disabled = at < 0 || at + 1 >= opts.length || opts[at + 1] === 'all' || trackingPeriod === 'all';
+    if (nextBtn) nextBtn.disabled = at <= 0 || trackingPeriod === 'all';
 
     // Show/hide the Add button based on permissions
     const addBtn = document.getElementById('trackingAddBtn');
@@ -7782,19 +7573,36 @@ function renderTrackingPage() {
 
     // Sync active-tab visual state
     document.querySelectorAll('#trackingTabs .tracking-tab').forEach(b => {
-        b.classList.toggle('active', b.dataset.conf === activeTrackingTab);
+        const on = b.dataset.conf === activeTrackingTab;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
     });
 
     const filtered = getFilteredEntries();
     const filteredConsults = getFilteredConsults();
     renderConsultNext();
-    renderTrackingSummary(filtered, filteredConsults);
+    renderTrackingScore(filtered, filteredConsults);
     renderTrackingTabCounts(filtered, filteredConsults.length);
     renderTrackingEntries(filtered);
-    renderTrackingPto();
-    renderTrackingDays();
-    renderTrackingHolidayCall();
 }
+
+// ‹ › beside the year picker.
+(function wireTrackingYearSteps() {
+    const step = dir => {
+        const sel = document.getElementById('trackingYearSelect');
+        if (!sel) return;
+        const opts = [...sel.options].map(o => o.value).filter(v => v !== 'all');
+        const at = opts.indexOf(trackingPeriod);
+        const to = opts[at + dir];
+        if (at < 0 || !to) return;
+        trackingPeriod = to;
+        renderTrackingPage();
+    };
+    const prev = document.getElementById('trackingYearPrev');
+    const next = document.getElementById('trackingYearNext');
+    if (prev) prev.addEventListener('click', () => step(1));     // options run newest first
+    if (next) next.addEventListener('click', () => step(-1));
+})();
 
 // Expose for any caller that needs to refresh the page (e.g. after sign-in)
 window.__renderTrackingPage = renderTrackingPage;

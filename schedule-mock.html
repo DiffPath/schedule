@@ -373,27 +373,23 @@
             </div>
 
             <!-- Tracking page — Conference Tracker -->
-            <div class="page-shell" id="trackingPage" hidden>
-                <div class="tracking-page-content">
-                    <header class="tracking-page-header">
-                        <div class="tracking-page-heading">
-                            <h2 class="tracking-page-title">Conference/Consult Tracker</h2>
-                            <p class="tracking-page-subtitle">Track conference presentations and cycle consult cases through the pathologists.</p>
+            <div class="page-shell tl-page" id="trackingPage" hidden>
+                <!-- Tracking (scorecard layout, Nov 2026): a header band like the
+                     other pages, one table of everyone's numbers, then consults
+                     and tumor-board logging beside a tabbed history. -->
+                <div class="tl-content trk-content">
+                    <header class="tl-header trk-header">
+                        <h2 class="tl-title">Tracking</h2>
+                        <div class="cf-nav trk-nav">
+                            <button class="nav-btn" type="button" id="trackingYearPrev" title="Earlier year" aria-label="Earlier year">‹</button>
+                            <select id="trackingYearSelect" class="trk-year-select" aria-label="Year"></select>
+                            <button class="nav-btn" type="button" id="trackingYearNext" title="Later year" aria-label="Later year">›</button>
                         </div>
-                        <div class="tracking-page-controls">
-                            <!-- Count: through today, or the whole year incl. what's
-                                 scheduled. Every section on this page follows it. -->
-                            <div class="tracking-year-wrap">
-                                <span class="tracking-control-caption" id="trackingCountCaption">Count</span>
-                                <div class="oc-scope-toggle tracking-count-toggle" role="radiogroup" aria-labelledby="trackingCountCaption">
-                                    <label class="oc-scope-opt"><input type="radio" name="trackingDaysMode" value="sofar" checked> So far</label>
-                                    <label class="oc-scope-opt"><input type="radio" name="trackingDaysMode" value="full"> Full year</label>
-                                </div>
-                            </div>
-                            <div class="tracking-year-wrap">
-                                <label for="trackingYearSelect">Period</label>
-                                <select id="trackingYearSelect"></select>
-                            </div>
+                        <!-- Count: through today, or the whole year incl. what's
+                             scheduled. Every section on this page follows it. -->
+                        <div class="req-tabs requests-page-tabs trk-count" role="radiogroup" aria-label="Count">
+                            <label class="req-tab trk-count-opt"><input type="radio" name="trackingDaysMode" value="sofar" checked> So far</label>
+                            <label class="req-tab trk-count-opt"><input type="radio" name="trackingDaysMode" value="full"> Full year</label>
                         </div>
                     </header>
 
@@ -401,10 +397,10 @@
                          hidden until conferenceLogImported is set) -->
                     <div class="tracking-import-banner" id="trackingImportBanner" style="display:none;">
                         <div class="tracking-import-icon" aria-hidden="true">
-                            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                                <path d="M8 2v8"/>
-                                <polyline points="5,7 8,10 11,7"/>
-                                <path d="M3 13h10"/>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                <polyline points="7 10 12 15 17 10"/>
+                                <line x1="12" y1="15" x2="12" y2="3"/>
                             </svg>
                         </div>
                         <div class="tracking-import-text">
@@ -414,175 +410,53 @@
                         <button id="trackingImportBtn" class="tracking-import-btn" type="button">Import</button>
                     </div>
 
-                    <!-- Two-column body: left = quick-add buttons + counts table; right = history/log -->
-                    <div class="tracking-grid">
+                    <div class="trk-body">
+                        <!-- Everyone's numbers in one table (renderTrackingScore):
+                             PTO used, days on each service, holiday call and tumor
+                             boards by type, consults. -->
+                        <section class="trk-score-card" aria-label="Scorecard">
+                            <div class="trk-score-scroll" id="trackingScore"></div>
+                        </section>
+                        <p class="trk-note">· = none. Hover a heading for its full name.</p>
 
-                        <!-- ── LEFT COLUMN ─────────────────────────────────────── -->
-                        <div class="tracking-col tracking-col-left">
-
-                            <!-- PTO tracker — working days used vs allotted in the selected fiscal year; follows the period selector. -->
-                            <section class="tracking-pto-section">
-                                <div class="tracking-section-label">
-                                    <span>PTO this fiscal year</span>
-                                    <span class="tracking-pto-period" id="trackingPtoPeriod" aria-hidden="true"></span>
-                                </div>
-                                <div class="tracking-pto-list" id="trackingPtoList"></div>
-                            </section>
-
-                            <!-- Days by assignment — per pathologist, working days on each
-                                 service, off service, PTO and leave in the selected fiscal
-                                 year; "So far" counts through today, "Full year" adds what's
-                                 scheduled. Follows the period selector. -->
-                            <section class="tracking-days-section">
-                                <div class="tracking-section-label">
-                                    <span>Days by assignment</span>
-                                    <span class="tracking-holiday-period" id="trackingDaysPeriod" aria-hidden="true"></span>
-                                </div>
-                                <div class="tracking-summary-wrap">
-                                    <div class="tracking-summary-scroll">
-                                        <table class="tracking-summary tracking-days-table">
-                                            <thead>
-                                                <tr id="trackingDaysHead"></tr>
-                                            </thead>
-                                            <tbody id="trackingDaysBody"></tbody>
-                                        </table>
+                        <div class="trk-bottom">
+                            <section class="trk-card trk-actions">
+                                <h3 class="trk-card-h">Consults</h3>
+                                <div class="trk-consult-strip" id="consultNextCard"></div>
+                                <button class="trk-log-btn trk-log-consult" id="consultAddBtn" type="button" style="display:none;">Log a consult</button>
+                                <div class="trk-log-tb" id="trackingConfAdd" style="display:none;">
+                                    <h3 class="trk-card-h">Log a tumor board</h3>
+                                    <div class="trk-log-grid">
+                                        <button class="tracking-conf-btn trk-log-btn" data-conf="breast" type="button" style="--tc:var(--trk-breast)">Breast</button>
+                                        <button class="tracking-conf-btn trk-log-btn" data-conf="lung" type="button" style="--tc:var(--trk-lung)">Lung</button>
+                                        <button class="tracking-conf-btn trk-log-btn" data-conf="thoracic" type="button" style="--tc:var(--trk-thoracic)">Thoracic</button>
+                                        <button class="tracking-conf-btn trk-log-btn" data-conf="cdh" type="button" style="--tc:var(--trk-cdh)">Morning / CDH</button>
+                                        <button class="tracking-conf-btn trk-log-btn" data-conf="other" type="button" style="--tc:var(--trk-other)">Other tumor board</button>
                                     </div>
                                 </div>
                             </section>
 
-                            <!-- Holiday call tracker — on-call for the six federal holidays, cumulative across years (never resets, ignores the Period selector); derived from onCallIdForDay so swaps credit the actual coverer. -->
-                            <section class="tracking-holiday-section">
-                                <div class="tracking-section-label">
-                                    <span>Holiday call</span>
-                                    <span class="tracking-holiday-period" id="trackingHolidayPeriod" aria-hidden="true"></span>
-                                </div>
-                                <div class="tracking-summary-wrap">
-                                    <div class="tracking-summary-scroll">
-                                        <table class="tracking-summary tracking-holiday-table">
-                                            <thead>
-                                                <tr id="trackingHolidayHead"></tr>
-                                            </thead>
-                                            <tbody id="trackingHolidayBody"></tbody>
-                                        </table>
+                            <section class="trk-card trk-history">
+                                <div class="trk-history-head">
+                                    <h3 class="trk-card-h">History</h3>
+                                    <div class="trk-tabs" id="trackingTabs" role="tablist">
+                                        <button class="tracking-tab" data-conf="all" role="tab" type="button">All <span class="trk-tab-count" id="trackingTabCountAll">0</span></button>
+                                        <button class="tracking-tab" data-conf="breast" role="tab" type="button">Breast <span class="trk-tab-count" id="trackingTabCountBreast">0</span></button>
+                                        <button class="tracking-tab" data-conf="lung" role="tab" type="button">Lung <span class="trk-tab-count" id="trackingTabCountLung">0</span></button>
+                                        <button class="tracking-tab" data-conf="thoracic" role="tab" type="button">Thoracic <span class="trk-tab-count" id="trackingTabCountThoracic">0</span></button>
+                                        <button class="tracking-tab" data-conf="cdh" role="tab" type="button" title="Morning / CDH">CDH <span class="trk-tab-count" id="trackingTabCountCdh">0</span></button>
+                                        <button class="tracking-tab" data-conf="other" role="tab" type="button">Other <span class="trk-tab-count" id="trackingTabCountOther">0</span></button>
+                                        <button class="tracking-tab" data-conf="consult" role="tab" type="button">Consults <span class="trk-tab-count" id="trackingTabCountConsult">0</span></button>
                                     </div>
                                 </div>
+                                <div class="trk-entries" id="trackingEntries"></div>
                             </section>
-
-                            <!-- Counts table — each pathologist × each conference type,
-                                 plus a separate consult tally for rotation fairness. -->
-                            <section class="tracking-summary-section">
-                                <div class="tracking-section-label">Presentation &amp; consult counts</div>
-                                <div class="tracking-summary-wrap">
-                                    <div class="tracking-summary-scroll">
-                                        <table class="tracking-summary">
-                                            <thead>
-                                                <tr>
-                                                    <th class="t-sum-name-col">Pathologist</th>
-                                                    <th>Breast</th>
-                                                    <th>Lung</th>
-                                                    <th>Thoracic</th>
-                                                    <th>Morning/CDH</th>
-                                                    <th>Other</th>
-                                                    <th class="t-sum-total-col">Total</th>
-                                                    <th class="t-sum-consult-col">Consults</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody id="trackingSummaryBody"></tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                            </section>
-
                         </div>
-
-                        <!-- ── RIGHT COLUMN ────────────────────────────────────── -->
-                        <div class="tracking-col tracking-col-right">
-
-                            <!-- Consult rotation — next incoming consult; cycle = pathologist list, next recipient highlighted. "Log a consult" only for Kathleen/admin (renderConsultNext()). -->
-                            <section class="tracking-consult-section" id="trackingConsultSection">
-                                <div class="tracking-section-label">Consult rotation</div>
-                                <div class="consult-next-card" id="consultNextCard"></div>
-                                <button class="tracking-conf-btn consult-add-btn" id="consultAddBtn" type="button" style="display:none;">
-                                    <span class="tcb-dot" aria-hidden="true"></span>
-                                    <span class="tcb-label">Log a consult</span>
-                                    <span class="tcb-plus" aria-hidden="true">+</span>
-                                </button>
-                            </section>
-
-                            <!-- Per-conference quick-add buttons (admin only; visibility
-                                 mirrors the hidden #trackingAddBtn proxy in .hidden-actions). -->
-                            <section class="tracking-conf-add" id="trackingConfAdd" style="display:none;">
-                                <div class="tracking-section-label">Log a conference</div>
-                                <div class="tracking-conf-btn-stack">
-                                    <button class="tracking-conf-btn" data-conf="breast" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Breast Conference</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                    <button class="tracking-conf-btn" data-conf="lung" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Lung Conference</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                    <button class="tracking-conf-btn" data-conf="thoracic" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Thoracic Conference</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                    <button class="tracking-conf-btn" data-conf="cdh" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Morning / CDH</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                    <button class="tracking-conf-btn" data-conf="other" type="button">
-                                        <span class="tcb-dot" aria-hidden="true"></span>
-                                        <span class="tcb-label">Add Other Tumor Board</span>
-                                        <span class="tcb-plus" aria-hidden="true">+</span>
-                                    </button>
-                                </div>
-                            </section>
-
-
-                            <div class="tracking-section-label">History</div>
-
-                            <!-- Conference type tabs -->
-                            <div class="tracking-tabs" id="trackingTabs" role="tablist">
-                                <button class="tracking-tab active" data-conf="breast" role="tab">
-                                    <span>Breast</span>
-                                    <span class="tracking-tab-count" id="trackingTabCountBreast">0</span>
-                                </button>
-                                <button class="tracking-tab" data-conf="lung" role="tab">
-                                    <span>Lung</span>
-                                    <span class="tracking-tab-count" id="trackingTabCountLung">0</span>
-                                </button>
-                                <button class="tracking-tab" data-conf="thoracic" role="tab">
-                                    <span>Thoracic</span>
-                                    <span class="tracking-tab-count" id="trackingTabCountThoracic">0</span>
-                                </button>
-                                <button class="tracking-tab" data-conf="cdh" role="tab">
-                                    <span>Morning/CDH</span>
-                                    <span class="tracking-tab-count" id="trackingTabCountCdh">0</span>
-                                </button>
-                                <button class="tracking-tab" data-conf="other" role="tab">
-                                    <span>Other</span>
-                                    <span class="tracking-tab-count" id="trackingTabCountOther">0</span>
-                                </button>
-                                <button class="tracking-tab tracking-tab-consult" data-conf="consult" role="tab">
-                                    <span>Consults</span>
-                                    <span class="tracking-tab-count" id="trackingTabCountConsult">0</span>
-                                </button>
-                            </div>
-
-                            <!-- Entries list for active tab -->
-                            <div class="tracking-entries" id="trackingEntries"></div>
-
-                        </div>
-
                     </div>
                 </div>
             </div>
 
-            <!-- Case distribution page — director only. Laid out like Requests:
+<!-- Case distribution page — director only. Laid out like Requests:
                  the day's cases on the left, by pathologist, in collapsible
                  sections; the day's workload on the right. case-distribution.js
                  draws all of it, header included. -->

@@ -488,7 +488,7 @@ function _rcBuildProblem(windowDays, mergedPins) {
         // Each pathologist's position in today's cycle under the default
         // rotation (−1 when today has no cycle).
         day.tmplIdx = day.pids.map(pid =>
-            day.cycle ? _expectedIdxInDayCycle(defaultServiceId(pid, day.date), day.cycle) : -1);
+            day.cycle ? _expectedIdxInDayCycle(rotationServiceId(pid, day.date), day.cycle) : -1);
 
         day.unaryFixed = day.states.map(st => {
             let c = 0;
@@ -620,7 +620,7 @@ function _rcSetDesirRef(day, ref) {
         const v = new Int8Array(pathologists.length);
         if (!day.counted) return v;
         st.forEach((s, j) => {
-            const r = ref ? ref[day.pids[j]] : defaultServiceId(day.pids[j], day.date);
+            const r = ref ? ref[day.pids[j]] : rotationServiceId(day.pids[j], day.date);
             v[day.pi[j]] = (RC_DESIRABILITY[s] || 0) - (RC_DESIRABILITY[r] || 0);
         });
         return v;

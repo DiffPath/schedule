@@ -96,6 +96,9 @@ const SEED_PATHOLOGISTS = [
     { id: 2, name: 'Dr. Imaad Mujeeb', initials: 'IM', color: 'var(--p2)', vacationAllotted: 35 },
     { id: 3, name: 'Dr. Jamaal Rehman', initials: 'JR', color: 'var(--p3)', vacationAllotted: 35 },
     { id: 4, name: 'Dr. Maryam Raouf', initials: 'MR', color: 'var(--p4)', vacationAllotted: 35 },
+    // Joining in 2027: off the schedule until their first day (firstDay).
+    { id: 5, name: 'Dr. Allison Cavallo', initials: 'AC', color: 'var(--p5)', vacationAllotted: 35, firstDay: '2027-03-29' },
+    { id: 6, name: 'Dr. Sean Gui', initials: 'SG', color: 'var(--p6)', vacationAllotted: 35, firstDay: '2027-04-12' },
 ];
 
 // ────────────── CONSTANTS ──────────────
@@ -620,8 +623,9 @@ function stepPtoAllotYear(state, delta) {
     return String(y);
 }
 
-// Settings → Leaving the group (director only): each pathologist's last
-// working day. Setting or clearing one offers a recompute from the change.
+// Settings → Start and last days (director only): each pathologist's first
+// and last working days; blank = always here. Changing one offers a
+// recompute from the change.
 function renderLastDaySettings() {
     const section = document.getElementById('lastDaySection');
     const list = document.getElementById('lastDayList');
@@ -630,52 +634,65 @@ function renderLastDaySettings() {
     section.style.display = '';
     const active = document.activeElement;
     if (active && list.contains(active)) return;
-    const html = pathologists.map(p => {
-        const last = pathLastDay(p);
-        return `<div class="last-day-row">
+    const cell = (p, kind, value) => {
+        const label = kind === 'first' ? 'first' : 'last';
+        return `<span class="last-day-cell">
+            <input type="date" class="last-day-input" data-day-kind="${kind}" data-day-pid="${p.id}" value="${value || ''}" aria-label="${escapeHtml(p.name)}: ${label} working day">
+            ${value ? `<button type="button" class="last-day-clear" data-day-clear="${kind}" data-day-pid="${p.id}" title="Remove the ${label} day" aria-label="Remove ${escapeHtml(p.name)}'s ${label} day">×</button>` : '<span class="last-day-clear-slot"></span>'}
+          </span>`;
+    };
+    const html = `<div class="last-day-row last-day-head"><span></span><span>First day</span><span>Last day</span></div>`
+        + pathologists.map(p => `<div class="last-day-row">
             <span class="last-day-name">${escapeHtml(p.name)}</span>
-            <input type="date" class="last-day-input" data-last-day="${p.id}" value="${last || ''}" aria-label="${escapeHtml(p.name)}: last working day">
-            ${last ? `<button type="button" class="last-day-clear" data-last-day-clear="${p.id}" title="Remove the last day — they stay on the schedule">Clear</button>` : '<span class="last-day-note">Staying</span>'}
-          </div>`;
-    }).join('');
+            ${cell(p, 'first', pathFirstDay(p))}
+            ${cell(p, 'last', pathLastDay(p))}
+          </div>`).join('');
     if (list._html !== html) { list.innerHTML = html; list._html = html; }
 }
 
-async function _saveLastDay(pid, value) {
+// kind: 'first' | 'last'.
+async function _saveWorkDay(kind, pid, value) {
     if (!isAdmin()) return;
     const p = pathologists.find(x => String(x.id) === String(pid));
     if (!p) return;
-    const was = pathLastDay(p);
+    const was = kind === 'first' ? pathFirstDay(p) : pathLastDay(p);
     const now = value || null;
     if (was === now) return;
     try {
-        await db.ref('scheduler/pathologists/' + p.id + '/lastDay').set(now);
+        await db.ref('scheduler/pathologists/' + p.id + '/' + (kind === 'first' ? 'firstDay' : 'lastDay')).set(now);
     } catch (err) {
         showToast('Could not save: ' + err.message, { type: 'error' });
         return;
     }
     const name = p.name.replace(/^Dr\.\s*/, 'Dr. ');
+    const day = k => `${MONTHS_SHORT[parseDate(k).getMonth()]} ${parseDate(k).getDate()}, ${parseDate(k).getFullYear()}`;
     const changed = [was, now].filter(Boolean).sort()[0];      // the earlier of the two dates
-    const from = changed ? addDays(parseDate(changed), 1) : today;
-    showToast(now ? `${name}'s last day: ${MONTHS_SHORT[parseDate(now).getMonth()]} ${parseDate(now).getDate()}, ${parseDate(now).getFullYear()}.` : `${name} is staying.`);
-    await maybeOfferRecompute({}, {
-        fromDate: from.getTime() < today.getTime() ? today : from,
-        message: now
-            ? `${name} is off the schedule after ${MONTHS_SHORT[parseDate(now).getMonth()]} ${parseDate(now).getDate()}. Re-plan everyone's services from then on using the rotation rules?`
-            : `${name} is back on the schedule. Re-plan everyone's services using the rotation rules?`,
-    });
+    // A first day changes the schedule from that day; a last day, the day after.
+    const from = changed ? addDays(parseDate(changed), kind === 'first' ? 0 : 1) : today;
+    let toast, message;
+    if (kind === 'first') {
+        toast = now ? `${name}'s first day: ${day(now)}.` : `${name} has no first day: on the schedule from the start.`;
+        message = now ? `${name} joins the schedule on ${day(now)}. Re-plan everyone's services from then on using the rotation rules?`
+            : `${name} is on the schedule from the start. Re-plan everyone's services using the rotation rules?`;
+    } else {
+        toast = now ? `${name}'s last day: ${day(now)}.` : `${name} is staying.`;
+        message = now ? `${name} is off the schedule after ${day(now)}. Re-plan everyone's services from then on using the rotation rules?`
+            : `${name} is back on the schedule. Re-plan everyone's services using the rotation rules?`;
+    }
+    showToast(toast);
+    await maybeOfferRecompute({}, { fromDate: from.getTime() < today.getTime() ? today : from, message });
 }
 
 (function wireLastDaySettings() {
     const list = document.getElementById('lastDayList');
     if (!list) return;
     list.addEventListener('change', e => {
-        const el = e.target.closest('[data-last-day]');
-        if (el) _saveLastDay(el.dataset.lastDay, el.value);
+        const el = e.target.closest('[data-day-kind]');
+        if (el) _saveWorkDay(el.dataset.dayKind, el.dataset.dayPid, el.value);
     });
     list.addEventListener('click', e => {
-        const b = e.target.closest('[data-last-day-clear]');
-        if (b) _saveLastDay(b.dataset.lastDayClear, '');
+        const b = e.target.closest('[data-day-clear]');
+        if (b) _saveWorkDay(b.dataset.dayClear, b.dataset.dayPid, '');
     });
 })();
 
@@ -1210,12 +1227,16 @@ function defaultOnCallId(cycleStart) {
     const breaks = _callBreaks().filter(b => b.w <= w);
     let id;
     if (!breaks.length) {
-        const idx = ((w % pathologists.length) + pathologists.length) % pathologists.length;
-        id = pathologists[idx].id;
+        // The original group (anyone who joined later has a first day).
+        const base = pathologists.filter(p => !pathFirstDay(p));
+        const list = base.length ? base : pathologists;
+        const idx = ((w % list.length) + list.length) % list.length;
+        id = list[idx].id;
     } else {
         const b = breaks[breaks.length - 1];
         const end = getCallCycleEnd(cycleStart);
-        const here = pathologists.filter(p => isPathActiveOn(p, end));
+        // Those here for the whole block.
+        const here = pathologists.filter(p => isPathActiveOn(p, cycleStart) && isPathActiveOn(p, end));
         if (!here.length) id = null;
         else {
             const prevId = defaultOnCallId(getCallCycleStart(addDays(b.start, -1)));
@@ -1232,18 +1253,28 @@ function defaultOnCallId(cycleStart) {
     return id;
 }
 
-// The first call block each leaver can't cover in full (it runs past their
-// last day): [{ start, w }], earliest first.
+// Where the call rotation changes hands: the first block each leaver can't
+// cover in full (it runs past their last day), and the first block each
+// joiner covers in full (it starts on or after their first day).
+// [{ start, w }], earliest first.
 function _callBreaks() {
     const out = [];
-    pathologists.forEach(p => {
-        const last = pathLastDay(p);
-        if (!last) return;
-        const cs = getCallCycleStart(parseDate(last));
-        const ce = getCallCycleEnd(cs);
-        const start = fmt(ce) > last ? cs : addDays(ce, 1);
+    const add = start => {
         const w = callCycleIndex(start);
         if (!out.some(b => b.w === w)) out.push({ start, w });
+    };
+    pathologists.forEach(p => {
+        const last = pathLastDay(p);
+        if (last) {
+            const cs = getCallCycleStart(parseDate(last));
+            const ce = getCallCycleEnd(cs);
+            add(fmt(ce) > last ? cs : addDays(ce, 1));
+        }
+        const first = pathFirstDay(p);
+        if (first) {
+            const cs = getCallCycleStart(parseDate(first));
+            add(fmt(cs) >= first ? cs : addDays(getCallCycleEnd(cs), 1));
+        }
     });
     return out.sort((a, b) => a.w - b.w);
 }
@@ -1277,18 +1308,43 @@ function regularServiceSet(nRegular, taken) {
     return set;
 }
 
-// ── Leaving the group ── A pathologist's last working day ('YYYY-MM-DD',
-// Settings → Leaving the group). After it they're off the schedule
-// entirely: no row, no service, no call, no consults, no cases. They stay
-// in `pathologists` so everyone else's place in the rotation is unchanged,
-// and their history before the date stays.
+// ── Joining and leaving the group ── A pathologist's first and last
+// working days ('YYYY-MM-DD', Settings → Start and last days). Before the
+// first and after the last they're off the schedule entirely: no row, no
+// service, no call, no consults, no cases. They stay in `pathologists` so
+// everyone else's place in the rotation is unchanged, and history stays.
+function pathFirstDay(p) {
+    return p && p.firstDay ? String(p.firstDay) : null;
+}
 function pathLastDay(p) {
     return p && p.lastDay ? String(p.lastDay) : null;
 }
 function isPathActiveOn(pathOrId, date) {
     const p = pathOrId && typeof pathOrId === 'object' ? pathOrId : pathologists.find(x => String(x.id) === String(pathOrId));
-    const last = pathLastDay(p);
-    return !last || fmt(date) <= last;
+    const first = pathFirstDay(p), last = pathLastDay(p), d = fmt(date);
+    return (!first || d >= first) && (!last || d <= last);
+}
+
+// The day's services for n pathologists here: the first n of Cyto/Gross,
+// Bigs, Huntley, Breast Bx/WFH; past four, an extra Breast Bx/WFH each (a
+// placeholder until the five-person rotation is worked out).
+function rotationSet(n) {
+    const ids = SERVICES.map(s => s.id).slice(0, Math.min(n, SERVICES.length));
+    for (let i = SERVICES.length; i < n; i++) ids.push('wfh');
+    return ids;
+}
+// The rotation's service for a pathologist on a workday, before PTO and
+// overrides: those here turn through rotationSet one step per workday, in
+// `pathologists` order. With the original four here it's the same as
+// defaultServiceId, so their history is unchanged. null if they aren't here.
+function rotationServiceId(pathId, date) {
+    const wdi = workDayIndex(date);
+    if (wdi === null) return null;
+    const here = pathologists.filter(p => isPathActiveOn(p, date));
+    const i = here.findIndex(p => String(p.id) === String(pathId));
+    if (i < 0) return null;
+    const set = rotationSet(here.length), n = set.length;
+    return set[(((i + wdi) % n) + n) % n];
 }
 
 // Service lookup doesn't change
@@ -1377,18 +1433,11 @@ function getNaturalDayAssignments(date) {
         return result;
     }
 
-    // Weekday — start with default daily rotation. Once someone has left
-    // (a last day in Settings), the rotation runs over those still here:
+    // Weekday — start with the daily rotation over those here (rotationSet):
     // three people turn through Cyto/Gross → Bigs → Huntley, one step per
-    // workday, as the four did through all four services. Whoever has left
-    // shows no row at all.
-    const here = pathologists.filter(p => isPathActiveOn(p, date));
-    const shrunk = here.length > 0 && here.length < pathologists.length && here.length <= SERVICES.length;
-    const rotationService = p => {
-        if (!shrunk) return defaultServiceId(p.id, date);
-        const n = here.length, i = here.indexOf(p) + workDayIndex(date);
-        return SERVICES[((i % n) + n) % n].id;
-    };
+    // workday, as four do through all four services. Whoever hasn't started
+    // or has left shows no row at all.
+    const rotationService = p => rotationServiceId(p.id, date);
     const slots = pathologists.map((p, pIdx) => ({
         pathId: p.id,
         pIdx,
@@ -1479,7 +1528,17 @@ function getNaturalDayAssignments(date) {
             displaced.forEach((s, i) => { s.serviceId = vacantIds[i] || null; });
         }
         // 0 unlocked working: all working paths are locked — no reassignment.
-        // 4+ unlocked working: normal rotation, no change needed.
+        // 4+ unlocked working: the rotation stands, except that with more than
+        // four here someone's service can be left empty: an extra Breast
+        // Bx/WFH person takes it (placeholder until the five-person rotation).
+        else if (unlockedWorking.length >= 4) {
+            const held = slots.filter(s => !s.onPto && !s.gone).map(s => s.lockedServiceId || s.serviceId);
+            const vacant = ['cyto', 'bigs', 'huntley', 'wfh'].filter(id => !held.includes(id));
+            const spare = unlockedWorking.filter(s => s.serviceId === 'wfh');
+            vacant.forEach(id => {
+                if (spare.length > 1) spare.pop().serviceId = id;
+            });
+        }
     }
 
     // ── Build result ────────────────────────────────────────────────────────
@@ -1771,7 +1830,18 @@ function ptoAllotmentFor(pathId, fiscalStartYear) {
     const explicit = explicitPtoAllotment(pathId, fiscalStartYear);
     if (explicit !== null) return explicit;
     const p = pathologists.find(x => String(x.id) === String(pathId));
-    return (p && Number.isFinite(p.vacationAllotted)) ? p.vacationAllotted : 0;
+    const full = (p && Number.isFinite(p.vacationAllotted)) ? p.vacationAllotted : 0;
+    // Someone who starts during the year gets the share of it they work,
+    // by calendar days (none for a year before they start).
+    const first = pathFirstDay(p);
+    if (first && Number.isFinite(Number(fiscalStartYear))) {
+        const { start, end } = getFiscalYearRange(Number(fiscalStartYear));
+        const last = new Date(end.getFullYear(), end.getMonth(), end.getDate());   // Aug 31, midnight
+        const f = parseDate(first);
+        if (f > last) return 0;
+        if (f > start) return Math.round(full * (daysBetween(f, last) + 1) / (daysBetween(start, last) + 1));
+    }
+    return full;
 }
 
 // { start, end } for the fiscal year Sept 1 <startYear> – Aug 31 next year.
@@ -2052,6 +2122,14 @@ regListener('scheduler/pathologists', async snap => {
     const raw = snap.val();
     pathologists = Object.values(raw).sort((a, b) => a.id - b.id);
     clearDayCache();
+    // Pathologists added to the code later (new hires) are written once, by
+    // the director, and never over what's already there.
+    if (isAdmin()) {
+        SEED_PATHOLOGISTS.forEach(p => {
+            if (!raw[p.id]) db.ref('scheduler/pathologists/' + p.id).set(p)
+                .catch(err => console.error('Could not add ' + p.name + ':', err));
+        });
+    }
 
     // Populate the header filter (centralized — respects login state)
     populatePathFilter();
@@ -7112,12 +7190,30 @@ function consultQueue() {
     entries.forEach(e => {
         if (getAcademicYearOfKey(e.date) === fy) count[e.pathologistId] = (count[e.pathologistId] || 0) + 1;
     });
+    // Fair across mid-year starts: consults per working day since each
+    // person started (or since the fiscal year began, if earlier).
+    const fyStart = getFiscalYearRange(fy).start;
+    const rate = p => {
+        const first = pathFirstDay(p);
+        const from = first && parseDate(first) > fyStart ? parseDate(first) : fyStart;
+        return (count[p.id] || 0) / Math.max(1, _workdaysBetween(from, today));
+    };
     return pathologists
         .map((_, i) => pathologists[(lastIdx + 1 + i) % n])            // rotation order
-        .filter(p => isPathActiveOn(p, today))                          // not anyone who has left
-        .map((p, rank) => ({ p, rank, count: count[p.id] || 0 }))
-        .sort((a, b) => a.count - b.count || a.rank - b.rank)
+        .filter(p => isPathActiveOn(p, today))                          // only those here now
+        .map((p, rank) => ({ p, rank, count: count[p.id] || 0, r: rate(p) }))
+        .sort((a, b) => a.r - b.r || a.rank - b.rank)
         .map(({ p, count: c }) => ({ p, count: c }));
+}
+
+// Working days (not weekends or federal holidays) from `from` to `to`,
+// both included.
+function _workdaysBetween(from, to) {
+    let n = 0;
+    for (let d = new Date(from); d <= to; d = addDays(d, 1)) {
+        if (!isWeekend(d) && !getFederalHoliday(d)) n++;
+    }
+    return n;
 }
 
 // Next up = the head of the queue. A suggestion only — the logger can pick
@@ -7397,7 +7493,13 @@ function renderTrackingScore(filteredEntries, filteredConsults) {
     const gap = '<td class="trk-gap"></td>';
     const nameCell = (label, color) => `<td class="trk-name"><span class="trk-dot" style="background:${color}"></span>${escapeHtml(label)}</td>`;
 
-    const rows = pathologists.map(p => {
+    // Those here at some point in the period (not before they start or
+    // after they've left).
+    const shown = pathologists.filter(p => {
+        const first = pathFirstDay(p), last = pathLastDay(p);
+        return (!first || first <= fmt(r.end)) && (!last || last >= fmt(r.start));
+    });
+    const rows = shown.map(p => {
         const allot = r.fiscalYear !== null ? ptoAllotmentFor(p.id, r.fiscalYear) : 0;
         const u = used[p.id];
         const pct = Math.max(0, Math.min(1, r.fiscalYear !== null ? (allot > 0 ? u / allot : 0) : u / maxUsed));

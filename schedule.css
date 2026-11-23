@@ -29,12 +29,18 @@
     /* JR — blue */
     --p4: #8e3a96;
     /* MR — magenta-purple */
+    --p5: #b7791f;
+    /* AC — amber */
+    --p6: #be3a6a;
+    /* SG — rose */
 
     /* Pathologist light tint backgrounds (for service row highlights) */
     --p1-bg: rgba(192, 57, 43, 0.09);
     --p2-bg: rgba(24, 137, 126, 0.09);
     --p3-bg: rgba(37, 99, 176, 0.09);
     --p4-bg: rgba(142, 58, 150, 0.09);
+    --p5-bg: rgba(183, 121, 31, 0.10);
+    --p6-bg: rgba(190, 58, 106, 0.09);
 
     /* Service colors */
     --svc-cyto: #c2410c;
@@ -9674,13 +9680,17 @@ body.cd-resizing, body.cd-resizing * { cursor: col-resize !important; user-selec
 :root { --delnor: #0f766e; --delnor-bg: #d5efe9; --svc-delnor: #0f766e; }
 /* Settings → Leaving the group */
 .last-day-list { display: flex; flex-direction: column; gap: 8px; }
-.last-day-row { display: grid; grid-template-columns: minmax(0, 1fr) 170px 80px; align-items: center; gap: 10px; }
+.last-day-row { display: grid; grid-template-columns: minmax(0, 1fr) 200px 200px; align-items: center; gap: 10px; }
+.last-day-head { font-size: 11.5px; font-weight: 600; color: var(--ink-3); margin-bottom: -2px; }
+.last-day-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.last-day-cell .last-day-input { flex: 1 1 auto; min-width: 0; }
+.last-day-clear-slot { flex: none; width: 28px; }   /* keeps every date box the same width */
 .last-day-name { font-size: 13.5px; color: var(--ink); }
 .last-day-input { height: 34px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--rule-soft); border-radius: 8px; background: var(--paper); font: 13px var(--sans); color: var(--ink); }
 .last-day-note { font-size: 12px; color: var(--ink-3); }
-.last-day-clear { justify-self: start; padding: 5px 10px; border: 1px solid var(--rule-soft); border-radius: 8px; background: var(--paper); font: 12px var(--sans); color: var(--ink-2); cursor: pointer; }
+.last-day-clear { flex: none; width: 28px; height: 28px; padding: 0; border: 1px solid var(--rule-soft); border-radius: 8px; background: var(--paper); font: 15px/1 var(--sans); color: var(--ink-2); cursor: pointer; }
 .last-day-clear:hover { border-color: var(--ink-3); color: var(--ink); }
-@media (max-width: 600px) { .last-day-row { grid-template-columns: 1fr auto; } .last-day-name { grid-column: 1 / -1; } }
+@media (max-width: 600px) { .last-day-row { grid-template-columns: 1fr 1fr; } .last-day-name { grid-column: 1 / -1; } .last-day-head span:first-child { display: none; } }
 
 /* Locums (locums.js): indigo (the director's pick), apart from ours and Delnor's teal. */
 :root { --locum: #4338ca; --locum-bg: #e0e7ff; --svc-locum: #4338ca; }

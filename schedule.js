@@ -1213,44 +1213,57 @@ function workDayIndex(date) {
     return fullWeeks * 5 + remainder;
 }
 
-// Default on-call: cycles through pathologists using the block index. When
-// someone leaves (a last day, set in Settings), call rotates among those
-// still here from the first block they can't cover in full, carrying on in
-// the same order from whoever had the block before — so no one gets two in
-// a row and the rest keep their turns.
+// Default on-call: cycles through the group using the block index. When
+// someone joins or leaves (first / last day, set in Settings), the order
+// carries on from whoever had the block before: anyone who has left drops
+// out, and anyone new joins at the END of the round, so everyone already
+// in the rotation takes one more turn before the newcomer's first. No one
+// gets two in a row and the rest keep their turns.
 const _defaultOnCallCache = new Map();
 function defaultOnCallId(cycleStart) {
     if (pathologists.length === 0) return null;
     const key = cycleStart.getTime();
     if (_defaultOnCallCache.has(key)) return _defaultOnCallCache.get(key);
     const w = callCycleIndex(cycleStart);
-    const breaks = _callBreaks().filter(b => b.w <= w);
-    let id;
-    if (!breaks.length) {
-        // The original group (anyone who joined later has a first day).
-        const base = pathologists.filter(p => !pathFirstDay(p));
-        const list = base.length ? base : pathologists;
-        const idx = ((w % list.length) + list.length) % list.length;
-        id = list[idx].id;
-    } else {
-        const b = breaks[breaks.length - 1];
-        const end = getCallCycleEnd(cycleStart);
-        // Those here for the whole block.
-        const here = pathologists.filter(p => isPathActiveOn(p, cycleStart) && isPathActiveOn(p, end));
-        if (!here.length) id = null;
-        else {
-            const prevId = defaultOnCallId(getCallCycleStart(addDays(b.start, -1)));
-            const pi = pathologists.findIndex(p => String(p.id) === String(prevId));
-            let first = 0;
-            for (let k = 1; k <= pathologists.length; k++) {
-                const j = here.indexOf(pathologists[(pi + k + pathologists.length) % pathologists.length]);
-                if (j >= 0) { first = j; break; }
-            }
-            id = here[(first + (w - b.w)) % here.length].id;
-        }
-    }
+    const segs = _callSegments().filter(s => s.w <= w);
+    // Before any change: the original group (anyone who joined later has a
+    // first day), counted from block 0.
+    const { order, w0 } = segs.length ? segs[segs.length - 1] : { order: _callBaseOrder(), w0: 0 };
+    const n = order.length;
+    const id = n ? order[(((w - w0) % n) + n) % n].id : null;
     _defaultOnCallCache.set(key, id);
     return id;
+}
+
+function _callBaseOrder() {
+    const base = pathologists.filter(p => !pathFirstDay(p));
+    return base.length ? base : pathologists.slice();
+}
+
+// The call order from each change on: [{ w, w0, order: [pathologist] }],
+// earliest first. At each change the previous order is turned to start
+// after whoever had the block before it, those not here for the whole block
+// drop out, and newcomers are added at the end (array order).
+let _callSegCache = null;
+function _callSegments() {
+    if (_callSegCache) return _callSegCache;
+    const segs = [];
+    let order = _callBaseOrder(), w0 = 0;
+    _callBreaks().forEach(b => {
+        const n = order.length;
+        const prev = n ? (((b.w - 1 - w0) % n) + n) % n : -1;     // who had the block before
+        const turned = n ? order.slice(prev + 1).concat(order.slice(0, prev + 1)) : [];
+        const end = getCallCycleEnd(b.start);
+        const here = p => isPathActiveOn(p, b.start) && isPathActiveOn(p, end);
+        const kept = turned.filter(here);
+        const keptIds = new Set(kept.map(p => String(p.id)));
+        const joiners = pathologists.filter(p => here(p) && !keptIds.has(String(p.id)));
+        order = kept.concat(joiners);
+        w0 = b.w;
+        segs.push({ w: b.w, w0, order });
+    });
+    _callSegCache = segs;
+    return segs;
 }
 
 // Where the call rotation changes hands: the first block each leaver can't
@@ -1765,6 +1778,7 @@ function clearDayCache() {
     _dayCache.clear();
     _naturalCache.clear();
     _defaultOnCallCache.clear();
+    _callSegCache = null;
     _violationFlags.clear();
     // Conflicts are derived from the day assignments, so they go stale too.
     _conflicts = null;

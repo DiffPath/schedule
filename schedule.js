@@ -7341,11 +7341,11 @@ function holidayCallsBetween(start, end) {
 const TRK_SVC_COLS = [
     { key: 'cyto', short: 'Cyto', title: 'McHenry Cyto / Gross', color: 'var(--svc-cyto)' },
     { key: 'bigs', short: 'Bigs', title: 'McHenry Bigs', color: 'var(--svc-bigs)' },
-    { key: 'cytobigs', short: 'C/G/B', title: 'McHenry Cyto / Gross / Bigs (one person)', color: 'var(--svc-cyto)', onlyIfUsed: true },
+    { key: 'cytobigs', short: 'C/G/B', title: 'McHenry Cyto / Gross / Bigs (one person)', color: 'var(--svc-cyto)' },
     { key: 'huntley', short: 'Hunt.', title: 'Huntley', color: 'var(--svc-huntley)' },
     { key: 'wfh', short: 'WFH', title: 'Breast Bx / WFH', color: 'var(--svc-wfh)' },
-    { key: 'off', short: 'Off', title: 'Off service', color: 'var(--ink-2)', onlyIfUsed: true },
-    { key: 'leave', short: 'Leave', title: 'Leave', color: 'var(--ink-2)', onlyIfUsed: true },
+    { key: 'off', short: 'Off', title: 'Off service', color: 'var(--ink-2)' },
+    { key: 'leave', short: 'Leave', title: 'Leave', color: 'var(--ink-2)' },
 ];
 const TRK_TB_COLS = [
     { key: 'breast', short: 'Breast', title: 'Breast conference' },
@@ -7372,7 +7372,8 @@ function renderTrackingScore(filteredEntries, filteredConsults) {
     const maxUsed = Math.max(1, ...Object.values(used));
 
     const days = daysByAssignment(r.start, r.end);
-    const svcCols = TRK_SVC_COLS.filter(c => !c.onlyIfUsed || pathologists.some(p => days[p.id][c.key] > 0));
+    // Every column always shows, so So far and Full year look the same.
+    const svcCols = TRK_SVC_COLS;
 
     // Holiday call in the period; holidays credited to someone no longer in
     // the list (old overrides) are kept on a "Former staff" row.

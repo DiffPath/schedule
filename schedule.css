@@ -9873,12 +9873,12 @@ input.dn-slot:focus { outline: none; border: 1px solid var(--delnor); background
 /* The scorecard */
 .trk-score-card { background: #fff; border: 1px solid var(--rule-soft); border-radius: 10px; overflow: hidden; }
 .trk-score-scroll { overflow-x: auto; }
-.trk-score { width: 100%; min-width: 1040px; border-collapse: collapse; table-layout: fixed; font-size: 13px; color: var(--ink); }
+.trk-score { width: 100%; min-width: 1210px; border-collapse: collapse; table-layout: fixed; font-size: 13px; color: var(--ink); }
 .trk-score .trk-c-name { width: 140px; }
 .trk-score .trk-c-pto { width: 126px; }
 .trk-score .trk-c-gap { width: 10px; }
-.trk-score .trk-c-n { width: 44px; }
-.trk-score .trk-c-last { width: auto; }
+.trk-score .trk-c-n { width: 42px; }
+.trk-score .trk-c-last { width: 80px; }            /* consults: just its number; spare width spreads over every column */
 .trk-score th { font-weight: 400; text-align: center; }
 .trk-score .trk-group {
     padding: 12px 0 5px; border-bottom: 1px solid var(--rule);
@@ -9896,7 +9896,7 @@ input.dn-slot:focus { outline: none; border: 1px solid var(--delnor); background
 .trk-score .trk-zero { color: var(--ink-4); }
 .trk-score .trk-total { font-weight: 600; }
 .trk-score .trk-total.trk-zero { color: var(--ink); }
-.trk-score td:last-child { padding-left: 32px; }
+.trk-score td:last-child { padding-left: 14px; }
 .trk-score .trk-name { padding-left: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trk-dot { display: inline-block; width: 9px; height: 9px; margin-right: 8px; border-radius: 50%; vertical-align: 0; }
 .trk-score .trk-pto { padding-left: 6px; white-space: nowrap; }
@@ -9910,7 +9910,7 @@ input.dn-slot:focus { outline: none; border: 1px solid var(--delnor); background
 .trk-empty { margin: 0; padding: 16px; color: var(--ink-3); }
 
 /* Consults + logging, and the history */
-.trk-bottom { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); gap: 20px; margin-top: 16px; align-items: start; }
+.trk-bottom { display: grid; grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); gap: 20px; margin-top: 20px; align-items: start; }
 .trk-card { background: #fff; border: 1px solid var(--rule-soft); border-radius: 10px; }
 .trk-card-h { margin: 0; font: 600 13px var(--sans); color: var(--ink); }
 .trk-actions { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
@@ -10037,4 +10037,19 @@ button.trk-consult-chip.is-next:hover { background: var(--c); filter: brightness
         line-height: 18px;
     }
     .schedule-toolbar .view-tab.view-tab-day { display: none; }   /* phones only */
+}
+
+/* Tracking fills the window like the other header-band pages (wide
+   screens): the history stretches down to the page's bottom margin and
+   scrolls inside itself, so it never runs into the window edge; on a short
+   window the body scrolls instead of being clipped (.tl-page hides
+   overflow at this width). */
+@media (min-width: 1024px) {
+    #trackingPage .trk-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+    #trackingPage .trk-score-card { flex: none; }          /* the table never shrinks; the history gives way */
+    #trackingPage .trk-bottom { flex: 1 1 auto; min-height: 300px; align-items: stretch; }
+    #trackingPage .trk-actions { align-self: start; }
+    #trackingPage .trk-history { display: flex; flex-direction: column; min-height: 0; }
+    #trackingPage .trk-history-head { flex: none; }
+    #trackingPage .trk-entries { flex: 1 1 auto; min-height: 0; max-height: none; }
 }

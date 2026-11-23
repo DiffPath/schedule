@@ -9566,6 +9566,10 @@ table.tracking-summary.cd-types td { vertical-align: middle; }
 
 /* No list yet: click here, then Ctrl+V (the paste goes to the page). */
 .cd-paste-zone { margin: 14px; border: 1.5px dashed var(--rule); border-radius: 10px; cursor: text; }
+/* The empty panel: the dashed box fills it, the same 14px from every edge,
+   its text centred in it. */
+.cf-list:has(> .cd-paste-zone) { display: flex; flex-direction: column; }
+.cf-list > .cd-paste-zone { flex: 1 1 auto; display: flex; flex-direction: column; justify-content: center; align-items: center; box-sizing: border-box; }
 .cd-paste-zone:hover { border-color: var(--ink-3); }
 .cd-paste-zone:focus { outline: none; border-color: var(--accent); background: var(--accent-soft); }
 

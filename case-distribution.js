@@ -1686,7 +1686,7 @@ function cdDayHtml() {
     const t = cdTotals();
     let list;
     if (!has) {
-        list = `<div class="cf-empty cd-paste-zone" tabindex="0" aria-label="Paste the case log here"><span class="split-empty-headline">No case list for ${escapeHtml(cdDayLabel(cdDate))} yet.</span>In Epic, press Ctrl+Shift+1 to run the AutoHotkey script — or copy Epic’s case log in Excel (headers included), click here and press Ctrl+V.</div>`;
+        list = `<div class="cf-empty cd-paste-zone" tabindex="0" aria-label="Paste the case log here"><span class="split-empty-headline">No case list for ${escapeHtml(cdDayLabel(cdDate))} yet.</span>In Epic, press Ctrl+Shift+1 to run the case assignment automation. Or copy Epic’s case log in Excel (headers included), click here and press Ctrl+V.</div>`;
     } else if (cdSearch.trim()) {
         // Find a case: only the cases that match, each opened.
         const found = cdFind(cdSearch);
@@ -1757,11 +1757,11 @@ function cdWorkingCard() {
 }
 
 function cdListCard() {
-    const from = cdListFrom ? (cdListFrom.how === 'script' ? 'The AutoHotkey script, ' : 'Pasted, ') + cdTime(cdListFrom.at) : 'Pasted';
+    const from = cdListFrom ? (cdListFrom.how === 'script' ? 'Case assignment automation, ' : 'Pasted, ') + cdTime(cdListFrom.at) : 'Pasted';
     const recorded = !cdRecordedKey ? 'Not yet' : cdTime(cdRecordedAt) || 'Yes';
     const problems = cdExportProblems();
     const exportTip = problems.length ? 'Before exporting: ' + problems.join('; ')
-        : 'Download the cases for the AutoHotkey script, in the same order as the Epic list';
+        : 'Download the cases for the case assignment automation, in the same order as the Epic list';
     return `<section class="cd-card">
         <h3 class="cd-card-h">This list</h3>
         <div class="cd-facts">
@@ -1917,7 +1917,7 @@ function cdPeopleViewHtml() {
             }).join('')}
           </div>
         </section>
-        <section class="cd-card"><p class="cd-help-text">A full-time pathologist has a daily share of 1. A part-timer’s share is their FTE, raised when they take more PTO than the full-timers so the year still comes to FTE × a full-timer’s work (never more than a full day). Half of anyone’s lead or lag is worked off with each new list. “Typed in Epic” is what the AutoHotkey script types in Epic’s case assignment window — blank means the last name.</p></section>
+        <section class="cd-card"><p class="cd-help-text">A full-time pathologist has a daily share of 1. A part-timer’s share is their FTE, raised when they take more PTO than the full-timers so the year still comes to FTE × a full-timer’s work (never more than a full day). Half of anyone’s lead or lag is worked off with each new list. “Typed in Epic” is what the case assignment automation types in Epic’s case assignment window. Blank means the last name.</p></section>
       </div>`;
     const dnLines = (typeof delnorRosterList === 'function' ? delnorRosterList() : []).map(r => cdLineHtml('people', 'd:' + r.rid, cdTag('d:' + r.rid),
         `<b>Delnor</b><span class="ch-dates"> · types “${escapeHtml(cdEpicName('d:' + r.rid))}” in Epic</span>`, null,
@@ -2144,7 +2144,7 @@ function cdExportAhk(auto) {
     const problems = cdExportProblems();
     if (problems.length) {
         const s = problems.join('; ');
-        showToast((auto ? `Imported ${cdCases.length} cases from the script, but can’t export: ` : 'Can’t export yet: ')
+        showToast((auto ? `Imported ${cdCases.length} cases from the case assignment automation, but can’t export: ` : 'Can’t export yet: ')
             + s.charAt(0).toLowerCase() + s.slice(1) + '.', { type: 'error', duration: auto ? 60000 : undefined });
         return false;
     }
@@ -2175,13 +2175,13 @@ function cdHandBack(name) {
     const text = CD_BACK_MARK + '\t' + name + '\r\n' + cdAhkText().replace(/^﻿/, '');
     const n = cdCases.length;
     const ok = () => {
-        cdExportedName = name + ' (to the script)';
+        cdExportedName = name + ' (to the case assignment automation)';
         cdRecord();
         renderCasesPage();
-        showToast(`Imported ${n} cases from the script, recorded them and handed the assignments back. The script takes it from here.`);
+        showToast(`Imported ${n} cases from the case assignment automation, recorded them and handed the assignments back. The case assignment automation takes it from here.`);
     };
-    const fail = () => showToast(`Imported ${n} cases from the script, but couldn’t hand them back on the clipboard. `
-        + 'Run the script again with this window in front, or Export and use Ctrl+Shift+2.', { type: 'error', duration: 60000 });
+    const fail = () => showToast(`Imported ${n} cases from the case assignment automation, but couldn’t hand them back on the clipboard. `
+        + 'Run the case assignment automation again with this window in front, or Export and use Ctrl+Shift+2.', { type: 'error', duration: 60000 });
     const fallback = () => {
         const ta = document.createElement('textarea');
         ta.value = text;
@@ -2226,7 +2226,7 @@ function cdAnswerScript(mark) {
 // list, and run it once the director has signed in.
 function cdAutoAfterSignIn(text) {
     clearInterval(_cdSignInWait);
-    showToast('The case-assignment script handed over a case list. Sign in as the director and it carries on.', { duration: 20000 });
+    showToast('The case assignment automation handed over a case list. Sign in as the director and it carries on.', { duration: 20000 });
     const giveUp = Date.now() + 10 * 60 * 1000;
     _cdSignInWait = setInterval(() => {
         if (Date.now() > giveUp) { clearInterval(_cdSignInWait); return; }
@@ -2249,7 +2249,7 @@ function cdAutoRun(text) {
     cdSetPaste(text);
     cdListFrom = text.trim() ? { how: 'script', at: Date.now() } : null;
     if (!cdCases.length) {
-        showToast('The script handed over a case list with no cases in it.', { type: 'error' });
+        showToast('The case assignment automation handed over a case list with no cases in it.', { type: 'error' });
         return;
     }
     // The same list again (a run that stopped, started over): replace its

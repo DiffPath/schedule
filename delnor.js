@@ -396,6 +396,121 @@ function _dnPanel(id, title, sub, bodyHtml, actionsHtml) {
     return back;
 }
 
+// ── Importing Delnor's own sign-up sheet ────────────────────────────────
+// Their Excel sheet, copied and pasted (Ctrl+V) on this page: week blocks
+// of a row of dates ("Monday, November 30, 2026") over rows "Pathologist 1"
+// … "Pathologist 3" holding initials (BB, JB) or a last name. Only the date
+// columns count (the narrow columns between them hold stray copies); the
+// "Locum Support" row, blanks and HOLIDAY are left out; a trailing "?" is
+// read as a sign-up. Each day with names becomes a requested day whose
+// slots are exactly the sheet's (director, 2026-11-23).
+const _DN_DATE_RE = /^(?:[a-z]+,\s*)?([a-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})$/i;
+function _dnSheetDate(cell) {
+    const m = String(cell || '').trim().match(_DN_DATE_RE);
+    if (!m) return null;
+    const mi = MONTHS.findIndex(x => x.toLowerCase().startsWith(m[1].toLowerCase().slice(0, 3)));
+    if (mi < 0) return null;
+    const d = new Date(Number(m[3]), mi, Number(m[2]));
+    return d.getMonth() === mi ? fmt(d) : null;
+}
+
+// Who a sheet entry means: initials of the roster name (first and last
+// word, or every word), or a last name. null unless exactly one matches.
+function _dnWhoIs(text) {
+    const t = _dnNorm(text).replace(/\s+/g, '');
+    if (!t) return null;
+    const hits = delnorRosterList().filter(r => {
+        const w = _dnNorm(r.name).split(' ').filter(Boolean);
+        if (!w.length) return false;
+        const fl = w[0][0] + (w.length > 1 ? w[w.length - 1][0] : '');
+        return t === fl || t === w.map(x => x[0]).join('') || t === w[w.length - 1].replace(/\s+/g, '');
+    });
+    return hits.length === 1 ? hits[0].rid : null;
+}
+
+// The pasted text → { days: { dk: { n: rid } }, used: { text: { rid, count } },
+// unknown: { text: count } } or null when it isn't the sheet.
+function _dnParseSheet(text) {
+    const rows = String(text || '').replace(/\r\n?/g, '\n').split('\n').map(l => l.split('\t'));
+    let cols = null;     // [{ i, dk }] for the current week block
+    const days = {}, used = {}, unknown = {};
+    let found = false;
+    rows.forEach(r => {
+        const dates = r.map((c, i) => ({ i, dk: _dnSheetDate(c) })).filter(x => x.dk);
+        if (dates.length) { cols = dates; found = true; return; }
+        const m = String(r[0] || '').trim().match(/^pathologist\s*(\d+)/i);
+        if (!cols || !m) return;
+        const n = Number(m[1]);
+        if (n < 1 || n > DELNOR_SLOTS) return;
+        cols.forEach(({ i, dk }) => {
+            const raw = String(r[i] || '').trim().replace(/\?+$/, '').trim();
+            if (!raw || /holiday/i.test(raw)) return;
+            const date = parseDate(dk);
+            if (!delnorCanRequest(date)) return;
+            const rid = _dnWhoIs(raw);
+            const key = raw.toUpperCase();
+            if (!rid) { unknown[key] = (unknown[key] || 0) + 1; return; }
+            days[dk] = days[dk] || {};
+            if (Object.values(days[dk]).includes(rid)) return;   // the same person twice that day
+            days[dk][n] = rid;
+            used[key] = used[key] || { rid, count: 0 };
+            used[key].count++;
+        });
+    });
+    return found ? { days, used, unknown } : null;
+}
+
+// Show what the sheet will do, then write it.
+function _dnImportSheet(text) {
+    const res = _dnParseSheet(text);
+    if (!res) return false;
+    const dks = Object.keys(res.days).sort();
+    const day = dk => _cfDayShort(parseDate(dk));
+    const sameAsNow = dk => {
+        const now = delnorSlots[dk] || {};
+        return !!delnorRequested[dk] && [1, 2, 3].every(n => (now[n] || null) === (res.days[dk][n] || null));
+    };
+    const changes = dks.filter(dk => !sameAsNow(dk));
+    const replaced = changes.filter(dk => delnorOnDay(parseDate(dk)).length);
+    const people = Object.entries(res.used).sort((a, b) => b[1].count - a[1].count)
+        .map(([k, u]) => `<li><b>${escapeHtml(k)}</b> → ${escapeHtml(delnorRoster[u.rid].name)} <span class="dn-import-n">${u.count} day${u.count === 1 ? '' : 's'}</span></li>`).join('');
+    const unknown = Object.entries(res.unknown).map(([k, c]) => `<li><b>${escapeHtml(k)}</b> <span class="dn-import-n">${c} day${c === 1 ? '' : 's'}, not imported: no Delnor pathologist matches</span></li>`).join('');
+    const body = `<div class="dn-import">
+        <p class="dn-panel-text">${dks.length ? `${dks.length} day${dks.length === 1 ? '' : 's'}, ${escapeHtml(day(dks[0]))} – ${escapeHtml(day(dks[dks.length - 1]))}.` : 'No sign-ups found.'}
+          ${changes.length < dks.length ? ` ${dks.length - changes.length} already match.` : ''}
+          ${replaced.length ? ` ${replaced.length === 1 ? '1 day with sign-ups in the app is' : replaced.length + ' days with sign-ups in the app are'} replaced by the sheet.` : ''}</p>
+        ${people ? `<ul class="dn-import-list">${people}</ul>` : ''}
+        ${unknown ? `<ul class="dn-import-list is-unknown">${unknown}</ul>` : ''}
+      </div>`;
+    const back = _dnPanel('dnImportBack', 'Import Delnor sign-ups', '', body,
+        `<button type="button" data-dn-close>Cancel</button>${changes.length ? `<button type="button" class="primary" id="dnImportYes">Import ${changes.length} day${changes.length === 1 ? '' : 's'}</button>` : ''}`);
+    const yes = document.getElementById('dnImportYes');
+    if (yes) yes.onclick = () => {
+        const up = {};
+        changes.forEach(dk => {
+            up['requested/' + dk] = true;
+            up['slots/' + dk] = res.days[dk];
+        });
+        db.ref('scheduler/delnor').update(up)
+            .then(() => { back.classList.remove('open'); showToast(`Imported Delnor sign-ups for ${changes.length} day${changes.length === 1 ? '' : 's'}.`); })
+            .catch(err => showToast('Could not import: ' + err.message, { type: 'error' }));
+    };
+    return true;
+}
+
+document.addEventListener('paste', e => {
+    if (e.defaultPrevented || !_dnPageActive() || !_dnCanEdit()) return;
+    if (document.querySelector('.modal-back.open')) return;
+    const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+    // Only the sheet (it has a row of dates); a name pasted into a slot is left alone.
+    if (!_dnParseSheet(text)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    _dnCloseSuggest();
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    _dnImportSheet(text);
+}, true);
+
 // Add one of Delnor's pathologists (and put them in the slot it came from).
 function _dnOpenAdd(dk, n) {
     _dnAddFor = dk ? { dk, n } : null;

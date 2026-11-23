@@ -2208,7 +2208,37 @@ function cdHandBack(name) {
 // director to look here.
 const CD_AUTO_MARK = '#PATHSCHED-AUTO';
 const CD_BACK_MARK = '#PATHSCHED-ASSIGNMENTS';
+// The page's first answer, at once, so the script stops pasting (it pastes
+// again every few seconds while a freshly opened page is still loading):
+// RECEIVED = working on it; WAITING = no one is signed in yet, the list is
+// held until the director signs in (the script then waits longer).
+const CD_ACK_MARK = '#PATHSCHED-RECEIVED';
+const CD_WAIT_MARK = '#PATHSCHED-WAITING';
 let cdPendingAuto = null;   // a list that arrived before the settings loaded
+let _cdSignInWait = null;   // timer: a list waiting for the director to sign in
+
+function cdAnswerScript(mark) {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) return Promise.resolve();
+    return navigator.clipboard.writeText(mark).catch(() => {});
+}
+
+// The script opened the page itself (or you weren't signed in): hold the
+// list, and run it once the director has signed in.
+function cdAutoAfterSignIn(text) {
+    clearInterval(_cdSignInWait);
+    showToast('The case-assignment script handed over a case list. Sign in as the director and it carries on.', { duration: 20000 });
+    const giveUp = Date.now() + 10 * 60 * 1000;
+    _cdSignInWait = setInterval(() => {
+        if (Date.now() > giveUp) { clearInterval(_cdSignInWait); return; }
+        if (loggedInPathId === null || loggedInPathId === undefined || !pathologists.length) return;
+        clearInterval(_cdSignInWait);
+        if (!isAdmin()) {
+            showToast('Only the director can hand a case list to the Assign page.', { type: 'error' });
+            return;
+        }
+        cdAutoRun(text);
+    }, 400);
+}
 
 function cdAutoRun(text) {
     if (typeof window.__setPage === 'function' && !cdPageActive()) window.__setPage('cases');
@@ -2235,12 +2265,20 @@ document.addEventListener('paste', e => {
     if (!body.startsWith(CD_AUTO_MARK)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (typeof isAdmin !== 'function' || !isAdmin()) {
-        showToast('Only the director can hand a case list to the Assign page.', { type: 'error' });
+    const nl = body.indexOf('\n');
+    const list = nl < 0 ? '' : body.slice(nl + 1);
+    if (loggedInPathId === null || loggedInPathId === undefined) {
+        cdAnswerScript(CD_WAIT_MARK);
+        cdAutoAfterSignIn(list);
         return;
     }
-    const nl = body.indexOf('\n');
-    cdAutoRun(nl < 0 ? '' : body.slice(nl + 1));
+    cdAnswerScript(CD_ACK_MARK).then(() => {
+        if (typeof isAdmin !== 'function' || !isAdmin()) {
+            showToast('Only the director can hand a case list to the Assign page.', { type: 'error' });
+            return;
+        }
+        cdAutoRun(list);
+    });
 }, true);
 
 // Pasting the case log straight onto the Assign page: copy Epic's export in

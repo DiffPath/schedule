@@ -68,6 +68,11 @@ let _listenersStarted = false;
 // attachment until startDataListeners() is called.
 function regListener(path, cb, errCb) {
     _pendingListeners.push({ path, cb, errCb });
+    // A script that loads after sign-in has already started the listeners
+    // (delnor.js, locums.js when their download is slow) attaches its own
+    // at once; otherwise it would wait for a refresh (Delnor stuck on
+    // "Loading…", locum days missing).
+    if (_listenersStarted) db.ref(path).on('value', cb, errCb);
 }
 
 function startDataListeners() {

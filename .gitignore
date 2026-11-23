@@ -9,3 +9,7 @@ tools/autohotkey/*.log
 
 # Assignments the AutoHotkey script saves (case numbers from real runs)
 tools/autohotkey/assignments/
+
+# The AutoHotkey script itself: kept local only (it holds the export
+# password and this computer's folders). Each computer keeps its own copy.
+tools/autohotkey/*.ahk

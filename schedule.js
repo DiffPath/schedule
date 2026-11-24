@@ -7083,8 +7083,9 @@ let conferenceLogReady = false;
 let conferencePresenters = {};        // { pathId: true } — allow-list
 
 // Consult rotation log; "next up" cycles past the most recent entry's
-// recipient. Shape: { date, source, pathologistId,
-// caseNumber:'MHSC26-0001', createdAt, createdBy }
+// recipient. Shape: { date, source, pathologistId, createdAt, createdBy }.
+// No case numbers: hospital IT counts them as PHI (Nov 2026); entries that
+// still carry one lose it the next time the director signs in.
 let consultLog = {};                  // { pushKey: entry }
 
 // ── UI state ─────────────────────────────────────────────────────────────
@@ -7117,6 +7118,12 @@ regListener('scheduler/conferenceLog', snap => {
 // repaints that page when it's active.
 regListener('scheduler/consultLog', snap => {
     consultLog = snap.exists() ? snap.val() : {};
+    // Take out any case numbers stored before Nov 2026 (director only).
+    if (typeof isAdmin === 'function' && isAdmin()) {
+        const up = {};
+        Object.entries(consultLog).forEach(([k, e]) => { if (e && e.caseNumber !== undefined) up['scheduler/consultLog/' + k + '/caseNumber'] = null; });
+        if (Object.keys(up).length) db.ref().update(up).catch(err => console.error('Could not clear consult case numbers:', err));
+    }
     const _appEl = document.getElementById('app');
     if (_appEl && _appEl.getAttribute('data-page') === 'tracking'
         && typeof renderTrackingPage === 'function') {
@@ -7157,33 +7164,6 @@ function canEditConsults(pathId) {
     if (id === null || id === undefined) return false;
     if (id === MANAGER_ID) return true;
     return isAdmin(id);
-}
-
-// Case numbers look like MHSC26-0001: 'MHSC' + 2-digit calendar year of
-// the date received + a 4-digit sequence that starts at 0001 each year
-// and goes up by one per logged consult.
-const CONSULT_CASE_RE = /^MHSC(\d{2})-(\d{4})$/;
-
-function consultCaseYearDigits(dateKey) {
-    const d = parseDate(dateKey);
-    const y = (d && !isNaN(d)) ? d.getFullYear() : new Date().getFullYear();
-    return String(y % 100).padStart(2, '0');
-}
-
-// Next case number for the year: one past the highest logged sequence (no
-// reuse after deletions). `excludeKey` skips the entry being edited.
-function suggestConsultCaseNumber(dateKey, excludeKey) {
-    const yy = consultCaseYearDigits(dateKey);
-    let maxN = 0;
-    Object.entries(consultLog || {}).forEach(([key, e]) => {
-        if (!e || (excludeKey && key === excludeKey)) return;
-        const m = CONSULT_CASE_RE.exec(String(e.caseNumber || '').trim().toUpperCase());
-        if (m && m[1] === yy) {
-            const n = parseInt(m[2], 10);
-            if (Number.isFinite(n) && n > maxN) maxN = n;
-        }
-    });
-    return 'MHSC' + yy + '-' + String(maxN + 1).padStart(4, '0');
 }
 
 // The consult queue, first = next up: fewest consults this fiscal year
@@ -7595,7 +7575,6 @@ function _trkHistoryRow(kind, key, e) {
     let tag, detail = [], editAttr, canEdit;
     if (kind === 'consult') {
         tag = `<span class="trk-tag" style="--tc:var(--trk-consult)">Consult</span>`;
-        if (e.caseNumber) detail.push(`<span class="trk-e-case">${escapeHtml(e.caseNumber)}</span>`);
         if (e.source) detail.push(`from ${escapeHtml(e.source)}`);
         editAttr = `data-consult-edit="${escapeHtml(key)}"`;
         canEdit = canEditConsults();
@@ -7784,8 +7763,7 @@ document.querySelectorAll('.nav-item[data-page="tracking"]').forEach(btn => {
 })();
 
 // ── Consult modal (add/edit/delete) ── pathologist prefilled from the
-// rotation; case number prefilled with the next MHSC<yy>-<nnnn> for the
-// date's year, regenerated on date change until hand-edited.
+// rotation. No case number (PHI).
 let _editingConsultKey = null;
 
 function openConsultModal(editKey, pickPid) {
@@ -7800,7 +7778,6 @@ function openConsultModal(editKey, pickPid) {
     const sourceInput = document.getElementById('consultSource');
     const pathSel = document.getElementById('consultPathologist');
     const hintEl = document.getElementById('consultRotationHint');
-    const caseInput = document.getElementById('consultCaseNumber');
     const deleteBtn = document.getElementById('consultDelete');
     const saveBtn = document.getElementById('consultSave');
     const errEl = document.getElementById('consultFormError');
@@ -7823,8 +7800,6 @@ function openConsultModal(editKey, pickPid) {
         dateInput.value = e.date || '';
         sourceInput.value = e.source || '';
         pathSel.value = String(e.pathologistId);
-        caseInput.value = e.caseNumber || '';
-        caseInput.dataset.userEdited = '1';   // don't overwrite on date change
         if (hintEl) { hintEl.innerHTML = ''; hintEl.hidden = true; }
     } else {
         // ── Log a new consult ──
@@ -7842,8 +7817,6 @@ function openConsultModal(editKey, pickPid) {
         const who = picked || next;
         if (who) pathSel.value = String(who.id);
         if (hintEl) { hintEl.hidden = false; _consultPanelTags(); }
-        caseInput.value = suggestConsultCaseNumber(todayKey, null);
-        delete caseInput.dataset.userEdited;
     }
 
     back.classList.add('open');
@@ -7870,26 +7843,12 @@ function _consultPanelTags() {
     pathSel.addEventListener('change', _consultPanelTags);
 })();
 
-// Date changed → refresh the suggested case number for that year, unless
-// the admin already typed their own.
-document.getElementById('consultDate').addEventListener('change', () => {
-    const caseInput = document.getElementById('consultCaseNumber');
-    const dateVal = document.getElementById('consultDate').value;
-    if (!dateVal || !caseInput || caseInput.dataset.userEdited === '1') return;
-    caseInput.value = suggestConsultCaseNumber(dateVal, _editingConsultKey);
-});
-document.getElementById('consultCaseNumber').addEventListener('input', e => {
-    e.target.dataset.userEdited = '1';
-});
-
 document.getElementById('consultSave').addEventListener('click', async () => {
     if (!canEditConsults()) return;
 
     const dateVal = document.getElementById('consultDate').value;
     const sourceVal = (document.getElementById('consultSource').value || '').trim();
     const pidVal = parseInt(document.getElementById('consultPathologist').value, 10);
-    const caseInput = document.getElementById('consultCaseNumber');
-    const caseVal = String(caseInput.value || '').trim().toUpperCase();
     const errEl = document.getElementById('consultFormError');
 
     function fail(msg) {
@@ -7898,17 +7857,6 @@ document.getElementById('consultSave').addEventListener('click', async () => {
 
     if (!dateVal) { fail('Please pick the date the consult was received.'); return; }
     if (!Number.isFinite(pidVal)) { fail('Please pick a pathologist.'); return; }
-    if (!CONSULT_CASE_RE.test(caseVal)) {
-        fail('Case number must look like MHSC26-0001 (MHSC + 2-digit year + dash + 4-digit number).');
-        return;
-    }
-    // No two consults may share a case number.
-    const dup = Object.entries(consultLog || {}).find(([key, e]) =>
-        e && key !== _editingConsultKey
-        && String(e.caseNumber || '').trim().toUpperCase() === caseVal);
-    if (dup) { fail('Case number ' + caseVal + ' is already logged.'); return; }
-
-    caseInput.value = caseVal;   // reflect normalization (uppercasing)
 
     try {
         if (_editingConsultKey) {
@@ -7916,7 +7864,7 @@ document.getElementById('consultSave').addEventListener('click', async () => {
                 date: dateVal,
                 source: sourceVal || null,
                 pathologistId: pidVal,
-                caseNumber: caseVal,
+                caseNumber: null,
             });
             showToast('Consult updated.');
         } else {
@@ -7924,11 +7872,10 @@ document.getElementById('consultSave').addEventListener('click', async () => {
                 date: dateVal,
                 source: sourceVal || null,
                 pathologistId: pidVal,
-                caseNumber: caseVal,
                 createdAt: Date.now(),
                 createdBy: loggedInPathId,
             });
-            showToast('Consult logged — ' + caseVal + '.');
+            showToast('Consult logged.');
         }
         document.getElementById('consultModalBack').classList.remove('open');
     } catch (err) {
@@ -7940,8 +7887,7 @@ document.getElementById('consultSave').addEventListener('click', async () => {
 document.getElementById('consultDelete').addEventListener('click', async () => {
     if (!canEditConsults() || !_editingConsultKey) return;
     const e = consultLog[_editingConsultKey];
-    const label = e && e.caseNumber ? e.caseNumber : 'this consult';
-    if (!confirm('Delete ' + label + '? This cannot be undone.')) return;
+    if (!confirm('Delete this consult? This cannot be undone.')) return;
     try {
         await db.ref('scheduler/consultLog/' + _editingConsultKey).remove();
         showToast('Consult deleted.');
@@ -14251,6 +14197,8 @@ function renderMain() {
 
 function renderAll() {
     if (!pathologistsReady || !vacationsReady || pathologists.length === 0) return;
+    // The Excel workbook's copy of the team and case types (case-distribution.js).
+    if (typeof cdPublishSoon === 'function') cdPublishSoon();
     applySettings();   // ensure sidebar/weekdays setting is reflected
     renderSidebar();
     renderMain();

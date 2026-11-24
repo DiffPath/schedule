@@ -14,7 +14,7 @@
 // roster. A requested day with someone signed up shows a "Delnor sendout"
 // bar on the main schedule (delnorSendoutDay), and the Assign page sends
 // Delnor about a quarter of that day's work, from the case types allowed to
-// go there (see cdDelnorWorkers / cdDistribute). The sheet is a month view
+// go there (see cdDelnorWorkers; the split itself is in tools/excel/split-cases.ts). The sheet is a month view
 // with nothing else on it.
 //
 // Firebase:

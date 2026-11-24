@@ -1301,7 +1301,7 @@
         </div>
     </div>
 
-    <!-- Consult add/edit modal — date, source, recipient (prefilled from rotation), MHSC<yy>-<nnnn> case number (prefilled next-in-sequence). -->
+    <!-- Consult add/edit modal — date, source, recipient (prefilled from rotation). No case number: PHI per hospital IT. -->
     <div class="modal-back" id="consultModalBack">
         <div class="modal">
             <h3 id="consultModalTitle">Log a consult</h3>
@@ -1318,8 +1318,6 @@
             <!-- The consult order (as on Tracking): next up solid; click one to pick them. -->
             <div class="trk-consult-strip consult-panel-strip" id="consultRotationHint"></div>
 
-            <label>Case number</label>
-            <input type="text" id="consultCaseNumber" placeholder="MHSC26-0001" maxlength="20" autocomplete="off" spellcheck="false" />
 
             <div class="conf-form-error" id="consultFormError" style="display:none;"></div>
 

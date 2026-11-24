@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════════
-// CASE DISTRIBUTION — split the day's Epic case list across pathologists
+// CASE DISTRIBUTION — what the day's case split needs (the Assign page)
 // ════════════════════════════════════════════════════════════════════════
 //
 // Loads after schedule.js (uses its globals: db, pathologists, isAdmin,
@@ -8,37 +8,39 @@
 // escapeHtml, showToast, SERVICES, SERVICE_BY_ID, academicYearLabel, today,
 // nextWorkday, loggedInPathId).
 //
-// Director only for now. The director copies the cells of the Epic case
-// list from Excel and pastes them here. The export has one row per case:
-//   Case | Case Type | Protocols | Case Charges | Assigned Users | #Slides
-// Protocols lists the specimens one per line; Case Charges lists each billed
-// item as "Name, 88305G [description] : units". Every line is a part: its
-// minutes come from the matching case type (first unit + each additional
-// unit), or from its CPT code when no case type matches. The case's minutes
-// are then nudged by #Slides against the slides typical for its parts.
+// Case lists hold case numbers, which hospital IT counts as PHI (Nov 2026),
+// so the day's list is split in the Case Assignment workbook — Excel on the
+// web, on the hospital's Office 365 (tools/excel/split-cases.ts) — and never
+// comes here. This page (director only) keeps what the split needs and
+// publishes it for the workbook (cdPublish → scheduler/caseDist/publish,
+// read through the caseApi function); the workbook sends back only
+// per-pathologist totals (the ledger) and specimen-mix counts.
 //
-// Routing: a case type may name services — first choice and backup (breast
-// cores → Breast bx/WFH, else Huntley). Those cases go to whoever is on the
-// service, up to an even day's work; everything else (and a service's cases
-// beyond that) is shared so each pathologist's minutes for the day come out
-// equal, in proportion to their daily share (FTE, adjusted for PTO). Case
-// types can also be limited to certain readers (bone marrows).
+// The rules (ported line for line into the workbook script; change both):
+// each specimen's minutes come from its case type (first unit + each
+// additional unit), or from its CPT code when no type matches, nudged by
+// #Slides against the typical count. A case type may name services — first
+// choice and backup (breast cores → Breast bx/WFH, else Huntley); those
+// cases go to whoever is on the service, up to an even day's work; the rest
+// is shared so each pathologist's minutes come out equal for their daily
+// share (FTE, adjusted for PTO). Types can be limited to certain readers
+// (bone marrows); Delnor takes about a quarter on its sign-up days.
 //
-// The pasted list stays in this browser's memory and is never saved —
-// Firebase only holds the settings and per-pathologist minute totals:
-//   scheduler/caseDist/types/<id>     { name, match, minutes, addMinutes, slides, basis,
-//                                       readers{pid:true}, services{sid:1|2} }
+// Firebase (no patient data):
+//   scheduler/caseDist/types/<id>     { name, match, group, minutes, addMinutes, slides, codes,
+//                                       basis, readers{pid:true}, services{sid:1|2}, delnor }
 //                                     services: 1 = first choice, 2 = backup
 //                                     slides: typical per unit; missing = not adjusted
 //   scheduler/caseDist/fte/<pathId>   0.1 – 1.0 (missing = 1.0)
-//   scheduler/caseDist/epic/<pathId>  what the AutoHotkey script types in Epic's assign
-//                                     window, when not the last name (the default)
+//   scheduler/caseDist/epic/<pathId>  what the case assignment automation types in
+//                                     Epic's assign window, when not the last name
 //   scheduler/caseDist/settings       { defaultMinutes, slideEffect, fnaCellBlockMinutes }
 //   scheduler/caseDist/seeded         starter case-type version written (CD_SEED_VERSION)
 //   scheduler/caseDist/ledger/<YYYY-MM-DD>/<batchId>
-//                                     { minutes{pid}, expected{pid}, cases{pid}, at, by, sig }
-//                                     sig: which case numbers (cdListSig), so the
-//                                     same list handed over again replaces its record
+//                                     { minutes{pid}, expected{pid}, cases{pid}, at, by }
+//                                     one list's totals, written by the workbook
+//   scheduler/caseDist/publish        the team per day, types, settings (cdPublish)
+//   scheduler/caseDist/specimenMix    counts per pathologist per case type (workbook)
 
 // Starter estimates — minutes of sign-out time for the first unit and each
 // additional unit (container, core, margin). Source: Royal College of
@@ -559,7 +561,7 @@ const CD_FNA_CELL_BLOCK_MINUTES = 10;
 // Share of a pathologist's running surplus/deficit worked off per batch, so
 // a day the routing couldn't balance evens out over the next few.
 const CD_CARRY = 0.5;
-const CD_ACC_RE = /^[A-Z]{1,5}-?\d{2,4}-\d{1,8}$/i;   // e.g. XXS26-04233, XXF26-00692
+const CD_ACC_RE = /^[A-Z]{1,5}-?\d{2,4}-\d{1,8}$/i;   // e.g. XXS26-00000 (letters, year, number)
 // One Case Charges line: "Colon polyp, 88305G [AP SURGICAL PATH LEVEL IV] : 2",
 // also "CD20 QL, 88341G2 [...] : 1" and "Block, 88305 (CPT®) [...] : 1".
 const CD_CHARGE_RE = /^(.*?),?\s*(\d{5})[A-Z]?\d?(?:\.[A-Z0-9]+)?\s*(?:\([^)]*\))?\s*(?:\[[^\]]*\])?\s*:\s*(\d+)\s*$/i;
@@ -569,20 +571,17 @@ let cdFte = {};
 let cdEpic = {};
 let cdSettings = {};
 let cdLedger = {};
-let cdMix = null;              // scheduler/caseDist/specimenMix — see cdMixFromText()
+let cdMix = null;              // scheduler/caseDist/specimenMix — counts sent by the workbook
+let cdPublished = null;        // scheduler/caseDist/publish — what the workbook reads (cdPublish)
 let cdLoaded = false;
 let _cdRef = null;
-let _cdSplitInputs = '';       // what the split depends on, as last loaded
 
-let cdTab = 'day';            // 'day' | 'types' | 'people'
-let cdSearch = '';             // the Day tab's "Find a case" text
-let cdDate = null;             // the day the cases are for (cdDefaultDate, kept current by cdSyncDay)
-let cdTable = null;            // { rows: [[cell]], hasHeader } — the paste, memory only
-let cdRawText = '';            // the pasted text, restored when the paste box is rebuilt
-let cdCols = null;             // { id, type, extra } column indexes (-1 = none)
-let cdCases = [];              // built from cdTable; see cdBuildCases()
-let cdRecordedKey = null;      // ledger batch written for the current distribution
-let cdRecordedDirty = false;   // reassigned since it was recorded
+// Case lists hold case numbers (PHI, per hospital IT, Nov 2026), so they're
+// split in the Case Assignment workbook (Excel on the web, Office 365):
+// tools/excel/. This page keeps what the split needs — case types, FTE,
+// what's typed in Epic — publishes it (cdPublish) and shows the running
+// totals the workbook sends back. No case list ever comes here.
+let cdTab = 'people';          // 'people' | 'types'
 
 // ── Firebase ─────────────────────────────────────────────────────────────
 // Attached the first time the director opens the page, detached on sign-out.
@@ -597,19 +596,11 @@ function cdEnsureListener() {
         cdSettings = v.settings || {};
         cdLedger = v.ledger || {};
         cdMix = v.specimenMix || null;
+        cdPublished = v.publish || null;
         cdLoaded = true;
-        // Re-split the list only when what splits it changed (case types,
-        // FTE, defaults) — not for a record being written (Record's own
-        // write would otherwise re-split the list it just recorded). Noted
-        // before anything below returns: a list split right here (the
-        // script's, below) must not count the next record as a change.
-        const sig = JSON.stringify([cdTypes, cdFte, cdSettings], (k, val) => (k === 'codes' ? undefined : val));
-        const changed = sig !== _cdSplitInputs;
-        _cdSplitInputs = sig;
         if (v.seeded !== CD_SEED_VERSION && isAdmin()) { cdSeedTypes(v.types, v.seeded); return; }
-        // A list the AutoHotkey script handed over before the settings loaded.
-        if (cdPendingAuto !== null) { cdAutoRun(cdPendingAuto); return; }
-        if (cdTable && changed) cdBuildCases();
+        cdForgetCaseHashes();
+        cdPublishSoon();
         if (cdPageActive()) renderCasesPage();
     }, err => console.error('Firebase caseDist error:', err));
 }
@@ -617,13 +608,25 @@ function cdEnsureListener() {
 function cdSignedOut() {
     if (_cdRef) { try { _cdRef.off('value'); } catch (_) {} }
     _cdRef = null;
-    _cdSplitInputs = '';
     cdLoaded = false;
     cdTypes = {}; cdFte = {}; cdEpic = {}; cdSettings = {}; cdLedger = {};
-    cdTable = null; cdCols = null; cdCases = []; cdRawText = '';
-    cdRecordedKey = null; cdRecordedDirty = false; cdRecordedAt = null;
-    cdListFrom = null; cdExportedName = null;
-    cdSel.day = cdSel.types = cdSel.people = null;
+    cdMix = null; cdPublished = null;
+    clearTimeout(_cdPubTimer);
+    cdSel.types = cdSel.people = null;
+}
+
+// Older ledger records carried "sig", a hash of the list's case numbers (to
+// spot the same list pasted twice). The workbook keeps that itself now; take
+// the old ones out (director, once per session).
+let _cdHashesCleared = false;
+function cdForgetCaseHashes() {
+    if (_cdHashesCleared || !isAdmin()) return;
+    _cdHashesCleared = true;
+    const up = {};
+    Object.entries(cdLedger).forEach(([dk, batches]) => Object.entries(batches || {}).forEach(([bk, b]) => {
+        if (b && b.sig !== undefined) up['scheduler/caseDist/ledger/' + dk + '/' + bk + '/sig'] = null;
+    }));
+    if (Object.keys(up).length) db.ref().update(up).catch(err => console.error('Could not clear old list hashes:', err));
 }
 
 // A starter type as stored: services as { id: tier }, readers matched to
@@ -751,7 +754,7 @@ function cdShortName(p) {
     return 'Dr. ' + cdLastName(p);
 }
 
-// What the AutoHotkey script types for a pathologist in Epic's assign
+// What the case assignment automation types for a pathologist in Epic's assign
 // window: their whole last name, unless set otherwise on the Pathologists tab.
 function cdEpicName(pid) {
     const dp = cdPath(pid);
@@ -953,14 +956,10 @@ function cdLocumWorkers(date) {
     }).filter(Boolean);
 }
 
-function cdWorking() {
-    return [...cdScheduled(cdDate), ...cdLocumWorkers(cdDate), ...cdDelnorWorkers(cdDate)];
-}
-
 // Delnor's pathologists signed up for the day (delnor.js). Together they
 // read about a quarter of the day's case minutes — their shares add up to a
 // third of ours — split evenly, and only from the case types allowed to go
-// to Delnor (cdBuildCases: c.delnorOK). The director's rule, Nov 2026.
+// to Delnor (the workbook's split: delnorOK). The director's rule, Nov 2026.
 const CD_DELNOR_FRACTION = 0.25;
 const CD_DELNOR_SVC = { id: 'delnor', short: 'Delnor', name: 'Delnor', cssVar: '--svc-delnor' };
 function cdDelnorWorkers(date) {
@@ -972,17 +971,10 @@ function cdDelnorWorkers(date) {
     return people.map(p => ({ p, svc: CD_DELNOR_SVC, svcIds: ['delnor'], share: total / people.length, delnor: true }));
 }
 
-// Delnor's sign-ups changed (delnor.js): re-split when the day's people did.
-let _cdDelnorSig = '';
-function cdDelnorSig() {
-    return (cdDate ? fmt(cdDate) : '') + '|' + [...cdLocumWorkers(cdDate), ...cdDelnorWorkers(cdDate)].map(w => w.p.id).join(',');
-}
+// Delnor's sign-ups or the locums changed (delnor.js, locums.js): the
+// workbook's copy of the team follows.
 function cdDelnorChanged() {
-    const sig = cdDelnorSig();
-    if (sig !== _cdDelnorSig) {
-        _cdDelnorSig = sig;
-        if (cdTable) { cdDistribute(); cdSplitChanged(); }
-    }
+    cdPublishSoon();
     if (cdPageActive()) renderCasesPage();
 }
 
@@ -1006,463 +998,9 @@ function cdBalances(date, skipKey) {
     return { bal, got, exp };
 }
 
-// ── Parsing the paste ────────────────────────────────────────────────────
-// Excel copies cells as tab-separated text, quoting cells that contain tabs,
-// quotes or line breaks. Raw CSV text (no tabs) is read with commas.
-function cdParseTable(text) {
-    text = String(text || '').replace(/\r\n?/g, '\n');
-    const delim = text.indexOf('\t') >= 0 ? '\t' : ',';
-    const rows = [];
-    let row = [], cell = '', inQ = false;
-    for (let i = 0; i < text.length; i++) {
-        const c = text[i];
-        if (inQ) {
-            if (c === '"') {
-                if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false;
-            } else cell += c;
-        } else if (c === '"' && cell === '') inQ = true;
-        else if (c === delim) { row.push(cell); cell = ''; }
-        else if (c === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
-        else cell += c;
-    }
-    if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
-    // Line breaks inside a cell separate parts — keep them, tidy each line.
-    const clean = rows.map(r => r.map(c => c.split('\n')
-            .map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n')))
-        .filter(r => r.some(Boolean));
-    const width = clean.reduce((w, r) => Math.max(w, r.length), 0);
-    clean.forEach(r => { while (r.length < width) r.push(''); });
-    return clean;
-}
-
-// A whole exported sheet (the AutoHotkey script copies Epic's file) may
-// have a report title or date above the table: start at the header row —
-// the first row naming a Case / Accession column with a case number under
-// it. Lists without such a row are left as they are.
-function cdDropTitleRows(rows) {
-    const isHead = r => r.some(c => /^(case|accession)\b/i.test(c));
-    const hasAcc = r => r && r.some(c => CD_ACC_RE.test(c.split('\n')[0]));
-    for (let i = 0; i < Math.min(rows.length - 1, 10); i++) {
-        if (isHead(rows[i]) && hasAcc(rows[i + 1])) return i ? rows.slice(i) : rows;
-        if (hasAcc(rows[i])) break;   // data before any header: nothing to drop
-    }
-    return rows;
-}
-
-// A header row has no digits in it while the row below does.
-function cdLooksLikeHeader(rows) {
-    if (rows.length < 2) return false;
-    return !rows[0].some(c => /\d/.test(c)) && rows[1].some(c => /\d/.test(c));
-}
-
-function cdHeaders() {
-    if (!cdTable) return [];
-    const width = cdTable.rows.length ? cdTable.rows[0].length : 0;
-    return Array.from({ length: width }, (_, i) => {
-        const h = cdTable.hasHeader ? cdTable.rows[0][i] : '';
-        return h || ('Column ' + cdColLetter(i));
-    });
-}
-
-function cdColLetter(i) {
-    let s = '';
-    for (i++; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + (i - 1) % 26) + s;
-    return s;
-}
-
-function cdDataRows() {
-    if (!cdTable) return [];
-    return cdTable.hasHeader ? cdTable.rows.slice(1) : cdTable.rows;
-}
-
-// Remembered header names first, then header keywords, then content.
-function cdGuessCols() {
-    const headers = cdHeaders();
-    const data = cdDataRows().slice(0, 200);
-    const used = new Set();
-    const pick = (re, test) => {
-        let i = cdTable.hasHeader ? headers.findIndex((h, j) => !used.has(j) && re.test(h)) : -1;
-        if (i < 0 && test) {
-            i = headers.findIndex((_, j) => !used.has(j) && data.length
-                && data.filter(r => test(r[j])).length / data.length >= 0.6);
-        }
-        if (i >= 0) used.add(i);
-        return i;
-    };
-    const id = pick(/accession|case\s*(#|no\b|num|number|id\b)|^case$/i, c => CD_ACC_RE.test(c));
-    const charge = pick(/charge|cpt|billing/i,
-        c => c.split('\n').some(l => CD_CHARGE_RE.test(l)));
-    const proto = pick(/protocol|specimen|part|procedure|description/i, null);
-    const cat = pick(/case\s*type|category/i, null);
-    const slides = pick(/slide/i, null);
-    return { id, proto, charge, cat, slides };
-}
-
 function cdNorm(s) { return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
 
-// Minutes for one part: its case type, else its CPT code, else the default.
-function cdPartMinutes(pt) {
-    const units = Math.max(1, pt.units || 1);
-    let first, add;
-    if (pt.type) {
-        first = Number(pt.type.minutes) || 0;
-        const a = Number(pt.type.addMinutes);
-        add = Number.isFinite(a) ? a : first;
-        pt.via = 'type';
-    } else if (pt.code && CD_CPT_MINUTES[pt.code]) {
-        [first, add] = CD_CPT_MINUTES[pt.code];
-        pt.via = 'cpt';
-    } else {
-        first = add = cdDefaultMinutes();
-        pt.via = 'default';
-    }
-    if (pt.code && CD_CPT_FLOOR[pt.code]) first = Math.max(first, CD_CPT_FLOOR[pt.code]);
-    return first + (units - 1) * add;
-}
-
-// Typical slides for one part, or null when its case type isn't adjusted
-// for slides (no count set, e.g. bone marrow).
-function cdPartSlides(pt) {
-    const units = Math.max(1, pt.units || 1);
-    if (pt.code && CD_STAIN_RE.test(pt.code)) return 0;
-    if (pt.type) {
-        const s = pt.type.slides;
-        if (s === undefined || s === null || s === '' || !Number.isFinite(Number(s))) return null;
-        return Number(s) * units;
-    }
-    const s = pt.code && CD_CPT_SLIDES[pt.code] !== undefined ? CD_CPT_SLIDES[pt.code] : CD_DEFAULT_SLIDES;
-    return s * units;
-}
-
-// Multiplier on a case's minutes for its slide count against the typical.
-function cdSlideFactor(slides, typical) {
-    const effect = cdSlideEffect();
-    if (!(slides > 0) || !(typical > 0) || !effect) return 1;
-    const f = Math.pow(slides / typical, effect);
-    return Math.min(CD_SLIDE_RANGE[1], Math.max(CD_SLIDE_RANGE[0], f));
-}
-
-// "12", "1,234" → 12 / 1234; anything else → null.
-function cdSlideCount(cell) {
-    const v = String(cell || '').split('\n')[0].replace(/,/g, '').trim();
-    return /^\d+$/.test(v) ? parseInt(v, 10) : null;
-}
-
-// One row → its parts. Charge lines carry the CPT code and units; a
-// protocol with no charge line of its own (e.g. a needle core biopsy billed
-// only as a cell block) still counts once.
-function cdRowParts(r) {
-    const parts = [];
-    const lines = col => (col >= 0 && r[col]) ? r[col].split('\n').map(l => l.trim()).filter(Boolean) : [];
-    lines(cdCols.charge).forEach(l => {
-        const m = l.match(CD_CHARGE_RE);
-        if (m) parts.push({ name: m[1].trim() || l, code: m[2], units: parseInt(m[3], 10) || 1 });
-        else parts.push({ name: l, code: null, units: 1 });
-    });
-    const charged = new Set(parts.map(pt => cdNorm(pt.name)));
-    lines(cdCols.proto).forEach(l => {
-        if (!charged.has(cdNorm(l))) { parts.push({ name: l, code: null, units: 1 }); charged.add(cdNorm(l)); }
-    });
-    return parts;
-}
-
-// Rows → cases (rows sharing a case number merge). Minutes add up over the
-// parts; readers narrow to who can read every part; services come from the
-// heaviest part whose case type names one, else from a case type matching
-// the Case Type column.
-function cdBuildCases() {
-    const prevPins = {};
-    cdCases.forEach(c => { if (c.pinned !== undefined) prevPins[c.key] = c.pinned; });
-    cdCases = [];
-    if (!cdTable || !cdCols || (cdCols.proto < 0 && cdCols.charge < 0)) return;
-
-    const fnaType = cdMatchType('fna'), cellBlockType = cdMatchType('cell block');
-    const fnaCbMin = fnaType && cellBlockType && fnaType !== cellBlockType ? cdFnaCellBlockMinutes() : 0;
-
-    const groups = new Map();
-    cdDataRows().forEach((r, i) => {
-        const id = cdCols.id >= 0 ? r[cdCols.id].split('\n')[0] : '';
-        const key = id ? 'id:' + id.toUpperCase() : 'row:' + i;
-        if (!groups.has(key)) groups.set(key, { key, id: id || '', cat: '', parts: [], slides: null });
-        const g = groups.get(key);
-        if (cdCols.cat >= 0 && r[cdCols.cat] && !g.cat) g.cat = r[cdCols.cat].replace(/\n/g, ' ');
-        // A case split over rows repeats its slide count; keep the largest.
-        const s = cdCols.slides >= 0 ? cdSlideCount(r[cdCols.slides]) : null;
-        if (s !== null) g.slides = Math.max(g.slides || 0, s);
-        g.parts.push(...cdRowParts(r));
-    });
-
-    groups.forEach(g => {
-        if (!g.parts.length) return;
-        let minutes = 0, routed = null;
-        let readers = null, typical = 0, stains = 0;
-        const narrow = rs => { if (rs) readers = readers ? new Set([...readers].filter(x => rs.has(x))) : rs; };
-        g.parts.forEach(pt => {
-            pt.type = pt.code && (CD_STAIN_RE.test(pt.code) || CD_ADDON_RE.test(pt.code)) ? null : cdMatchType(pt.name);
-            pt.minutes = cdPartMinutes(pt);
-            minutes += pt.minutes;
-            const ps = cdPartSlides(pt);
-            typical = (typical === null || ps === null) ? null : typical + ps;
-            if (pt.code && CD_STAIN_RE.test(pt.code)) stains += Math.max(1, pt.units || 1);
-            // Routing follows the heaviest specimen whose type names a service
-            // (a lumpectomy's six margins outweigh it but carry no service).
-            if (pt.type && cdServiceTiers(pt.type.services) && (!routed || pt.minutes > routed.minutes)) routed = pt;
-            if (pt.type) narrow(cdSetOf(pt.type.readers));
-        });
-        const catType = g.cat ? cdMatchType(g.cat) : null;
-        if (catType) narrow(cdSetOf(catType.readers));
-        const hasType = t => g.parts.some(pt => pt.type && pt.type.id === t.id);
-        g.fnaCellBlock = fnaCbMin > 0 && hasType(fnaType) && hasType(cellBlockType) ? fnaCbMin : 0;
-        minutes += g.fnaCellBlock;
-
-        // Main specimen first (by its type's first-unit minutes, so a
-        // lumpectomy leads its margins); zero-minute items (decal) left out.
-        const weight = pt => pt.type ? Number(pt.type.minutes) || 0 : pt.minutes;
-        const labels = [];
-        g.parts.slice().sort((a, b) => weight(b) - weight(a) || b.minutes - a.minutes).forEach(pt => {
-            if (pt.minutes === 0) return;
-            const l = pt.type ? pt.type.name : pt.name;
-            if (!labels.includes(l)) labels.push(l);
-        });
-        // Slides nudge the time; a part whose type isn't adjusted (bone
-        // marrow) leaves the whole case as is.
-        g.typicalSlides = typical;
-        g.stainSlides = stains;
-        g.heSlides = g.slides === null ? null : Math.max(1, g.slides - stains);
-        g.baseMinutes = minutes;
-        g.slideFactor = typical === null ? 1 : cdSlideFactor(g.heSlides, typical);
-        g.minutes = Math.round(minutes * g.slideFactor * 10) / 10;
-        g.label = labels.join(' + ') || g.parts[0].name;
-        g.detail = g.parts.map(pt => pt.name + (pt.units > 1 ? ' ×' + pt.units : '')).join(' · ');
-        g.unrecognized = g.parts.some(pt => pt.via !== 'type');
-        g.readers = readers;
-        g.services = (routed && cdServiceTiers(routed.type.services))
-            || (catType && cdServiceTiers(catType.services)) || null;
-        // Delnor may read it when every specimen with time of its own is of a
-        // case type allowed to go to Delnor (stains and add-ons don't count).
-        const timed = g.parts.filter(pt => pt.minutes > 0 && !(pt.code && (CD_STAIN_RE.test(pt.code) || CD_ADDON_RE.test(pt.code))));
-        g.delnorOK = timed.length > 0 && timed.every(pt => pt.type && pt.type.delnor);
-        g.assigned = null;
-        g.note = '';
-        if (prevPins[g.key] !== undefined) g.pinned = prevPins[g.key];
-        cdCases.push(g);
-    });
-    // Position in the pasted Epic list — the export's line number, and the
-    // order the AutoHotkey script walks Epic's list in.
-    cdCases.forEach((c, i) => { c.seq = i + 1; });
-    cdDistribute();
-}
-
-// ── The distribution ─────────────────────────────────────────────────────
-// Weighted greedy. Service cases go first, to whoever is on the service,
-// while that keeps them within an even day; then everything left, cases
-// with the fewest possible readers first, then the longest, each to the
-// pathologist whose time — counting part of their running surplus/deficit
-// — is lowest relative to their daily share. Cases the director reassigned
-// by hand stay put.
-function cdDistribute() {
-    const working = cdWorking();
-    const { bal } = cdBalances(cdDate, cdRecordedKey);
-    const load = {};
-    // Delnor's pathologists carry nothing over: their part is fresh each day.
-    // Delnor's pathologists and locums carry nothing over: fresh each day.
-    working.forEach(w => { load[w.p.id] = w.delnor || w.locum ? 0 : CD_CARRY * (bal[w.p.id] || 0); });
-    const ours = working.filter(w => !w.delnor), delnor = working.filter(w => w.delnor);
-
-    // Who may read a case: our pathologists, by the case type's readers.
-    // (Delnor's take their quarter first, below; they get one of the rest
-    // only when none of ours can read it.)
-    const readersOf = c => {
-        const el = ours.filter(w => !c.readers || c.readers.has(String(w.p.id)));
-        if (el.length) return el;
-        if (c.delnorOK && delnor.length) return delnor;
-        c.note = c.readers ? 'No reader for this case type is working' : 'No one is working';
-        return el;
-    };
-    // Of those, whoever is on the case's service: first choice, else the
-    // backup. null when the case has no service, or no one is on it.
-    const onService = (c, el) => {
-        if (!c.services || !el.length || el[0].delnor) return null;
-        const [first, backup] = c.services;
-        const on = set => el.filter(w => w.svcIds.some(id => set.has(id)));
-        const firstEl = on(first);
-        if (firstEl.length) return { el: firstEl, svc: first };
-        const backupEl = backup.size ? on(backup) : [];
-        if (backupEl.length) return { el: backupEl, svc: backup };
-        c.note = 'No one on ' + cdSvcNames(backup.size ? new Set([...first, ...backup]) : first) + ' — shared with all';
-        return null;
-    };
-    const score = (w, c) => (load[w.p.id] + c.minutes) / w.share;
-    const lowest = (el, c) => el.reduce((best, w) => (score(w, c) < score(best, c) - 1e-9 ? w : best));
-    const give = (c, w) => { c.assigned = w.p.id; load[w.p.id] += c.minutes; };
-
-    cdCases.forEach(c => { c.note = ''; c.shared = ''; c.assigned = null; });
-    cdCases.filter(c => c.pinned !== undefined).forEach(c => {
-        c.assigned = c.pinned;
-        if (c.pinned !== null && load[c.pinned] !== undefined) load[c.pinned] += c.minutes;
-    });
-
-    // Delnor first, in two steps (director, Nov 2026). The divisions'
-    // workload comes first; evening out Delnor's own pathologists comes
-    // second and never changes what the divisions get.
-    //  1. Which cases: Delnor, as one division, takes about a quarter of the
-    //     day's case minutes, from the cases allowed to go there, largest
-    //     first — skipping a case that would overshoot by more than half of
-    //     itself. Less only when not enough is allowed.
-    //  2. Who reads which: exactly those cases, dealt among Delnor's
-    //     pathologists so their work RVUs come out as even as possible
-    //     (cdDealDelnor). No case moves to or from ours to even them out.
-    if (delnor.length) {
-        const target = cdCases.reduce((t, c) => t + c.minutes, 0) * CD_DELNOR_FRACTION;
-        let have = delnor.reduce((t, w) => t + load[w.p.id], 0);
-        const picked = [];
-        cdCases.filter(c => c.pinned === undefined && c.delnorOK)
-            .sort((a, b) => b.minutes - a.minutes || a.seq - b.seq)
-            .forEach(c => {
-                if (have >= target || have + c.minutes / 2 > target) return;
-                picked.push(c);
-                have += c.minutes;
-            });
-        cdDealDelnor(picked, delnor).forEach(([c, w]) => give(c, w));
-    }
-
-    const todo = cdCases.filter(c => c.pinned === undefined && c.assigned == null)
-        .map(c => { const el = readersOf(c); return { c, el, svc: onService(c, el) }; });
-
-    // An even day: where everyone's minutes would land, relative to their
-    // daily share, if all of today's cases (of ours) were split evenly.
-    const shareSum = ours.reduce((s, w) => s + w.share, 0);
-    const ourMinutes = todo.filter(t => t.el.length && !t.el[0].delnor).reduce((s, t) => s + t.c.minutes, 0);
-    const evenDay = shareSum ? (ours.reduce((s, w) => s + load[w.p.id], 0) + ourMinutes) / shareSum : 0;
-
-    // Service cases first, largest first, to whoever is on the service —
-    // until that would put them over an even day by more than half the
-    // case. The rest are shared like any other case, among everyone who may
-    // read them (director, Nov 2026: being on Bigs mustn't mean a far
-    // heavier day than everyone else's).
-    todo.filter(t => t.svc).sort((a, b) => b.c.minutes - a.c.minutes || a.c.seq - b.c.seq).forEach(t => {
-        const w = lowest(t.svc.el, t.c);
-        if ((load[w.p.id] + t.c.minutes / 2) / w.share <= evenDay) give(t.c, w);
-        else t.c.shared = cdShortName(w.p) + ' (' + cdSvcNames(t.svc.svc) + ') already had a full day — shared';
-    });
-
-    // Everything else: fewest possible readers first, then the longest, each
-    // to whoever has least so far for their share.
-    todo.filter(t => t.c.assigned == null && t.el.length)
-        .sort((a, b) => (a.el.length - b.el.length) || (b.c.minutes - a.c.minutes))
-        .forEach(t => give(t.c, lowest(t.el, t.c)));
-    // The Delnor sign-ups this split used: only a real change to them
-    // re-splits (cdDelnorChanged), not the first Delnor update after it.
-    _cdDelnorSig = cdDelnorSig();
-}
-
-// A case's work RVUs: the CPT codes billed on its specimens, × units (stains
-// left out — they're ordered after the cases are split); a specimen with no
-// charge line counts its case type's first billing code.
-function cdCaseRvu(c) {
-    return c.parts.reduce((s, pt) => {
-        if (pt.code && CD_STAIN_RE.test(pt.code)) return s;
-        const code = pt.code || (pt.type ? cdCodeList(pt.type)[0] : null);
-        const r = code ? cdCodeRvu(code) : null;
-        return s + (r ? r[0] * Math.max(1, pt.units || 1) : 0);
-    }, 0);
-}
-
-// A small seeded random generator (mulberry32) and a shuffle with it.
-function cdRandom(seedText) {
-    let a = 2166136261;
-    for (let i = 0; i < seedText.length; i++) { a ^= seedText.charCodeAt(i); a = Math.imul(a, 16777619) >>> 0; }
-    return () => {
-        a = (a + 0x6D2B79F5) >>> 0;
-        let t = a;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-}
-function cdShuffle(list, rand) {
-    for (let i = list.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [list[i], list[j]] = [list[j], list[i]]; }
-    return list;
-}
-
-// Deal Delnor's cases among Delnor's pathologists that day, evening out
-// their work RVUs (counting any case already set by hand). Many tries of
-// "highest RVUs first, each to whoever has least", in a random order, each
-// then polished by moving or swapping a case between the most and least
-// loaded; the evenest try is kept (then the evenest case counts). The
-// randomness is seeded by the list and the day, so no one is favoured by
-// roster order, yet the same list deals the same way each time it's split.
-// Returns [[case, worker], …].
-const CD_DEAL_TRIES = 40;
-function cdDealDelnor(cases, people) {
-    if (!cases.length) return [];
-    if (people.length === 1) return cases.map(c => [c, people[0]]);
-    const rvu = new Map(cases.map(c => [c, cdCaseRvu(c)]));
-    // A sliver per case, so cases with no RVUs still spread out.
-    const weight = c => rvu.get(c) + 0.01;
-    const base = people.map(w => cdCases.filter(c => c.pinned !== undefined && String(c.pinned) === String(w.p.id)).reduce((s, c) => s + cdCaseRvu(c), 0));
-    const rand = cdRandom(cdListSig() + '|' + fmt(cdDate) + '|' + people.map(w => w.p.id).join(','));
-    const spread = xs => Math.max(...xs) - Math.min(...xs);
-    let best = null;
-    for (let t = 0; t < CD_DEAL_TRIES; t++) {
-        const order = cdShuffle(cases.slice(), rand).sort((a, b) => weight(b) - weight(a));   // stable: ties stay shuffled
-        const prefer = cdShuffle(people.map((_, i) => i), rand);
-        const tot = base.slice(), mine = people.map(() => []);
-        order.forEach(c => {
-            const i = prefer.reduce((a, b) => (tot[b] < tot[a] - 1e-9 ? b : a));
-            mine[i].push(c);
-            tot[i] += weight(c);
-        });
-        // Polish: move one case, or swap two, between the most and least loaded.
-        for (let step = 0; step < 200; step++) {
-            const hi = tot.indexOf(Math.max(...tot)), lo = tot.indexOf(Math.min(...tot));
-            const gap = tot[hi] - tot[lo];
-            let bestMove = null, bestLeft = gap - 1e-6;
-            mine[hi].forEach(a => {
-                const d = weight(a);
-                if (Math.abs(gap - 2 * d) < bestLeft) { bestLeft = Math.abs(gap - 2 * d); bestMove = { a, b: null, d }; }
-                mine[lo].forEach(b => {
-                    const dd = weight(a) - weight(b);
-                    if (dd > 0 && Math.abs(gap - 2 * dd) < bestLeft) { bestLeft = Math.abs(gap - 2 * dd); bestMove = { a, b, d: dd }; }
-                });
-            });
-            if (!bestMove) break;
-            mine[hi].splice(mine[hi].indexOf(bestMove.a), 1); mine[lo].push(bestMove.a);
-            if (bestMove.b) { mine[lo].splice(mine[lo].indexOf(bestMove.b), 1); mine[hi].push(bestMove.b); }
-            tot[hi] -= bestMove.d; tot[lo] += bestMove.d;
-        }
-        const rv = people.map((_, i) => base[i] + mine[i].reduce((s, c) => s + rvu.get(c), 0));
-        const score = [spread(rv), spread(mine.map((m, i) => m.length))];
-        if (!best || score[0] < best.score[0] - 1e-6 || (Math.abs(score[0] - best.score[0]) <= 1e-6 && score[1] < best.score[1])) {
-            best = { score, mine: mine.map(m => m.slice()) };
-        }
-    }
-    const out = [];
-    best.mine.forEach((m, i) => m.forEach(c => out.push([c, people[i]])));
-    return out;
-}
-
-// Per-pathologist totals for the current distribution; `expected` is the
-// fair split of today's minutes by daily share.
-function cdTotals() {
-    const working = cdWorking();
-    const total = cdCases.reduce((s, c) => s + c.minutes, 0);
-    const shareSum = working.reduce((s, w) => s + w.share, 0) || 1;
-    const rows = {};
-    working.forEach(w => {
-        rows[w.p.id] = { pid: w.p.id, w, minutes: 0, cases: 0, expected: total * w.share / shareSum };
-    });
-    let unassigned = 0, unassignedMin = 0;
-    cdCases.forEach(c => {
-        if (c.assigned === null || c.assigned === undefined) { unassigned++; unassignedMin += c.minutes; return; }
-        if (!rows[c.assigned]) {
-            rows[c.assigned] = { pid: c.assigned, w: null, minutes: 0, cases: 0, expected: 0 };
-        }
-        rows[c.assigned].minutes += c.minutes;
-        rows[c.assigned].cases++;
-    });
-    return { rows, total, unassigned, unassignedMin };
-}
+const CD_DEAL_TRIES = 40;   // the workbook's Delnor deal: tries (published)
 
 // ── Rendering ────────────────────────────────────────────────────────────
 // Laid out like Requests and Conflicts (option A of three mockups, picked
@@ -1477,53 +1015,12 @@ function cdTotals() {
 const cdSecStore = _tlStore('caseSectionsClosed');
 // The open line, per tab. On Day it's "<section>|<case key>": a case can be
 // in Needs a look and its pathologist's section, and only the clicked one opens.
-const cdSel = { day: null, types: null, people: null };
-let cdListFrom = null;       // { how: 'script' | 'paste', at } — where this list came from
-let cdRecordedAt = null;     // when this list was last recorded
-let cdExportedName = null;   // this list's last AutoHotkey export
+const cdSel = { types: null, people: null };
 
 const CD_CHEV = '<svg class="cf-chev" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
 function cdTime(ts) {
     return ts ? new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-}
-
-// "Friday, Nov 20" (the year only when it isn't this one).
-function cdDayLabel(d) {
-    return d.toLocaleDateString('en-US', { weekday: 'long' }) + ', ' + MONTHS_SHORT[d.getMonth()] + ' ' + d.getDate()
-        + (d.getFullYear() !== today.getFullYear() ? ', ' + d.getFullYear() : '');
-}
-
-// Keep cdDate on the right day — it moves on at 3 pm even with the page
-// left open. When it moves, a list already here is split again for
-// the new day (who's working, their services and shares). True if it moved.
-function cdSyncDay() {
-    const d = cdDefaultDate();
-    if (cdDate && fmt(d) === fmt(cdDate)) return false;
-    const first = !cdDate;
-    cdDate = d;
-    if (first) return true;
-    _cdDelnorSig = cdDelnorSig();
-    cdRecordedKey = null; cdRecordedDirty = false; cdRecordedAt = null;
-    if (cdTable) { cdDistribute(); cdMatchRecord(); }
-    return true;
-}
-
-// This exact list already recorded for the day (same case numbers — back on
-// its day, or pasted again): pick that record up, so Record updates it
-// rather than counting the cases twice. Split as if it weren't there, as
-// the first time; if the split now differs, Record offers the update.
-function cdMatchRecord(redistribute = true) {
-    if (!cdCases.length) return false;
-    const sig = cdListSig();
-    const same = Object.entries(cdLedger[fmt(cdDate)] || {}).find(([, b]) => b && b.sig === sig);
-    if (!same) return false;
-    cdRecordedKey = same[0];
-    cdRecordedAt = same[1].at || null;
-    if (redistribute) cdDistribute();
-    const now = cdRecordedBatch().minutes, was = same[1].minutes || {};
-    cdRecordedDirty = Object.keys({ ...now, ...was }).some(pid => (now[pid] || 0) !== (was[pid] || 0));
-    return true;
 }
 
 // One collapsible section, in the timeline pages' markup.
@@ -1548,236 +1045,18 @@ function cdLineHtml(tab, key, tagHtml, textHtml, status, detailFn, label, open) 
       </div>`;
 }
 
-function cdSvcPill(svc) {
-    return svc ? `<span class="cd-svc" style="--c:var(${svc.cssVar});">${escapeHtml(svc.short)}</span>` : '';
-}
-
-// A case number as the line's tag, in its pathologist's colour (red: no one).
-function cdAccTag(c) {
-    const p = c.assigned != null ? cdPath(c.assigned) : null;
-    if (p && p.delnor) return `<span class="ch-tag ch-tag-delnor cd-acc-tag">${escapeHtml(c.id || '—')}</span>`;
-    if (p && p.locum) return `<span class="ch-tag ch-tag-locum cd-acc-tag">${escapeHtml(c.id || '—')}</span>`;
-    const bg = p ? pathBgColor(p.color) : null;
-    return p
-        ? `<span class="ch-tag ch-tag-path cd-acc-tag" style="--c:${p.color}${bg ? `; --c-bg:${bg}` : ''}">${escapeHtml(c.id || '—')}</span>`
-        : `<span class="ch-tag ch-tag-lock cd-acc-tag">${escapeHtml(c.id || '—')}</span>`;
-}
-
-// Specimens no case type knew (stains and zero-minute lines aside).
-function cdUnknownParts(c) {
-    return c.parts.filter(pt => pt.via !== 'type' && !(pt.via === 'cpt' && (pt.minutes === 0 || CD_STAIN_RE.test(pt.code))));
-}
-
-// Why a case has its own line in "Needs a look" (its status), or null.
-// Specimens no case type knew get one line per specimen instead (below).
-function cdLookStatus(c) {
-    if (c.assigned == null) return { text: 'Not assigned', tone: 'bad' };
-    if (c.note) return { text: 'No one on the service', tone: 'warn' };
-    if (c.pinned !== undefined) return { text: 'Set by hand', tone: '' };
-    return null;
-}
-
-// The specimens no case type knew, one entry per name with the cases
-// they're in, most cases first.
-function cdUnknownSpecimens() {
-    const map = new Map();
-    cdCases.forEach(c => cdUnknownParts(c).forEach(pt => {
-        const k = cdNorm(pt.name);
-        const e = map.get(k) || { key: k, name: pt.name, code: pt.code, via: pt.via, minutes: pt.minutes, cases: [] };
-        if (!e.cases.includes(c)) e.cases.push(c);
-        map.set(k, e);
-    }));
-    return [...map.values()].sort((a, b) => b.cases.length - a.cases.length || a.name.localeCompare(b.name));
-}
-
-function cdUnknownLine(e) {
-    const est = e.via === 'cpt' ? `estimated from CPT ${e.code}` : 'the default estimate';
-    const n = e.cases.length;
-    return cdLineHtml('day', 'unk|' + e.key, '<span class="ch-tag ch-tag-deny">No case type</span>',
-        `<b>${escapeHtml(e.name)}</b><span class="ch-dates"> · ${n} case${n === 1 ? '' : 's'} · ${escapeHtml(cdFmtMin(e.minutes))} each, ${escapeHtml(est)}</span>`,
-        null, () => `<div class="cd-unk-cases">${e.cases.sort((a, b) => a.seq - b.seq).map(c => `<span class="cd-unk-case">${cdAccTag(c)}<span class="cd-seq">#${c.seq}</span></span>`).join('')}</div>
-          <div class="cd-detail-actions">
-            <span>No case type’s words are in “${escapeHtml(e.name)}”, so it counts as ${escapeHtml(cdFmtMin(e.minutes))} (${escapeHtml(est)}).</span>
-            <button type="button" class="cd-btn cd-btn-sm" data-cd-addtype="${escapeHtml(e.name)}" data-cd-addcode="${e.code || ''}">Add as a case type</button>
-          </div>`,
-        `${e.name}: no case type, ${n} case${n === 1 ? '' : 's'}`);
-}
-
-function cdCaseText(c) {
-    return `<span class="cd-seq">#${c.seq}</span><b>${escapeHtml(c.label)}</b><span class="ch-dates"> · ${escapeHtml(cdFmtMin(c.minutes))}</span>`;
-}
-
-function cdCaseLabel(c) {
-    const p = c.assigned != null ? cdPath(c.assigned) : null;
-    return `Case ${c.seq}, ${c.id}, ${c.label}, ${cdFmtMin(c.minutes)}, ${p ? cdShortName(p) : 'not assigned'}`;
-}
-
-// An open case: its specimens, the slide adjustment, and who reads it.
-function cdCaseDetail(c) {
-    const rows = c.parts.map(pt => {
-        const how = pt.via === 'type' ? escapeHtml(pt.type.name)
-            : pt.via === 'cpt' ? (CD_STAIN_RE.test(pt.code) ? 'Stain' : `CPT ${escapeHtml(pt.code)}`) : 'No case type';
-        return `<tr><td class="ch-t-date">${escapeHtml(pt.name)}</td><td>${how}</td><td>${pt.units > 1 ? pt.units : ''}</td><td class="ch-t-after">${escapeHtml(cdFmtMin(pt.minutes))}</td></tr>`;
-    }).join('');
-    const extra = [];
-    if (c.fnaCellBlock) extra.push(`FNA with a cell block: +${cdNum(c.fnaCellBlock)} min`);
-    if (c.slides !== null) {
-        extra.push(c.typicalSlides === null ? `${c.heSlides} slides (not adjusted)`
-            : `${c.heSlides} slides, usually ${cdNum(c.typicalSlides)}${c.slideFactor !== 1 ? ` → ${c.slideFactor > 1 ? '+' : '−'}${Math.abs(Math.round((c.slideFactor - 1) * 100))}%` : ''}`
-              + (c.stainSlides ? ` (${c.stainSlides} stain${c.stainSlides === 1 ? '' : 's'} left out)` : ''));
-    }
-    const route = c.services
-        ? 'Goes to ' + cdSvcNames(c.services[0]) + (c.services[1].size ? ', else ' + cdSvcNames(c.services[1]) : '')
-        : c.readers ? 'Read by ' + [...c.readers].map(id => cdPath(id)).filter(Boolean).map(cdShortName).join(' or ')
-            : 'Shared to even out the day';
-    const routeTxt = route + (c.shared ? ' · ' + c.shared : '') + (c.delnorOK ? ' · Delnor may read it' : '');
-    // Our pathologists, then Delnor's signed up that day (and whoever has it).
-    const pathOpts = [...pathologists.filter(p => typeof p.id === 'number'), ...cdLocumWorkers(cdDate).map(w => w.p), ...cdDelnorWorkers(cdDate).map(w => w.p)];
-    if (c.assigned != null && !pathOpts.some(p => String(p.id) === String(c.assigned)) && cdPath(c.assigned)) pathOpts.push(cdPath(c.assigned));
-    const sel = `<select class="cd-assign" data-cd-case="${escapeHtml(c.key)}" aria-label="Pathologist for ${escapeHtml(c.id)}">
-        <option value=""${c.assigned == null ? ' selected' : ''}>Not assigned</option>
-        ${pathOpts.map(p => `<option value="${escapeHtml(String(p.id))}"${String(c.assigned) === String(p.id) ? ' selected' : ''}>${escapeHtml(cdShortName(p))}${p.delnor ? ' (Delnor)' : p.locum ? ' (Locum)' : ''}</option>`).join('')}
-      </select>`;
-    const unknown = cdUnknownParts(c);
-    return `<table class="ch-table cd-parts"><thead><tr><th>Specimen</th><th>Counted as</th><th>Units</th><th>Minutes</th></tr></thead>
-        <tbody>${rows}</tbody></table>
-      ${extra.length ? `<p class="cd-detail-note">${extra.map(escapeHtml).join(' · ')} · <b>${escapeHtml(cdFmtMin(c.minutes))}</b> in all</p>` : ''}
-      <div class="cd-detail-actions">
-        <label class="cd-detail-who">Pathologist ${sel}</label>
-        ${c.pinned !== undefined ? `<button type="button" class="cd-btn cd-btn-sm" data-cd-unpin="${escapeHtml(c.key)}" title="Let the app choose again">Undo set by hand</button>` : ''}
-        <span>${escapeHtml(routeTxt)}</span>
-        ${c.note ? `<span class="cd-flag">${escapeHtml(c.note)}</span>` : ''}
-        ${unknown.map(pt => `<button type="button" class="cd-btn cd-btn-sm" data-cd-addtype="${escapeHtml(pt.name)}" data-cd-addcode="${pt.code || ''}">Add “${escapeHtml(pt.name.length > 28 ? pt.name.slice(0, 27) + '…' : pt.name)}” as a case type</button>`).join('')}
-      </div>`;
-}
-
 // ── Header ──
 function cdHeaderHtml() {
-    const day = cdTab === 'day';
-    const has = cdCases.length > 0;
     const nTypes = Object.keys(cdTypes).length;
     const tab = (k, label, n) => `<button class="req-tab${cdTab === k ? ' active' : ''}" type="button" data-cd-tab="${k}"><span>${label}</span>${n != null ? `<span class="req-tab-count">${n}</span>` : ''}</button>`;
     return `<header class="tl-header">
         <h2 class="tl-title">Assign</h2>
         <div class="cd-head-right">
-          ${day ? `<div class="cd-day-nav">
-              <span class="current-period cd-day-fixed" id="cdPeriod" title="Today until 3 pm, then the next business day">${escapeHtml(cdDayLabel(cdDate))}</span>
-            </div>` : ''}
           <div class="req-tabs requests-page-tabs" id="cdTabs" role="tablist">
-            ${tab('day', 'Day', has ? cdCases.length : null)}${tab('types', 'Case types', nTypes)}${tab('people', 'Pathologists', null)}
+            ${tab('people', 'Pathologists', null)}${tab('types', 'Case types', nTypes)}
           </div>
         </div>
       </header>`;
-}
-
-// The cases matching the Find a case box, in list order: by case number
-// (punctuation and case ignored, so "7003" finds XXS26-07003), or for words
-// of three letters or more, by specimen too.
-function cdFind(q) {
-    const norm = s => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const nq = norm(q), words = q.trim().toLowerCase();
-    if (!nq) return [];
-    const byText = /[a-z]{3}/.test(words);
-    return cdCases.filter(c => norm(c.id).includes(nq)
-        || (byText && (c.label + ' ' + c.detail).toLowerCase().includes(words))).sort((a, b) => a.seq - b.seq);
-}
-
-// ── Day ──
-function cdDayHtml() {
-    const has = cdCases.length > 0;
-    const t = cdTotals();
-    let list;
-    if (!has) {
-        list = `<div class="cf-empty cd-paste-zone" tabindex="0" aria-label="Paste the case log here"><span class="split-empty-headline">No case list for ${escapeHtml(cdDayLabel(cdDate))} yet.</span>In Epic, press Ctrl+Shift+1 to run the case assignment automation. Or copy Epic’s case log in Excel (headers included), click here and press Ctrl+V.</div>`;
-    } else if (cdSearch.trim()) {
-        // Find a case: only the cases that match, each opened.
-        const found = cdFind(cdSearch);
-        list = found.length
-            ? `<div class="cd-found">${found.map(c => cdLineHtml('day', 'find|' + c.key, cdAccTag(c), cdCaseText(c), cdLookStatus(c), () => cdCaseDetail(c), cdCaseLabel(c), true)).join('')}</div>`
-            : `<div class="cf-empty"><span class="split-empty-headline">No case matches “${escapeHtml(cdSearch.trim())}”.</span>Search by case number — all of it or just its end, like 7003.</div>`;
-    } else {
-        const secs = [];
-        const look = cdCases.filter(cdLookStatus).sort((a, b) => a.seq - b.seq);
-        const unknown = cdUnknownSpecimens();
-        if (look.length || unknown.length) {
-            secs.push(cdSecHtml('look', 'Needs a look', null, [
-                ...look.map(c => cdLineHtml('day', 'look|' + c.key, cdAccTag(c), cdCaseText(c), cdLookStatus(c), () => cdCaseDetail(c), cdCaseLabel(c))),
-                ...unknown.map(cdUnknownLine),
-            ]));
-        }
-        const rows = Object.values(t.rows).filter(r => cdPath(r.pid)).sort((a, b) => cdPidOrder(a.pid, b.pid));
-        rows.forEach(r => {
-            const p = cdPath(r.pid);
-            const mine = cdCases.filter(c => String(c.assigned) === String(r.pid)).sort((a, b) => a.seq - b.seq);
-            const head = `<span class="cd-sec-path">${cdTag(p.id)}${r.w ? cdSvcPill(r.w.svc) : '<span class="cd-muted">not working</span>'}</span>`;
-            secs.push(cdSecHtml('p' + p.id, head, null,
-                mine.map(c => cdLineHtml('day', 'p' + p.id + '|' + c.key, cdAccTag(c), cdCaseText(c), null, () => cdCaseDetail(c), cdCaseLabel(c))),
-                'No cases'));
-        });
-        list = secs.join('');
-    }
-    return `<div class="cf-body">
-        <div class="cf-side"><div class="cf-list" aria-label="Assign">${list}</div></div>
-        <section class="cf-cal" aria-label="The day"><div class="cd-panel">
-          ${has ? `<div class="cd-search-wrap">
-              <svg class="cd-search-icon" width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="7" cy="7" r="4.75"/><path d="M10.5 10.5 14 14"/></svg>
-              <input type="search" class="cd-search" id="cdSearch" placeholder="Find a case" aria-label="Find a case by its number"
-                value="${escapeHtml(cdSearch)}" spellcheck="false" autocomplete="off">
-            </div>` : ''}${has ? cdWorkloadCard(t) : ''}${cdWorkingCard()}${has ? cdListCard() : ''}
-        </div></section>
-      </div>`;
-}
-
-function cdWorkloadCard(t) {
-    const rows = Object.values(t.rows).filter(r => cdPath(r.pid)).sort((a, b) => cdPidOrder(a.pid, b.pid));
-    const max = Math.max(1, ...rows.map(r => Math.max(r.minutes, r.expected))) * 1.04;
-    return `<section class="cd-card">
-        <h3 class="cd-card-h">Workload <span>${cdCases.length} cases · ${escapeHtml(cdFmtMin(t.total))}</span></h3>
-        <div class="cd-load cd-load-day" title="Bar: estimated time · tick: an even share">
-          ${rows.map(r => {
-              const p = cdPath(r.pid);
-              return `<button type="button" class="cd-load-who" data-cd-jump="${p.id}" title="Show ${escapeHtml(cdShortName(p))}’s cases">${cdTag(p.id)}</button>
-                <div class="cd-bar"><span class="cd-bar-fill" style="width:${(r.minutes / max * 100).toFixed(1)}%;--c:${p.color};"></span><span class="cd-bar-target" style="left:${(r.expected / max * 100).toFixed(1)}%;"></span></div>
-                <span class="cd-load-num">${escapeHtml(cdFmtMin(r.minutes))}</span>`;
-          }).join('')}
-          ${t.unassigned ? `<span class="ch-tag ch-tag-lock">Not assigned</span><span></span><span class="cd-load-num">${t.unassigned} case${t.unassigned === 1 ? '' : 's'}</span>` : ''}
-        </div>
-      </section>`;
-}
-
-// Who's working: one even tile each — name, and the service on the right.
-function cdWorkingCard() {
-    const sched = cdScheduled(cdDate);
-    const tile = (w, color, cls) => `<span class="cd-person${cls}">
-                <span class="cd-dot" style="--c:${color};"></span>
-                <span class="cd-person-name">${escapeHtml(cdShortName(w.p))}</span>${cdSvcPill(w.svc)}
-              </span>`;
-    return `<section class="cd-card">
-        <h3 class="cd-card-h">Working</h3>
-        <div class="cd-working">${sched.length ? sched.map(w => tile(w, w.p.color, '')).join('') : '<span class="cd-muted">No one is on a service this day.</span>'}${cdLocumWorkers(cdDate).map(w => tile(w, 'var(--locum)', ' cd-person-locum')).join('')}${cdDelnorWorkers(cdDate).map(w => tile(w, 'var(--delnor)', ' cd-person-delnor')).join('')}</div>
-      </section>`;
-}
-
-function cdListCard() {
-    const from = cdListFrom ? (cdListFrom.how === 'script' ? 'Case assignment automation, ' : 'Pasted, ') + cdTime(cdListFrom.at) : 'Pasted';
-    const recorded = !cdRecordedKey ? 'Not yet' : cdTime(cdRecordedAt) || 'Yes';
-    const problems = cdExportProblems();
-    const exportTip = problems.length ? 'Before exporting: ' + problems.join('; ')
-        : 'Download the cases for the case assignment automation, in the same order as the Epic list';
-    return `<section class="cd-card">
-        <h3 class="cd-card-h">This list</h3>
-        <div class="cd-facts">
-          <span>From</span><b>${escapeHtml(from)}</b>
-          <span>Recorded</span><b>${escapeHtml(recorded)}</b>
-          <span>Exported</span><b>${escapeHtml(cdExportedName || 'Not yet')}</b>
-        </div>
-        <div class="cd-card-actions">
-          <button type="button" class="cd-btn cd-btn-sm" id="cdExportAhk" title="${escapeHtml(exportTip)}">Export</button>
-          <button type="button" class="cd-btn cd-btn-sm" id="cdRedistribute" title="Re-split the cases the app chose (cases set by hand stay)">Redistribute</button>
-          <button type="button" class="cd-btn cd-btn-sm" id="cdCopy">Copy for Excel</button>
-          <button type="button" class="cd-btn cd-btn-sm" id="cdClear" title="Remove this list, and take its minutes off the running totals (for a list pasted by mistake)">Clear list</button>
-        </div>
-      </section>`;
 }
 
 // ── Case types ──
@@ -1933,73 +1212,6 @@ function cdTypeGroup(t) {
     return byName !== 'Other' || /^(resection for tumor|biopsy \(h|two blocks|extra block)/i.test(t.name || '') ? byName : cdGuessGroup(t.match);
 }
 
-// The pasted report → { at, by, cases, years, people: { key: { name, pid?, n, types: { typeId | '_cyto' | '_none': n } } } }
-// or null when it isn't one.
-function cdMixFromText(text) {
-    const rows = cdParseTable(text);
-    const hi = rows.findIndex(r => r.some(c => /^case$/i.test(String(c).trim())) && r.some(c => /assigned/i.test(String(c))));
-    if (hi < 0) return null;
-    const head = rows[hi].map(c => String(c).trim().toLowerCase());
-    const col = re => head.findIndex(c => re.test(c));
-    const ci = { id: col(/^case$/), cat: col(/^case type/), proto: col(/protocol/), charge: col(/charge/), who: col(/assigned/) };
-    if (ci.id < 0 || ci.who < 0 || (ci.proto < 0 && ci.charge < 0)) return null;
-    const typeOf = new Map();
-    const match = name => { const k = cdNorm(name); if (!typeOf.has(k)) typeOf.set(k, cdMatchType(name)); return typeOf.get(k); };
-    const lines = (r, i) => (i >= 0 && r[i]) ? String(r[i]).split('\n').map(l => l.trim()).filter(Boolean) : [];
-    // Who read it: the staff pathologist's last name, matched to ours.
-    const ours = new Map();
-    pathologists.filter(p => typeof p.id === 'number').forEach(p => ours.set(cdLastName(p).toLowerCase(), { key: 'p' + p.id, pid: p.id, name: cdShortName(p) }));
-    (typeof locumRosterList === 'function' ? locumRosterList() : []).forEach(r => ours.set(cdLastName(r).toLowerCase(), { key: 'l' + r.lid, name: r.name }));
-    const reader = r => {
-        const ls = lines(r, ci.who);
-        const l = ls.find(x => /staff pathologist/i.test(x)) || ls[0];
-        const last = l ? l.split(',')[0].trim() : '';
-        if (!last) return null;
-        return ours.get(last.toLowerCase()) || { key: 'x' + last.toLowerCase().replace(/[^a-z0-9]/g, ''), name: 'Dr. ' + last };
-    };
-    const people = {}, years = new Set(), seen = new Set();
-    rows.slice(hi + 1).forEach(r => {
-        const id = String(r[ci.id] || '').split('\n')[0].trim().toUpperCase();
-        if (!CD_ACC_RE.test(id) || seen.has(id)) return;
-        const who = reader(r);
-        if (!who) return;
-        seen.add(id);
-        const yy = id.match(/^[A-Z]+-?(\d{2})-/);
-        if (yy) years.add('20' + yy[1]);
-        let key;
-        if (ci.cat >= 0 && /cytolog|fine needle|\bfna\b/i.test(String(r[ci.cat] || ''))) key = '_cyto';
-        else {
-            // The heaviest specimen (its type's first-unit minutes); stains and add-ons don't count.
-            const names = [];
-            lines(r, ci.charge).forEach(l => {
-                const m = l.match(CD_CHARGE_RE);
-                if (m && (CD_STAIN_RE.test(m[2]) || CD_ADDON_RE.test(m[2]))) return;
-                names.push(m ? (m[1].trim() || l) : l);
-            });
-            lines(r, ci.proto).forEach(l => { if (!names.some(n => cdNorm(n) === cdNorm(l))) names.push(l); });
-            let best = null, bw = -1;
-            names.forEach(n => { const t = match(n); const w = t ? Number(t.minutes) || 0 : -1; if (t && w > bw) { best = t; bw = w; } });
-            key = best ? best.id : '_none';
-        }
-        const p = people[who.key] = people[who.key] || Object.assign({ n: 0, types: {} }, who.pid ? { pid: who.pid } : {}, { name: who.name });
-        p.n++;
-        p.types[key] = (p.types[key] || 0) + 1;
-    });
-    if (!seen.size) return null;
-    return { at: Date.now(), by: loggedInPathId, cases: seen.size, years: [...years].sort().join(', '), people };
-}
-
-function cdMixPaste(text) {
-    const mix = cdMixFromText(text);
-    if (!mix) {
-        showToast('That isn’t an AP case report: in Excel, copy all of the report’s cells (Case, Case Type, Protocols, Case Charges, Assigned Users), then paste here.', { type: 'error' });
-        return;
-    }
-    db.ref('scheduler/caseDist/specimenMix').set(mix)
-        .then(() => showToast('Specimen mix updated from ' + mix.cases.toLocaleString() + ' cases.'))
-        .catch(err => showToast('Could not save the specimen mix: ' + err.message, { type: 'error' }));
-}
-
 // Group counts per person: { key: { name, pid?, n, g: { group: n } } }.
 function cdMixGroups() {
     if (!cdMix || !cdMix.people) return null;
@@ -2019,7 +1231,7 @@ function cdMixCard() {
     const data = cdMixGroups();
     if (!data) {
         return `<section class="cd-card cd-mix-card"><h3 class="cd-card-h">Specimen mix</h3>
-            <p class="cd-help-text">Copy an AP case report in Excel (all its cells) and press Ctrl+V on this tab.</p></section>`;
+            <p class="cd-help-text">Paste an AP case report on the workbook’s Specimen mix sheet and click Tally specimen mix.</p></section>`;
     }
     const ourKeys = pathologists.filter(p => typeof p.id === 'number' && data['p' + p.id]).map(p => 'p' + p.id);
     const otherKeys = Object.keys(data).filter(k => !ourKeys.includes(k));
@@ -2048,14 +1260,106 @@ function cdMixCard() {
     const when = cdMix.at ? new Date(cdMix.at) : null;
     const sub = (cdMix.cases || 0).toLocaleString() + ' cases' + (cdMix.years ? ' · ' + cdMix.years : '');
     return `<section class="cd-card cd-mix-card">
-        <h3 class="cd-card-h">Specimen mix <span title="${escapeHtml('From the AP case report pasted ' + (when ? MONTHS_SHORT[when.getMonth()] + ' ' + when.getDate() + ', ' + when.getFullYear() : '') + '. Each case counts once, by its main specimen; cytology and FNA cases as Cytology. Paste a newer report here to replace it.')}">${escapeHtml(sub)}</span></h3>
+        <h3 class="cd-card-h">Specimen mix <span title="${escapeHtml('From the AP case report tallied in the workbook ' + (when ? MONTHS_SHORT[when.getMonth()] + ' ' + when.getDate() + ', ' + when.getFullYear() : '') + '. Each case counts once, by its main specimen; cytology and FNA cases as Cytology.')}">${escapeHtml(sub)}</span></h3>
         <div class="cd-mix-scroll"><table class="cd-mix"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
       </section>`;
 }
 
+// ── Publishing for the Excel workbook ───────────────────────────────────
+// Case lists hold case numbers (PHI, per hospital IT), so they're split in
+// an Excel-on-the-web workbook on the hospital's Office 365, never here.
+// The app publishes what the split needs and holds no patient data:
+//   scheduler/caseDist/publish = { at, days: { 'YYYY-MM-DD': { team } },
+//     types, people, services, settings, constants }
+// for today and the next working days. The workbook fetches it through the
+// caseApi function (functions/index.js) and sends back only per-person
+// totals (the ledger) and specimen-mix counts. Any director session keeps
+// it current: renderAll → cdPublishSoon.
+const CD_PUBLISH_DAYS = 10;
+let _cdPubTimer = null;
+
+function cdPublishData() {
+    const r6 = x => Math.round(x * 1e6) / 1e6;
+    const days = {};
+    let d = new Date(today);
+    if (isWeekend(d) || getFederalHoliday(d)) d = nextWorkday(d);
+    for (let i = 0; i < CD_PUBLISH_DAYS; i++, d = nextWorkday(d)) {
+        const team = [...cdScheduled(d), ...cdLocumWorkers(d), ...cdDelnorWorkers(d)].map(w => ({
+            id: String(w.p.id), name: w.p.name || '', short: cdShortName(w.p), epic: cdEpicName(w.p.id),
+            svcIds: w.svcIds.slice(), svc: w.svc ? (w.svc.short || w.svc.name || w.svc.id) : '',
+            share: r6(w.share), locum: !!w.locum, delnor: !!w.delnor,
+        }));
+        days[fmt(d)] = { team };
+    }
+    const types = cdTypeList().map(t => ({
+        id: t.id, name: t.name || '', match: t.match || '', group: cdTypeGroup(t),
+        minutes: Number(t.minutes) || 0,
+        addMinutes: t.addMinutes === undefined || t.addMinutes === null || t.addMinutes === '' ? null : Number(t.addMinutes),
+        slides: t.slides === undefined || t.slides === null || t.slides === '' ? null : Number(t.slides),
+        codes: cdCodeList(t), services: t.services || null, readers: t.readers || null, delnor: !!t.delnor,
+    }));
+    const people = [
+        ...pathologists.filter(p => typeof p.id === 'number').map(p => ({ id: String(p.id), name: p.name, last: cdLastName(p) })),
+        ...(typeof locumRosterList === 'function' ? locumRosterList() : []).map(r => ({ id: 'l:' + r.lid, name: r.name, last: cdLastName(r) })),
+        ...(typeof delnorRosterList === 'function' ? delnorRosterList() : []).map(r => ({ id: 'd:' + r.rid, name: r.name, last: delnorLastName(r.name) })),
+    ];
+    const services = [...SERVICES, ...OFF_SERVICES, SERVICE_BY_ID.cytobigs, CD_LOCUM_SVC, CD_DELNOR_SVC].filter(Boolean)
+        .map(s => ({ id: s.id, short: s.short || s.name || s.id }));
+    return {
+        days, types, people, services,
+        settings: { defaultMinutes: cdDefaultMinutes(), slideEffect: cdSlideEffect(), fnaCellBlockMinutes: cdFnaCellBlockMinutes() },
+        constants: {
+            cptMinutes: CD_CPT_MINUTES, cptFloor: CD_CPT_FLOOR, cptSlides: CD_CPT_SLIDES, defaultSlides: CD_DEFAULT_SLIDES,
+            rvu: CD_RVU, stainRe: CD_STAIN_RE.source, addonRe: CD_ADDON_RE.source, chargeRe: CD_CHARGE_RE.source,
+            accRe: CD_ACC_RE.source, slideRange: CD_SLIDE_RANGE, carry: CD_CARRY, delnorFraction: CD_DELNOR_FRACTION,
+            dealTries: CD_DEAL_TRIES, cutoffHour: CD_CUTOFF_HOUR,
+        },
+    };
+}
+
+// Write it when it changed (a director session only; debounced).
+function cdPublishSoon() {
+    if (typeof isAdmin !== 'function' || !isAdmin()) return;
+    cdEnsureListener();
+    clearTimeout(_cdPubTimer);
+    _cdPubTimer = setTimeout(cdPublish, 1500);
+}
+function cdPublish() {
+    if (!isAdmin() || !cdLoaded || !pathologistsReady || !vacationsReady) return;
+    if (typeof delnorReady !== 'undefined' && !delnorReady) return;
+    let data;
+    try { data = JSON.parse(JSON.stringify(cdPublishData())); }
+    catch (err) { console.error('Could not build the workbook data:', err); return; }
+    // Firebase hands lists back as objects and drops empty values, so compare
+    // a fingerprint of what was sent, not the stored copy.
+    const json = JSON.stringify(data);
+    let h = 2166136261;
+    for (let i = 0; i < json.length; i++) { h ^= json.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    data.sig = h.toString(36) + '-' + json.length;
+    if (cdPublished && cdPublished.sig === data.sig) return;
+    data.at = Date.now();
+    db.ref('scheduler/caseDist/publish').set(data).catch(err => console.error('Could not publish for the workbook:', err));
+}
+
 // ── Pathologists ──
+// When the workbook last had something from here, and sent something back.
+function cdWorkbookCard() {
+    const t = ts => { const d = new Date(ts); return MONTHS_SHORT[d.getMonth()] + ' ' + d.getDate() + ', ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); };
+    let last = null;
+    Object.entries(cdLedger).forEach(([dk, batches]) => Object.values(batches || {}).forEach(b => {
+        if (b && b.at && (!last || b.at > last.at)) last = { dk, at: b.at, n: Object.values(b.cases || {}).reduce((s, x) => s + (Number(x) || 0), 0) };
+    }));
+    const days = cdPublished && cdPublished.days ? Object.keys(cdPublished.days).sort() : [];
+    const day = k => _cfDayShort(parseDate(k));
+    return `<section class="cd-card"><h3 class="cd-card-h">Case Assignment workbook</h3>
+        <div class="cd-form cd-wb">
+          <label>Team sent</label><span>${cdPublished && cdPublished.at ? escapeHtml(t(cdPublished.at)) + (days.length ? ' · ' + escapeHtml(day(days[0]) + ' – ' + day(days[days.length - 1])) : '') : 'Not yet'}</span>
+          <label>Last list</label><span>${last ? escapeHtml(day(last.dk)) + ' · ' + last.n + ' cases · ' + escapeHtml(t(last.at)) : 'None yet'}</span>
+        </div></section>`;
+}
+
 function cdPeopleViewHtml() {
-    const date = cdDate || cdDefaultDate();
+    const date = cdDefaultDate();
     const fy = getAcademicYearOfDate(date);
     const { got, exp } = cdBalances(date);
     const people = pathologists.filter(p => typeof p.id === 'number');
@@ -2085,6 +1389,7 @@ function cdPeopleViewHtml() {
           </div>
         </section>
         ${cdMixCard()}
+        ${cdWorkbookCard()}
         <section class="cd-card"><p class="cd-help-text">A full-time pathologist has a daily share of 1. A part-timer’s share is their FTE, raised when they take more PTO than the full-timers so the year still comes to FTE × a full-timer’s work (never more than a full day). Half of anyone’s lead or lag is worked off with each new list. “Typed in Epic” is what the case assignment automation types in Epic’s case assignment window. Blank means the last name.</p></section>
       </div>`;
     const dnLines = (typeof delnorRosterList === 'function' ? delnorRosterList() : []).map(r => cdLineHtml('people', 'd:' + r.rid, cdTag('d:' + r.rid),
@@ -2111,7 +1416,6 @@ function renderCasesPage() {
     if (!root) return;
     if (!isAdmin()) { cdSetRoot(root, ''); return; }
     cdEnsureListener();
-    cdSyncDay();
     if (!cdLoaded) { cdSetRoot(root, cdHeaderHtml() + '<div class="cd-empty">Loading…</div>'); return; }
 
     // Don't yank an input out from under the director mid-edit; the commit
@@ -2119,7 +1423,7 @@ function renderCasesPage() {
     const active = document.activeElement;
     if (active && root.contains(active) && active.matches('input[type="text"], input[type="number"], textarea')) return;
 
-    const html = cdHeaderHtml() + (cdTab === 'types' ? cdTypesViewHtml() : cdTab === 'people' ? cdPeopleViewHtml() : cdDayHtml());
+    const html = cdHeaderHtml() + (cdTab === 'types' ? cdTypesViewHtml() : cdPeopleViewHtml());
     // The app redraws every page whenever schedule data arrives (often, on
     // the live site). Nothing changed → leave the page alone: replacing it
     // anyway swallowed clicks mid-press, flickered hovers and reset scrolls.
@@ -2129,13 +1433,7 @@ function renderCasesPage() {
     const list = root.querySelector('.cf-list'), side = root.querySelector('.cf-cal');
     const ls = keep && list ? list.scrollTop : 0, ss = keep && side ? side.scrollTop : 0;
     root.dataset.tab = cdTab;
-    const typing = document.activeElement && document.activeElement.id === 'cdSearch' ? document.activeElement : null;
-    const caret = typing ? [typing.selectionStart, typing.selectionEnd] : null;
     cdSetRoot(root, html);
-    if (typing) {
-        const s = root.querySelector('#cdSearch');
-        if (s) { s.focus(); try { s.setSelectionRange(...caret); } catch (_) { /* not a text field */ } }
-    }
     const l2 = root.querySelector('.cf-list'), s2 = root.querySelector('.cf-cal');
     if (l2) l2.scrollTop = ls;
     if (s2) s2.scrollTop = ss;
@@ -2145,14 +1443,6 @@ function cdSetRoot(root, html) {
     if (root._cdHtml === html) return;
     root.innerHTML = html;
     root._cdHtml = html;
-}
-
-// A new list (pasted, or handed over by the script).
-function cdUseList(text, how) {
-    cdSetPaste(text);
-    cdListFrom = text.trim() ? { how, at: Date.now() } : null;
-    cdAutoRecord();
-    renderCasesPage();
 }
 
 // Readers / services chips used on the Case types tab.
@@ -2178,319 +1468,6 @@ function cdChips(kind, typeId, selected) {
         + `<span class="cd-chip-any">${set ? '' : (kind === 'readers' ? 'anyone' : 'any service')}</span></div>`;
 }
 
-// ── Actions ──────────────────────────────────────────────────────────────
-function cdSetPaste(text) {
-    cdSyncDay();
-    cdRawText = text;
-    cdSearch = '';
-    const rows = cdDropTitleRows(cdParseTable(text));
-    cdRecordedKey = null; cdRecordedDirty = false; cdRecordedAt = null; cdExportedName = null;
-    cdSel.day = null;
-    cdCases = [];
-    if (!rows.length) { cdTable = null; cdCols = null; renderCasesPage(); return; }
-    cdTable = { rows, hasHeader: cdLooksLikeHeader(rows) };
-    cdCols = cdGuessCols();
-    cdBuildCases();
-    cdMatchRecord();
-    renderCasesPage();
-}
-
-function cdRecordedBatch() {
-    const t = cdTotals();
-    const minutes = {}, expected = {}, cases = {};
-    Object.values(t.rows).forEach(r => {
-        minutes[r.pid] = Math.round(r.minutes);
-        expected[r.pid] = Math.round(r.expected * 10) / 10;
-        cases[r.pid] = r.cases;
-    });
-    return { minutes, expected, cases, at: Date.now(), by: loggedInPathId, sig: cdListSig() };
-}
-
-// A short fingerprint of the list's case numbers (order aside).
-function cdListSig() {
-    const ids = cdCases.map(c => String(c.id || c.key).toUpperCase()).sort().join('|');
-    let h = 2166136261;
-    for (let i = 0; i < ids.length; i++) { h ^= ids.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
-    return h.toString(36) + '-' + cdCases.length;
-}
-
-// The list's minutes go into each pathologist's running total (the ledger)
-// on their own (director, Nov 2026): when the list arrives, and again —
-// the same record, updated — whenever its split changes.
-function cdRecord() {
-    if (!cdCases.length) return;
-    const dk = fmt(cdDate);
-    const ref = cdRecordedKey
-        ? db.ref('scheduler/caseDist/ledger/' + dk + '/' + cdRecordedKey)
-        : db.ref('scheduler/caseDist/ledger/' + dk).push();
-    cdRecordedKey = ref.key;
-    cdRecordedDirty = false;
-    ref.set(cdRecordedBatch()).then(() => {
-        cdRecordedAt = Date.now();
-        renderCasesPage();
-    }).catch(err => {
-        cdRecordedDirty = true;
-        showToast('Could not record the list: ' + err.message, { type: 'error' });
-    });
-}
-
-function cdAutoRecord() {
-    if (cdCases.length && (!cdRecordedKey || cdRecordedDirty)) cdRecord();
-}
-
-// The split changed (a case moved, Redistribute, new settings): update the
-// list's record.
-function cdSplitChanged() {
-    if (cdRecordedKey) cdRecordedDirty = true;
-    cdAutoRecord();
-}
-
-// Clear list: the list goes, and its record with it — clearing is for a
-// list pasted by mistake.
-function cdClearList() {
-    const key = cdRecordedKey, dk = fmt(cdDate);
-    cdUseList('', 'paste');
-    if (!key) return;
-    db.ref('scheduler/caseDist/ledger/' + dk + '/' + key).remove()
-        .then(() => showToast('Cleared the list and took its minutes off the running totals.'))
-        .catch(err => showToast('Could not remove the list’s record: ' + err.message, { type: 'error' }));
-}
-
-function cdCopy() {
-    const lines = [['Case', 'Case type', 'Specimens', 'Slides', 'Est. minutes', 'Pathologist'].join('\t')];
-    const pidOrder = pid => (pid == null) ? 999 : pid;
-    cdCases.slice().sort((a, b) => (pidOrder(a.assigned) - pidOrder(b.assigned)) || a.id.localeCompare(b.id))
-        .forEach(c => {
-            const p = c.assigned != null ? cdPath(c.assigned) : null;
-            lines.push([c.id, c.cat, c.detail, c.slides === null ? '' : c.slides, cdNum(c.minutes), p ? cdShortName(p) : 'Not assigned']
-                .map(v => String(v).replace(/[\t\n]/g, ' ')).join('\t'));
-        });
-    const text = lines.join('\n');
-    const done = () => showToast('Copied ' + cdCases.length + ' cases — paste into Excel.');
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(done).catch(() => cdCopyFallback(text, done));
-    } else cdCopyFallback(text, done);
-}
-
-// ── AutoHotkey export ────────────────────────────────────────────────────
-// A tab-separated file tools/autohotkey/assign-cases.ahk reads, one case per
-// line in exactly the order of the pasted Epic list. The script doesn't look
-// cases up: it starts on the case selected in Epic and moves down the list,
-// so line N must be the Nth case in Epic's list.
-//   Seq <tab> Case <tab> EpicUser <tab> Pathologist <tab> Minutes
-// EpicUser is what gets typed in Epic's assign window (the last name by
-// default). UTF-8 with a BOM (AutoHotkey reads it as UTF-8), Windows line
-// endings. The file name carries the day and time, so each export is its
-// own run for the script's resume log.
-const CD_AHK_COLUMNS = ['Seq', 'Case', 'EpicUser', 'Pathologist', 'Minutes'];
-
-// What would stop the script: cases with no pathologist or no case number.
-// [] when the export is good to go.
-function cdExportProblems() {
-    const problems = [];
-    const unassigned = cdCases.filter(c => c.assigned == null).length;
-    if (unassigned) problems.push(`${unassigned} case${unassigned === 1 ? ' isn’t' : 's aren’t'} assigned`);
-    const noId = cdCases.filter(c => !c.id).length;
-    if (noId) problems.push(`${noId} case${noId === 1 ? ' has' : 's have'} no case number`);
-    const noName = [...new Set(cdCases.filter(c => c.assigned != null && !cdEpicName(c.assigned)).map(c => c.assigned))];
-    if (noName.length) problems.push(`nothing to type in Epic for ${noName.length} pathologist${noName.length === 1 ? '' : 's'} (Pathologists tab)`);
-    return problems;
-}
-
-function cdAhkText() {
-    const clean = v => String(v == null ? '' : v).replace(/[\t\r\n]+/g, ' ').trim();
-    const lines = [CD_AHK_COLUMNS.join('\t')];
-    cdCases.forEach(c => {
-        const p = cdPath(c.assigned);
-        lines.push([c.seq, c.id, cdEpicName(c.assigned), p ? cdShortName(p) : '', Math.round(c.minutes)].map(clean).join('\t'));
-    });
-    return '\uFEFF' + lines.join('\r\n') + '\r\n';
-}
-
-function cdExportAhk(auto) {
-    if (!cdCases.length) return false;
-    const problems = cdExportProblems();
-    if (problems.length) {
-        const s = problems.join('; ');
-        showToast((auto ? `Imported ${cdCases.length} cases from the case assignment automation, but can’t export: ` : 'Can’t export yet: ')
-            + s.charAt(0).toLowerCase() + s.slice(1) + '.', { type: 'error', duration: auto ? 60000 : undefined });
-        return false;
-    }
-    const now = new Date();
-    const hhmm = String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0');
-    const name = `case-assignments-${fmt(cdDate)}-${hhmm}.tsv`;
-    if (auto) return cdHandBack(name);
-    const url = URL.createObjectURL(new Blob([cdAhkText()], { type: 'text/tab-separated-values;charset=utf-8' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    cdExportedName = name;
-    renderCasesPage();
-    showToast(`Exported ${cdCases.length} cases to ${name}.`);
-    return true;
-}
-
-// For the script: the same file's text back on the clipboard, behind a first
-// line "CD_BACK_MARK <tab> file name", instead of a download — a download
-// lands wherever the browser last saved a file, which the script can't know.
-// The script saves it in its own folder. Records the batch once it's handed
-// back (these cases are being assigned now).
-function cdHandBack(name) {
-    const text = CD_BACK_MARK + '\t' + name + '\r\n' + cdAhkText().replace(/^﻿/, '');
-    const n = cdCases.length;
-    const ok = () => {
-        cdExportedName = name + ' (to the case assignment automation)';
-        cdRecord();
-        renderCasesPage();
-        showToast(`Imported ${n} cases from the case assignment automation, recorded them and handed the assignments back. The case assignment automation takes it from here.`);
-    };
-    const fail = () => showToast(`Imported ${n} cases from the case assignment automation, but couldn’t hand them back on the clipboard. `
-        + 'Run the case assignment automation again with this window in front, or Export and use Ctrl+Shift+2.', { type: 'error', duration: 60000 });
-    const fallback = () => {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        ta.style.position = 'fixed'; ta.style.opacity = '0';
-        document.body.appendChild(ta);
-        ta.select();
-        let copied = false;
-        try { copied = document.execCommand('copy'); } catch (_) { /* blocked */ }
-        ta.remove();
-        copied ? ok() : fail();
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fallback);
-    else fallback();
-    return true;
-}
-
-// ── Hand-off from the AutoHotkey script ───────────────────────────────────
-// The script puts the case list it exported from Epic on the clipboard,
-// behind a first line reading CD_AUTO_MARK, brings this tab to the front and
-// presses Ctrl+V. On any page, for the director: open Cases, take the list as
-// if pasted, split it, hand the assignments back on the clipboard (above)
-// and record the batch. When something stops the export (a case no one
-// working can read), the page says so and the script times out telling the
-// director to look here.
-const CD_AUTO_MARK = '#PATHSCHED-AUTO';
-const CD_BACK_MARK = '#PATHSCHED-ASSIGNMENTS';
-// The page's first answer, at once, so the script stops pasting (it pastes
-// again every few seconds while a freshly opened page is still loading):
-// RECEIVED = working on it; WAITING = no one is signed in yet, the list is
-// held until the director signs in (the script then waits longer).
-const CD_ACK_MARK = '#PATHSCHED-RECEIVED';
-const CD_WAIT_MARK = '#PATHSCHED-WAITING';
-let cdPendingAuto = null;   // a list that arrived before the settings loaded
-let _cdSignInWait = null;   // timer: a list waiting for the director to sign in
-
-function cdAnswerScript(mark) {
-    if (!navigator.clipboard || !navigator.clipboard.writeText) return Promise.resolve();
-    return navigator.clipboard.writeText(mark).catch(() => {});
-}
-
-// The script opened the page itself (or you weren't signed in): hold the
-// list, and run it once the director has signed in.
-function cdAutoAfterSignIn(text) {
-    clearInterval(_cdSignInWait);
-    showToast('The case assignment automation handed over a case list. Sign in as the director and it carries on.', { duration: 20000 });
-    const giveUp = Date.now() + 10 * 60 * 1000;
-    _cdSignInWait = setInterval(() => {
-        if (Date.now() > giveUp) { clearInterval(_cdSignInWait); return; }
-        if (loggedInPathId === null || loggedInPathId === undefined || !pathologists.length) return;
-        clearInterval(_cdSignInWait);
-        if (!isAdmin()) {
-            showToast('Only the director can hand a case list to the Assign page.', { type: 'error' });
-            return;
-        }
-        cdAutoRun(text);
-    }, 400);
-}
-
-function cdAutoRun(text) {
-    if (typeof window.__setPage === 'function' && !cdPageActive()) window.__setPage('cases');
-    if (!cdLoaded) { cdPendingAuto = text; cdEnsureListener(); return; }
-    cdPendingAuto = null;
-    cdTab = 'day';
-    renderCasesPage();
-    cdSetPaste(text);
-    cdListFrom = text.trim() ? { how: 'script', at: Date.now() } : null;
-    if (!cdCases.length) {
-        showToast('The case assignment automation handed over a case list with no cases in it.', { type: 'error' });
-        return;
-    }
-    // The same list again (a run that stopped, started over): replace its
-    // record rather than count the cases twice, and split it as if that
-    // record weren't there — as the first time.
-    if (cdMatchRecord()) cdRecordedDirty = true;   // the script always re-records
-    cdExportAhk(true);
-}
-
-document.addEventListener('paste', e => {
-    const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
-    const body = String(text || '').replace(/^\uFEFF/, '');
-    if (!body.startsWith(CD_AUTO_MARK)) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const nl = body.indexOf('\n');
-    const list = nl < 0 ? '' : body.slice(nl + 1);
-    if (loggedInPathId === null || loggedInPathId === undefined) {
-        cdAnswerScript(CD_WAIT_MARK);
-        cdAutoAfterSignIn(list);
-        return;
-    }
-    cdAnswerScript(CD_ACK_MARK).then(() => {
-        if (typeof isAdmin !== 'function' || !isAdmin()) {
-            showToast('Only the director can hand a case list to the Assign page.', { type: 'error' });
-            return;
-        }
-        cdAutoRun(list);
-    });
-}, true);
-
-// Pasting the case log straight onto the Assign page: copy Epic's export in
-// Excel, click the page (anywhere but a text box) and press Ctrl+V. A new
-// list replaces the one there. Text with no case numbers in it is turned
-// away, so a stray paste can't wipe the list.
-document.addEventListener('paste', e => {
-    if (e.defaultPrevented || !cdPageActive() || typeof isAdmin !== 'function' || !isAdmin()) return;
-    const t = e.target;
-    if (t && t.closest && t.closest('input, textarea, select, [contenteditable="true"], .modal-back.open')) return;
-    if (document.querySelector('.modal-back.open')) return;
-    // On the Pathologists tab, a pasted AP case report updates the Specimen mix.
-    if (cdTab === 'people') {
-        const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
-        if (!String(text || '').trim()) return;
-        e.preventDefault();
-        cdMixPaste(text);
-        return;
-    }
-    const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
-    if (!String(text || '').trim()) return;
-    e.preventDefault();
-    const hasCases = cdParseTable(text).some(r => r.some(cell => CD_ACC_RE.test(String(cell).split('\n')[0].trim())));
-    if (!hasCases) {
-        showToast('That isn’t a case log — in Excel, copy the cells of Epic’s export, headers included, then paste here.', { type: 'error' });
-        return;
-    }
-    const replacing = cdCases.length > 0;
-    cdTab = 'day';
-    cdUseList(text, 'paste');
-    showToast((replacing ? 'Replaced the list: ' : 'Pasted ') + cdCases.length + ' case' + (cdCases.length === 1 ? '' : 's') + '.');
-});
-
-function cdCopyFallback(text, done) {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); done(); }
-    catch (_) { showToast('Copy failed — your browser blocked the clipboard.', { type: 'error' }); }
-    ta.remove();
-}
-
 // From a specimen name, the new type starts at that specimen's CPT estimate.
 function cdAddType(fromText, code) {
     const ref = db.ref('scheduler/caseDist/types').push();
@@ -2514,9 +1491,9 @@ function cdAddType(fromText, code) {
         .catch(err => showToast('Could not add the case type: ' + err.message, { type: 'error' }));
 }
 
-// Settings changed (types, FTE) → re-split whatever is pasted.
+// Settings changed (types, FTE, defaults) → the workbook's copy follows.
 function cdAfterSettingsChange() {
-    if (cdTable) { cdBuildCases(); cdSplitChanged(); }
+    cdPublishSoon();
 }
 
 // ── Wiring ───────────────────────────────────────────────────────────────
@@ -2526,18 +1503,7 @@ function cdAfterSettingsChange() {
 
     root.addEventListener('change', e => {
         const el = e.target;
-        if (el.classList.contains('cd-assign')) {
-            const c = cdCases.find(x => x.key === el.dataset.cdCase);
-            if (!c) return;
-            c.pinned = el.value === '' ? null : (/^d:/.test(el.value) ? el.value : Number(el.value));
-            c.assigned = c.pinned;
-            cdSplitChanged();
-            // Opened in a pathologist's section: follow it to the new one.
-            if (cdSel.day && /^p\d+\|/.test(cdSel.day) && cdSel.day.endsWith('|' + c.key)) {
-                cdSel.day = c.assigned != null ? 'p' + c.assigned + '|' + c.key : 'look|' + c.key;
-            }
-            renderCasesPage();
-        } else if (el.dataset.cdField) {
+        if (el.dataset.cdField) {
             const f = el.dataset.cdField;
             let v = el.value;
             if (f === 'minutes' || f === 'addMinutes') {
@@ -2614,18 +1580,6 @@ function cdAfterSettingsChange() {
 
     root.addEventListener('keydown', e => {
         if (e.key === 'Enter' && e.target.matches('.cd-input')) e.target.blur();
-        if (e.key === 'Escape' && e.target.id === 'cdSearch' && cdSearch) {
-            e.preventDefault();
-            cdSearch = '';
-            renderCasesPage();
-        }
-    });
-
-    // Find a case: the list filters as you type.
-    root.addEventListener('input', e => {
-        if (e.target.id !== 'cdSearch') return;
-        cdSearch = e.target.value;
-        renderCasesPage();
     });
 
     root.addEventListener('click', e => {
@@ -2643,31 +1597,10 @@ function cdAfterSettingsChange() {
             const tab = cdTab;
             cdSel[tab] = cdSel[tab] === d.cdPick ? null : d.cdPick;
             renderCasesPage();
-        } else if (d.cdJump) {
-            // Workload row → that pathologist's section, opened, at the top.
-            const id = 'p' + d.cdJump;
-            if (cdSecStore.closed[id]) { cdSecStore.set(id, false); renderCasesPage(); }
-            const head = root.querySelector(`[data-cd-sec="${id}"]`);
-            const list = root.querySelector('.cf-list');
-            if (head && list) list.scrollTop = head.closest('.cf-sec').offsetTop - list.offsetTop;
         } else if (d.cdTsort) {
             // Same column flips; a new one starts A–Z, or largest first for numbers.
             const key = d.cdTsort;
             cdTypeSort = cdTypeSort.key === key ? { key, dir: -cdTypeSort.dir } : { key, dir: key === 'name' ? 1 : -1 };
-            renderCasesPage();
-        } else if (t.id === 'cdExportAhk') cdExportAhk();
-        else if (t.id === 'cdCopy') cdCopy();
-        else if (t.id === 'cdRedistribute') {
-            cdDistribute();
-            cdSplitChanged();
-            renderCasesPage();
-        } else if (t.id === 'cdClear') {
-            cdClearList();
-        } else if (d.cdUnpin) {
-            const c = cdCases.find(x => x.key === d.cdUnpin);
-            if (c) delete c.pinned;
-            cdDistribute();
-            cdSplitChanged();
             renderCasesPage();
         } else if (d.cdAddtype !== undefined) cdAddType(d.cdAddtype, d.cdAddcode);
         else if (t.id === 'cdAddType') cdAddType(null);

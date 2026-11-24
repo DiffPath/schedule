@@ -17,17 +17,21 @@
 
 import { createHash } from 'node:crypto';
 import { onSchedule } from 'firebase-functions/v2/scheduler';
-import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { onCall, onRequest, HttpsError } from 'firebase-functions/v2/https';
 import { defineSecret } from 'firebase-functions/params';
 import { logger } from 'firebase-functions';
 import { initializeApp } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database';
 import { parseOutlookIcs, TIME_ZONE } from './outlook.js';
 import { encryptUrl, decryptUrl } from './feed-crypto.js';
+import { handleCaseApi } from './case-api.js';
 
 initializeApp();
 
 const FEED_KEY = defineSecret('OUTLOOK_FEED_KEY');
+// The Case Assignment workbook's shared key (Settings!B2 there); set with
+//   firebase functions:secrets:set CASE_API_KEY
+const CASE_API_KEY = defineSecret('CASE_API_KEY');
 const FEEDS_PATH = 'scheduler/outlookFeeds';
 const MEETINGS_PATH = 'scheduler/outlookMeetings';
 // Published-calendar hosts only: the function fetches whatever URL is
@@ -136,4 +140,12 @@ export const syncOutlookCalendars = onSchedule({
             });
         }
     }));
+});
+
+// ── Case Assignment workbook (Excel on the web) ─────────────────────────
+// See case-api.js. The workbook's Office Scripts call this with fetch(), so
+// CORS is open; the shared key is what guards it.
+export const caseApi = onRequest({ secrets: [CASE_API_KEY], cors: true, timeoutSeconds: 60, memory: '256MiB' }, async (req, res) => {
+    const out = await handleCaseApi(req, { db: getDatabase(), key: CASE_API_KEY.value().trim() });
+    res.status(out.status).json(out.body);
 });

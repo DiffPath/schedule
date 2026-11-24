@@ -545,11 +545,8 @@
                     m[String(fiscalYear)] = { '2': 30 };
                     return m;
                 })(),
-                // Consult rotation demo: two cases already logged (Moravek
-                // then Mujeeb), so the tracker shows Dr. Rehman as next up
-                // and suggests the next MHSC<yy>-<nnnn> in sequence. Case
-                // numbers restart at 0001 each calendar year, so a seed
-                // that straddles New Year stays valid.
+                // Consult rotation demo: two consults already logged
+                // (Moravek then Mujeeb). No case numbers (PHI).
                 consultLog: (function () {
                     function daysAgo(n) {
                         var d = new Date(today);
@@ -557,24 +554,19 @@
                         d.setDate(d.getDate() - n);
                         return d;
                     }
-                    function yy(d) { return String(d.getFullYear() % 100).padStart(2, '0'); }
                     var d1 = daysAgo(8);
                     var d2 = daysAgo(3);
-                    var y1 = yy(d1);
-                    var y2 = yy(d2);
                     return {
                         'seedcon1': {
                             date: isoLocal(d1),
                             source: 'Northwestern Medicine',
                             pathologistId: 1,
-                            caseNumber: 'MHSC' + y1 + '-0001',
                             createdAt: d1.getTime(),
                         },
                         'seedcon2': {
                             date: isoLocal(d2),
                             source: 'Rush Copley',
                             pathologistId: 2,
-                            caseNumber: 'MHSC' + y2 + '-' + (y1 === y2 ? '0002' : '0001'),
                             createdAt: d2.getTime(),
                         },
                     };

@@ -1,25 +1,23 @@
-// ════════════════════════════════════════════════════════════════════════
-// Split cases — Office Script for the "Case Assignment" workbook
+// ========================================================================
+// Split cases - Office Script for the "Case Assignment" workbook
 // (Excel on the web, on the hospital's Office 365).
-// ════════════════════════════════════════════════════════════════════════
+// ========================================================================
 //
 // Case lists hold case numbers, which are PHI, so they're split here and
-// never reach the scheduling app. The app publishes what the split needs —
-// who's working, their services and shares, the case types — and this
+// never reach the scheduling app. The app publishes what the split needs -
+// who's working, their services and shares, the case types - and this
 // script fetches it through the app's caseApi function. It sends back only
 // each person's minutes and case counts for the day (the running ahead /
 // behind totals). No case numbers leave the workbook.
 //
 // Sheets: Cases (paste Epic's case log at A1), Assignments (the result),
-// Settings (B1 = caseApi address, B2 = key), List (hidden: the last list).
+// Settings (B1 = caseApi address, B2 = key).
 //
-//  1. Paste the case log at Cases!A1 (the automation does this) and click
-//     "Split cases". The list moves to the hidden List sheet and Cases is
-//     cleared for the next one.
-//  2. To move a case, pick another pathologist in its row and click "Split
-//     cases" again: cases changed by hand stay put, the rest re-split.
-//     Pasting the same list again replaces its record instead of counting it
-//     twice.
+// Paste the case log at Cases!A1 (the automation does this) and click
+// "Split cases"; Cases is cleared for the next list. Assignments can't be
+// changed by hand (the director, Nov 2026): the split is the split. The
+// same list pasted again gives the same split and replaces its record
+// instead of counting it twice.
 //
 // The rules are the app's (case-distribution.js), ported line for line:
 // cdBuildCases, cdDistribute, cdDealDelnor, cdTotals. Change both together.
@@ -29,7 +27,7 @@ interface TeamMember {
     svcIds: string[]; svc: string; share: number; locum: boolean; delnor: boolean;
 }
 interface CaseType {
-    id: string; name: string; match: string; group: string;
+    id: string; name: string; match: string;
     minutes: number; addMinutes: number | null; slides: number | null; codes: string[];
     services: { [sid: string]: number | boolean } | null;
     readers: { [pid: string]: boolean } | null;
@@ -49,7 +47,7 @@ interface DayData {
     settings: Settings; constants: Constants;
     balances: { [id: string]: number };
     // The record named by ?skip=, left out of balances: each person's
-    // minutes − fair share in it. Added back when this is a different list.
+    // minutes - fair share in it. Added back when this is a different list.
     skipped: { [id: string]: number } | null;
 }
 interface Part { name: string; code: string | null; units: number; type: CaseType | null; minutes: number; via: string; }
@@ -57,12 +55,12 @@ interface SplitCase {
     key: string; id: string; cat: string; parts: Part[]; slides: number | null; seq: number;
     minutes: number; label: string; detail: string;
     readers: Set<string> | null; services: Set<string>[] | null; delnorOK: boolean;
-    assigned: string | null; pinned: string | undefined; note: string; shared: string;
+    assigned: string | null; note: string; shared: string;
 }
 interface Cols { id: number; proto: number; charge: number; cat: number; slides: number; }
 interface Totals { minutes: { [id: string]: number }; expected: { [id: string]: number }; cases: { [id: string]: number }; }
 
-// ── The rules (pure: no Excel) ──────────────────────────────────────────
+// -- The rules (pure: no Excel) ------------------------------------------
 class Splitter {
     day: DayData;
     types: CaseType[];
@@ -120,13 +118,13 @@ class Splitter {
     }
     setOf(obj: { [k: string]: boolean } | null): Set<string> | null {
         const keys = obj ? Object.keys(obj).filter(k => obj[k]) : [];
-        return keys.length ? new Set<string>(keys.map(String)) : null;
+        return keys.length ? new Set<string>(keys.map(k => String(k))) : null;
     }
     svcNames(set: Set<string>): string {
         return Array.from(set).map(s => this.svcShort[s] || s).join(' / ');
     }
 
-    // ── Parsing (cdParseTable's cleaning, cdDropTitleRows, cdGuessCols) ──
+    // -- Parsing (cdParseTable's cleaning, cdDropTitleRows, cdGuessCols) --
     cleanRows(raw: string[][]): string[][] {
         const clean = raw.map(r => r.map(c => String(c === undefined || c === null ? '' : c).replace(/\r\n?/g, '\n').split('\n')
             .map(l => l.replace(/\s+/g, ' ').trim()).filter(l => l.length > 0).join('\n')))
@@ -171,7 +169,7 @@ class Splitter {
         return { id, proto, charge, cat, slides };
     }
 
-    // ── Minutes ──
+    // -- Minutes --
     partMinutes(pt: Part): number {
         const k = this.day.constants;
         const units = Math.max(1, pt.units || 1);
@@ -230,7 +228,7 @@ class Splitter {
         return parts;
     }
 
-    // ── Rows → cases (cdBuildCases) ──
+    // -- Rows -> cases (cdBuildCases) --
     build(rawRows: string[][]): void {
         const rows = this.dropTitleRows(this.cleanRows(rawRows));
         this.cases = [];
@@ -300,10 +298,10 @@ class Splitter {
                 key: g.key, id: g.id, cat: g.cat, parts: g.parts, slides: g.slides, seq: 0,
                 minutes: Math.round(minutes * factor * 10) / 10,
                 label: labels.join(' + ') || g.parts[0].name,
-                detail: g.parts.map(pt => pt.name + (pt.units > 1 ? ' ×' + pt.units : '')).join(' · '),
+                detail: g.parts.map(pt => pt.name + (pt.units > 1 ? ' x' + pt.units : '')).join('; '),
                 readers, services,
                 delnorOK: timed.length > 0 && timed.every(pt => !!pt.type && pt.type.delnor),
-                assigned: null, pinned: undefined, note: '', shared: '',
+                assigned: null, note: '', shared: '',
             });
         });
         this.cases.forEach((c, i) => { c.seq = i + 1; });
@@ -328,8 +326,8 @@ class Splitter {
         }, 0);
     }
 
-    // ── The distribution (cdDistribute) ──
-    distribute(pins: { [key: string]: string }): void {
+    // -- The distribution (cdDistribute) --
+    distribute(): void {
         const k = this.day.constants;
         const working = this.day.team;
         const bal = this.day.balances || {};
@@ -353,24 +351,20 @@ class Splitter {
             if (firstEl.length) return { el: firstEl, svc: first };
             const backupEl = backup.size ? on(backup) : [];
             if (backupEl.length) return { el: backupEl, svc: backup };
-            c.note = 'No one on ' + this.svcNames(backup.size ? new Set<string>(Array.from(first).concat(Array.from(backup))) : first) + ' — shared with all';
+            c.note = 'No one on ' + this.svcNames(backup.size ? new Set<string>(Array.from(first).concat(Array.from(backup))) : first) + ' - shared with all';
             return null;
         };
         const score = (w: TeamMember, c: SplitCase) => (load[w.id] + c.minutes) / w.share;
         const lowest = (el: TeamMember[], c: SplitCase) => el.reduce((best, w) => (score(w, c) < score(best, c) - 1e-9 ? w : best));
         const give = (c: SplitCase, w: TeamMember) => { c.assigned = w.id; load[w.id] += c.minutes; };
 
-        this.cases.forEach(c => { c.note = ''; c.shared = ''; c.assigned = null; c.pinned = pins[c.key]; });
-        this.cases.filter(c => c.pinned !== undefined).forEach(c => {
-            c.assigned = c.pinned as string;
-            if (load[c.assigned] !== undefined) load[c.assigned] += c.minutes;
-        });
+        this.cases.forEach(c => { c.note = ''; c.shared = ''; c.assigned = null; });
 
         if (delnor.length) {
             const target = this.cases.reduce((t, c) => t + c.minutes, 0) * k.delnorFraction;
             let have = delnor.reduce((t, w) => t + load[w.id], 0);
             const picked: SplitCase[] = [];
-            this.cases.filter(c => c.pinned === undefined && c.delnorOK)
+            this.cases.filter(c => c.delnorOK)
                 .sort((a, b) => b.minutes - a.minutes || a.seq - b.seq)
                 .forEach(c => {
                     if (have >= target || have + c.minutes / 2 > target) return;
@@ -381,7 +375,7 @@ class Splitter {
         }
 
         interface Todo { c: SplitCase; el: TeamMember[]; svc: OnSvc | null; }
-        const todo: Todo[] = this.cases.filter(c => c.pinned === undefined && c.assigned === null)
+        const todo: Todo[] = this.cases.filter(c => c.assigned === null)
             .map(c => { const el = readersOf(c); return { c, el, svc: onService(c, el) }; });
 
         const shareSum = ours.reduce((s, w) => s + w.share, 0);
@@ -392,7 +386,7 @@ class Splitter {
             const svc = t.svc as OnSvc;
             const w = lowest(svc.el, t.c);
             if ((load[w.id] + t.c.minutes / 2) / w.share <= evenDay) give(t.c, w);
-            else t.c.shared = w.short + ' (' + this.svcNames(svc.svc) + ') already had a full day — shared';
+            else t.c.shared = w.short + ' (' + this.svcNames(svc.svc) + ') already had a full day - shared';
         });
 
         todo.filter(t => t.c.assigned === null && t.el.length > 0)
@@ -400,7 +394,7 @@ class Splitter {
             .forEach(t => give(t.c, lowest(t.el, t.c)));
     }
 
-    // ── Delnor's cases among Delnor's pathologists (cdDealDelnor) ──
+    // -- Delnor's cases among Delnor's pathologists (cdDealDelnor) --
     random(seedText: string): () => number {
         let a = 2166136261;
         for (let i = 0; i < seedText.length; i++) { a ^= seedText.charCodeAt(i); a = Math.imul(a, 16777619) >>> 0; }
@@ -425,7 +419,7 @@ class Splitter {
         const rvu = new Map<SplitCase, number>();
         cases.forEach(c => rvu.set(c, this.caseRvu(c)));
         const weight = (c: SplitCase) => (rvu.get(c) as number) + 0.01;
-        const base = people.map(w => this.cases.filter(c => c.pinned !== undefined && String(c.pinned) === w.id).reduce((s, c) => s + this.caseRvu(c), 0));
+        const base = people.map(() => 0);
         const rand = this.random(this.listSig() + '|' + this.day.date + '|' + people.map(w => w.id).join(','));
         const spread = (xs: number[]) => Math.max(...xs) - Math.min(...xs);
         let best: { score: number[]; mine: SplitCase[][] } | null = null;
@@ -490,9 +484,12 @@ class Splitter {
     }
 }
 
-// ── Excel ────────────────────────────────────────────────────────────────
+// -- Excel ----------------------------------------------------------------
 const RUN_MARK = '#RUN';
-const OUT_HEAD = ['Seq', 'Case', 'Pathologist', 'Typed in Epic', 'Minutes', 'Specimens', 'Note', 'Split as'];
+const OUT_HEAD = ['Seq', 'Case', 'Pathologist', 'Typed in Epic', 'Minutes', 'Specimens', 'Note'];
+// Older versions kept a copy for the case assignment automation (tabled,
+// Nov 2026) on this sheet, under this name; removed when found.
+const OLD_SHEET = 'Hand-off', OLD_NAME = 'AhkOut';
 
 function sheet(workbook: ExcelScript.Workbook, name: string): ExcelScript.Worksheet {
     const ws = workbook.getWorksheet(name);
@@ -511,36 +508,16 @@ function api(workbook: ExcelScript.Workbook): { url: string; key: string } {
 }
 
 async function main(workbook: ExcelScript.Workbook) {
-    const cases = sheet(workbook, 'Cases'), list = sheet(workbook, 'List');
+    const cases = sheet(workbook, 'Cases');
     const out = sheet(workbook, 'Assignments'), settings = sheet(workbook, 'Settings');
     const { url, key } = api(workbook);
 
-    // A new list on Cases (the automation marks its paste with "#RUN <stamp>"),
-    // else the last list again with any hand-made changes kept.
+    // The list on Cases (a first line "#RUN <stamp>", from the tabled
+    // automation, is skipped).
     let raw = texts(cases);
-    let run = '';
-    if (raw.length && String(raw[0][0] || '').indexOf(RUN_MARK) === 0) { run = String(raw[0][0]).trim(); raw = raw.slice(1); }
-    const fresh = raw.some(r => r.some(c => String(c).trim().length > 0));
-    if (fresh) {
-        list.getRange().clear(ExcelScript.ClearApplyTo.contents);
-        const w = raw.reduce((m, r) => Math.max(m, r.length), 0);
-        const padded = raw.map(r => { const x = r.slice(); while (x.length < w) x.push(''); return x; });
-        list.getRange('A1').getResizedRange(padded.length - 1, w - 1).setValues(padded);
-    } else {
-        raw = texts(list);
-        if (!raw.length) throw new Error('Paste the case log at Cases!A1 first.');
-    }
+    if (raw.length && String(raw[0][0] || '').indexOf(RUN_MARK) === 0) raw = raw.slice(1);
+    if (!raw.some(r => r.some(c => String(c).trim().length > 0))) throw new Error('Paste the case log at Cases!A1 first.');
     const lastSig = settings.getRange('B5').getText(), lastKey = settings.getRange('B6').getText();
-
-    // Hand-made changes: rows whose Pathologist differs from what the split gave.
-    const pinsByName: { [key: string]: string } = {};
-    if (!fresh) {
-        const prev = texts(out);
-        prev.forEach(r => {
-            if (!/^\d+$/.test(String(r[0] || '')) || !r[1]) return;
-            if (String(r[2] || '').trim() && String(r[2]).trim() !== String(r[7] || '').trim()) pinsByName['id:' + String(r[1]).toUpperCase()] = String(r[2]).trim();
-        });
-    }
 
     // What the split needs, from the app (no PHI goes there). The last
     // record is left out of the balances; it's added back below unless this
@@ -556,15 +533,7 @@ async function main(workbook: ExcelScript.Workbook) {
     const sameList = sig === lastSig && !!lastKey;
     const back = day.skipped;
     if (!sameList && back) Object.keys(back).forEach(id => { day.balances[id] = (day.balances[id] || 0) + back[id]; });
-    const byName: { [name: string]: string } = {};
-    day.team.forEach(w => { byName[w.short] = w.id; byName[w.name] = w.id; });
-    const pins: { [key: string]: string } = {};
-    Object.keys(pinsByName).forEach(k => {
-        const id = byName[pinsByName[k]];
-        if (!id) throw new Error('"' + pinsByName[k] + '" isn\'t working on ' + day.date + ': pick someone from the list.');
-        pins[k] = id;
-    });
-    sp.distribute(pins);
+    sp.distribute();
 
     // The result: one row per case, in Epic's order.
     const team: { [id: string]: TeamMember } = {};
@@ -573,25 +542,19 @@ async function main(workbook: ExcelScript.Workbook) {
     sp.cases.forEach(c => {
         const w = c.assigned !== null ? team[c.assigned] : null;
         rows.push([c.seq, c.id, w ? w.short : '', w ? w.epic : '', Math.round(c.minutes), c.label,
-            [c.note, c.shared, c.pinned !== undefined ? 'set by hand' : ''].filter(x => x.length > 0).join(' · '), w ? w.short : '']);
+            [c.note, c.shared].filter(x => x.length > 0).join('; ')]);
     });
     out.getRange().clear(ExcelScript.ClearApplyTo.all);
+    out.getRange('H:H').setColumnHidden(false);     // where older versions kept "Split as"
     out.getRange('A3').getResizedRange(rows.length - 1, OUT_HEAD.length - 1).setValues(rows);
-    const pick = out.getRange('C4').getResizedRange(Math.max(0, rows.length - 2), 0);
-    pick.getDataValidation().clear();
-    pick.getDataValidation().setRule({ list: { inCellDropDown: true, source: day.team.map(w => w.short).join(',') } });
-    out.getRange('H3').getResizedRange(rows.length - 1, 0).getFormat().setColumnHidden(true);
-    out.getRange('A3:H3').getFormat().getFont().setBold(true);
+    out.getRange('C:C').getDataValidation().clear();    // older versions had a pathologist dropdown here
+    out.getRange('A3:G3').getFormat().getFont().setBold(true);
 
-    // The automation's copy: run stamp, then Seq · Case · EpicUser · Pathologist · Minutes.
     const unassigned = sp.cases.filter(c => c.assigned === null).length;
-    const ahk: (string | number)[][] = [[run || RUN_MARK, '', '', '', ''], ['Seq', 'Case', 'EpicUser', 'Pathologist', 'Minutes']];
-    sp.cases.forEach(c => { const w = c.assigned !== null ? team[c.assigned] : null; ahk.push([c.seq, c.id, w ? w.epic : '', w ? w.short : '', Math.round(c.minutes)]); });
-    const ahkRange = out.getRange('J3').getResizedRange(ahk.length - 1, 4);
-    ahkRange.setValues(ahk);
-    const old = workbook.getNamedItem('AhkOut');
-    if (old) old.delete();
-    workbook.addNamedItem('AhkOut', ahkRange);
+    const oldName = workbook.getNamedItem(OLD_NAME);
+    if (oldName) oldName.delete();
+    const oldSheet = workbook.getWorksheet(OLD_SHEET);
+    if (oldSheet) oldSheet.delete();
 
     // Who got what.
     const t = sp.totals();
@@ -600,8 +563,8 @@ async function main(workbook: ExcelScript.Workbook) {
         const w = team[id];
         sum.push([w ? w.short : id, w ? w.svc : '', t.cases[id], t.minutes[id], Math.round(t.expected[id])]);
     });
-    out.getRange('P3').getResizedRange(sum.length - 1, 4).setValues(sum);
-    out.getRange('P3:T3').getFormat().getFont().setBold(true);
+    out.getRange('I3').getResizedRange(sum.length - 1, 4).setValues(sum);
+    out.getRange('I3:M3').getFormat().getFont().setBold(true);
 
     // The record (totals only). The same list again replaces its record.
     let recordKey = '';
@@ -615,14 +578,14 @@ async function main(workbook: ExcelScript.Workbook) {
         recordKey = got.key;
     }
     settings.getRange('B5:B6').setValues([[sig], [recordKey || (sameList ? lastKey : '')]]);
-    if (fresh) cases.getRange().clear(ExcelScript.ClearApplyTo.contents);
+    cases.getRange().clear(ExcelScript.ClearApplyTo.contents);
 
     const status = sp.cases.length + ' cases split for ' + day.date
-        + (unassigned ? ' — ' + unassigned + ' not assigned (see Note); nothing recorded' : '; recorded')
-        + ' · ' + new Date().toLocaleTimeString();
+        + (unassigned ? ' - ' + unassigned + ' not assigned (see Note); nothing recorded' : '; recorded')
+        + '; ' + new Date().toLocaleTimeString();
     out.getRange('A1').setValue(status);
     out.getRange('A1').getFormat().getFont().setBold(true);
-    out.getRange('A:H').getFormat().autofitColumns();
+    out.getRange('A:M').getFormat().autofitColumns();
     out.activate();
     console.log(status);
 }

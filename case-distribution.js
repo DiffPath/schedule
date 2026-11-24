@@ -14,7 +14,7 @@
 // comes here. This page (director only) keeps what the split needs and
 // publishes it for the workbook (cdPublish → scheduler/caseDist/publish,
 // read through the caseApi function); the workbook sends back only
-// per-pathologist totals (the ledger) and specimen-mix counts.
+// per-pathologist totals (the ledger).
 //
 // The rules (ported line for line into the workbook script; change both):
 // each specimen's minutes come from its case type (first unit + each
@@ -40,7 +40,6 @@
 //                                     { minutes{pid}, expected{pid}, cases{pid}, at, by }
 //                                     one list's totals, written by the workbook
 //   scheduler/caseDist/publish        the team per day, types, settings (cdPublish)
-//   scheduler/caseDist/specimenMix    counts per pathologist per case type (workbook)
 
 // Starter estimates — minutes of sign-out time for the first unit and each
 // additional unit (container, core, margin). Source: Royal College of
@@ -571,7 +570,6 @@ let cdFte = {};
 let cdEpic = {};
 let cdSettings = {};
 let cdLedger = {};
-let cdMix = null;              // scheduler/caseDist/specimenMix — counts sent by the workbook
 let cdPublished = null;        // scheduler/caseDist/publish — what the workbook reads (cdPublish)
 let cdLoaded = false;
 let _cdRef = null;
@@ -595,7 +593,6 @@ function cdEnsureListener() {
         cdEpic = v.epic || {};
         cdSettings = v.settings || {};
         cdLedger = v.ledger || {};
-        cdMix = v.specimenMix || null;
         cdPublished = v.publish || null;
         cdLoaded = true;
         if (v.seeded !== CD_SEED_VERSION && isAdmin()) { cdSeedTypes(v.types, v.seeded); return; }
@@ -610,7 +607,7 @@ function cdSignedOut() {
     _cdRef = null;
     cdLoaded = false;
     cdTypes = {}; cdFte = {}; cdEpic = {}; cdSettings = {}; cdLedger = {};
-    cdMix = null; cdPublished = null;
+    cdPublished = null;
     clearTimeout(_cdPubTimer);
     cdSel.types = cdSel.people = null;
 }
@@ -1069,7 +1066,6 @@ let cdTypeSort = { key: 'name', dir: 1 };
 const CD_TYPE_COLS = [
     { key: 'name', label: 'Case type', sort: true, pad: true, w: 'minmax(150px, 1.3fr)', tip: 'Hover a name for where its minutes come from (RCPath G107 time bands)' },
     { key: 'match', label: 'Recognized by', pad: true, w: 'minmax(140px, 1.7fr)', tip: 'Words in the specimen’s name, separated by ; — whole words; the longest match wins' },
-    { key: 'group', label: 'Specimen type', sort: true, pad: true, w: '150px', tip: 'The broad specimen type it counts as in the Specimen mix (Pathologists tab)' },
     { key: 'codes', label: 'Billing codes', sort: true, pad: true, w: '112px', tip: 'CPT codes this type is billed under (from the Nov 19 2026 AP report); separate with commas' },
     { key: 'rvu', label: 'Work RVU', sort: true, num: true, pad: true, w: '96px', tip: 'Medicare work RVU of each billing code, in the same order (CMS 2026 fee schedule, October release). Hover for the professional (-26) total' },
     { key: 'minutes', label: 'First', sort: true, num: true, pad: true, w: '68px', tip: 'Minutes for the first unit (container, core, polyp)' },
@@ -1103,9 +1099,6 @@ function cdTypeNum(t, key) {
 function cdTypeOrder(a, b) {
     const byName = String(a.name || '').localeCompare(String(b.name || ''));
     if (cdTypeSort.key === 'name') return cdTypeSort.dir * byName;
-    if (cdTypeSort.key === 'group') {
-        return cdTypeSort.dir * (CD_GROUPS.indexOf(cdTypeGroup(a)) - CD_GROUPS.indexOf(cdTypeGroup(b))) || byName;
-    }
     if (cdTypeSort.key === 'codes') {
         const ca = cdCodeList(a).join(' '), cb = cdCodeList(b).join(' ');
         if (!ca !== !cb) return ca ? -1 : 1;           // blanks last either way
@@ -1127,7 +1120,6 @@ function cdTypeRow(t) {
             aria-label="Case type name" title="${escapeHtml((t.name || '') + (t.basis ? ' — ' + t.basis : ''))}">
         <input type="text" class="cd-input cd-t-match cd-c-match" data-cd-field="match" data-cd-type="${t.id}" value="${escapeHtml(t.match || '')}"
             placeholder="words in the specimen name; separate with ;" aria-label="Recognized by" title="${escapeHtml(t.match || '')}">
-        <select class="cd-input cd-t-group cd-c-group" data-cd-field="group" data-cd-type="${t.id}" aria-label="Specimen type">${CD_GROUPS.map(g => `<option${g === cdTypeGroup(t) ? ' selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select>
         <input type="text" class="cd-input cd-t-codes cd-c-codes" data-cd-field="codes" data-cd-type="${t.id}" value="${escapeHtml(codes.join(', '))}"
             placeholder="CPT" aria-label="Billing codes" spellcheck="false" autocomplete="off" title="${escapeHtml(codes.join(', '))}">
         <span class="cd-t-rvu cd-c-rvu" title="${escapeHtml(rvTip)}">${rvText}</span>
@@ -1172,99 +1164,6 @@ function cdTypesViewHtml() {
       </div>`;
 }
 
-// ── Specimen mix ── Each pathologist's cases by broad specimen type, from
-// an AP case report (Epic: Case · Case Type · Protocols · Case Charges ·
-// Assigned Users) pasted on the Pathologists tab. Each case counts once,
-// under its main specimen (the heaviest case type, as the Day tab orders
-// them); any cytology or FNA case (by Epic's case type) counts as
-// Cytology. Stored as counts per case type, so the groups follow the Case
-// types table's "Specimen type" column, edits included.
-const CD_GROUPS = ['GI', 'Breast', 'GYN', 'GU', 'Derm', 'Cytology', 'Bone marrow', 'Endocrine', 'Thoracic',
-    'Head & neck', 'Bone & soft tissue', 'Lymph node', 'Cardiovascular', 'Neuro', 'Other'];
-// A case type's group when none is chosen: from its name and phrases.
-const CD_GROUP_GUESS = [
-    ['Other', /^resection for tumor/],
-    ['Bone marrow', /bone marrow|peripheral smear/],
-    ['Cytology', /\bfna\b|fine needle|body fluid|\bfluid|washing|brushing|urine|cytolog|cell block|needle core|cerebrospinal|\bcsf\b|diff.?quik|thinprep/],
-    ['Breast', /breast|mastectomy|lumpectomy|areola|nipple/],
-    ['Cardiovascular', /temporal artery|carotid|\bartery\b|arterial|aort|valve|leaflet|thromb|\bvein\b|varicose|pericard|heart|cardiac/],
-    ['GYN', /endometri|uterus|uterine|fallopian|ovar|adnexa|cervi(x|cal)|leep|vulva|vagina|placenta|products of conception|\bpoc\b|hydatid|myometr|fetus|salping/],
-    ['GI', /stomach|gastric|colon|colostomy|ileostomy|\bstoma\b|duoden|esophag|ge junction|\bileum\b|ileal|rect(al|um)|small bowel|appendix|gallbladder|liver|hemorrhoid|\banal\b|anus|pancrea|bile duct|jejun|cecum|sigmoid|polyp/],
-    ['Endocrine', /thyroid|parathyroid|adrenal/],
-    ['GU', /prostat|bladder|kidney|renal|ureter|urethr|vas deferens|testi(s|cle)|scrot|foreskin|circumcision|hydrocele|penis|spermatocele|epididym/],
-    ['Derm', /skin|scalp|pilonidal|wart|abdominoplasty|panniculectomy|\bnail\b|epidermal|sebaceous|perineum/],
-    ['Head & neck', /nasal|\bnose\b|sinus|ethmoid|turbinate|tonsil|adenoid|mouth|tongue|\blip\b|larynx|laryng|uvula|pharyn|saliva|parotid|submandibular|\bear\b|gingiva|\boral\b|cheek|vocal|teeth|tooth|mandible|maxilla|neck/],
-    ['Thoracic', /lung|bronch|pleura|mediastin|thym|trache/],
-    ['Neuro', /\bdura\b|subdural|brain|\bnerve\b|spinal cord|mening|pituitary/],
-    ['Lymph node', /lymph node|sentinel|lymphoma/],
-    ['Bone & soft tissue', /soft tissue|bone|amputation|femoral head|lipoma|tendon|ganglion|tenosynov|\bdisc\b|joint|synov|hernia|cartilage|muscle|bursa|retroperitoneal|spleen|omentum|abscess|umbilic|\brib\b|hematoma/],
-];
-function cdGuessGroup(text) {
-    const t = String(text || '').toLowerCase();
-    const hit = CD_GROUP_GUESS.find(([, re]) => re.test(t));
-    return hit ? hit[0] : 'Other';
-}
-function cdTypeGroup(t) {
-    if (!t) return 'Other';
-    if (CD_GROUPS.includes(t.group)) return t.group;
-    // By its name first; its matching words only when the name says nothing.
-    const byName = cdGuessGroup(t.name);
-    return byName !== 'Other' || /^(resection for tumor|biopsy \(h|two blocks|extra block)/i.test(t.name || '') ? byName : cdGuessGroup(t.match);
-}
-
-// Group counts per person: { key: { name, pid?, n, g: { group: n } } }.
-function cdMixGroups() {
-    if (!cdMix || !cdMix.people) return null;
-    const out = {};
-    Object.entries(cdMix.people).forEach(([k, p]) => {
-        const g = {};
-        Object.entries(p.types || {}).forEach(([t, n]) => {
-            const grp = t === '_cyto' ? 'Cytology' : t === '_none' ? 'Other' : cdTypeGroup(cdTypes[t]);
-            g[grp] = (g[grp] || 0) + n;
-        });
-        out[k] = { name: p.name, pid: p.pid, n: p.n || 0, g };
-    });
-    return out;
-}
-
-function cdMixCard() {
-    const data = cdMixGroups();
-    if (!data) {
-        return `<section class="cd-card cd-mix-card"><h3 class="cd-card-h">Specimen mix</h3>
-            <p class="cd-help-text">Paste an AP case report on the workbook’s Specimen mix sheet and click Tally specimen mix.</p></section>`;
-    }
-    const ourKeys = pathologists.filter(p => typeof p.id === 'number' && data['p' + p.id]).map(p => 'p' + p.id);
-    const otherKeys = Object.keys(data).filter(k => !ourKeys.includes(k));
-    const cols = ourKeys.map(k => ({ key: k, label: data[k].name, color: (pathologists.find(p => p.id === data[k].pid) || {}).color, n: data[k].n, g: data[k].g }));
-    if (otherKeys.length) {
-        const g = {}; let n = 0;
-        otherKeys.forEach(k => { n += data[k].n; Object.entries(data[k].g).forEach(([x, c]) => { g[x] = (g[x] || 0) + c; }); });
-        cols.push({ key: 'others', label: 'Others', title: otherKeys.map(k => data[k].name + ' ' + data[k].n.toLocaleString()).join(', '), n, g });
-    }
-    const total = {};
-    cols.forEach(c => Object.entries(c.g).forEach(([x, n]) => { total[x] = (total[x] || 0) + n; }));
-    const groups = CD_GROUPS.filter(x => total[x]).sort((a, b) => total[b] - total[a]);
-    const pct = (c, x) => c.n ? 100 * (c.g[x] || 0) / c.n : 0;
-    const ourCols = cols.filter(c => c.key !== 'others');
-    const head = `<tr><th></th>${cols.map(c => `<th scope="col" title="${escapeHtml(c.title || c.label)}">${c.color ? `<span class="cd-mix-dot" style="background:${c.color}"></span>` : ''}${escapeHtml(String(c.label).replace(/^Dr\.\s*/, ''))}</th>`).join('')}</tr>`;
-    const body = groups.map(x => {
-        const mean = ourCols.length ? ourCols.reduce((s, c) => s + pct(c, x), 0) / ourCols.length : 0;
-        return `<tr><th scope="row">${escapeHtml(x)}</th>${cols.map(c => {
-            const v = pct(c, x), n = c.g[x] || 0;
-            // Above the group's average among ours: tinted, more the further above.
-            const lift = c.key !== 'others' && mean > 0 && v > mean * 1.1 ? Math.min(1, (v / mean - 1) / 0.6) : 0;
-            return `<td${lift ? ` class="is-high" style="--lift:${(0.08 + lift * 0.2).toFixed(2)}"` : ''} title="${escapeHtml(c.label + ': ' + n.toLocaleString() + ' ' + x + ' case' + (n === 1 ? '' : 's') + ' of ' + c.n.toLocaleString())}">${n ? v.toFixed(1) + '%' : '<span class="cd-mix-zero">·</span>'}</td>`;
-        }).join('')}</tr>`;
-    }).join('');
-    const foot = `<tr class="cd-mix-total"><th scope="row">Cases</th>${cols.map(c => `<td>${c.n.toLocaleString()}</td>`).join('')}</tr>`;
-    const when = cdMix.at ? new Date(cdMix.at) : null;
-    const sub = (cdMix.cases || 0).toLocaleString() + ' cases' + (cdMix.years ? ' · ' + cdMix.years : '');
-    return `<section class="cd-card cd-mix-card">
-        <h3 class="cd-card-h">Specimen mix <span title="${escapeHtml('From the AP case report tallied in the workbook ' + (when ? MONTHS_SHORT[when.getMonth()] + ' ' + when.getDate() + ', ' + when.getFullYear() : '') + '. Each case counts once, by its main specimen; cytology and FNA cases as Cytology.')}">${escapeHtml(sub)}</span></h3>
-        <div class="cd-mix-scroll"><table class="cd-mix"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table></div>
-      </section>`;
-}
-
 // ── Publishing for the Excel workbook ───────────────────────────────────
 // Case lists hold case numbers (PHI, per hospital IT), so they're split in
 // an Excel-on-the-web workbook on the hospital's Office 365, never here.
@@ -1273,7 +1172,7 @@ function cdMixCard() {
 //     types, people, services, settings, constants }
 // for today and the next working days. The workbook fetches it through the
 // caseApi function (functions/index.js) and sends back only per-person
-// totals (the ledger) and specimen-mix counts. Any director session keeps
+// totals (the ledger). Any director session keeps
 // it current: renderAll → cdPublishSoon.
 const CD_PUBLISH_DAYS = 10;
 let _cdPubTimer = null;
@@ -1292,7 +1191,7 @@ function cdPublishData() {
         days[fmt(d)] = { team };
     }
     const types = cdTypeList().map(t => ({
-        id: t.id, name: t.name || '', match: t.match || '', group: cdTypeGroup(t),
+        id: t.id, name: t.name || '', match: t.match || '',
         minutes: Number(t.minutes) || 0,
         addMinutes: t.addMinutes === undefined || t.addMinutes === null || t.addMinutes === '' ? null : Number(t.addMinutes),
         slides: t.slides === undefined || t.slides === null || t.slides === '' ? null : Number(t.slides),
@@ -1388,7 +1287,6 @@ function cdPeopleViewHtml() {
             }).join('')}
           </div>
         </section>
-        ${cdMixCard()}
         ${cdWorkbookCard()}
         <section class="cd-card"><p class="cd-help-text">A full-time pathologist has a daily share of 1. A part-timer’s share is their FTE, raised when they take more PTO than the full-timers so the year still comes to FTE × a full-timer’s work (never more than a full day). Half of anyone’s lead or lag is worked off with each new list. “Typed in Epic” is what the case assignment automation types in Epic’s case assignment window. Blank means the last name.</p></section>
       </div>`;

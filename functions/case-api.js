@@ -12,7 +12,6 @@
 //        record — that record's per-person balance, left out of the totals.
 //   POST ?op=record  { date, key?, minutes, expected, cases }   one list's
 //        per-person totals (ledger/<date>/<key>; key replaces a record).
-//   POST ?op=mix     { cases, years, people }   specimen-mix counts.
 //
 // Every request carries the shared key (X-Key header). Anything that looks
 // like a case number in a request is refused.
@@ -59,7 +58,7 @@ function shapeTeam(team) {
 }
 function shapeTypes(types) {
     return arr(types).map(t => ({
-        id: String(t.id), name: t.name || '', match: t.match || '', group: t.group || 'Other',
+        id: String(t.id), name: t.name || '', match: t.match || '',
         minutes: Number(t.minutes) || 0,
         addMinutes: t.addMinutes === undefined || t.addMinutes === null ? null : Number(t.addMinutes),
         slides: t.slides === undefined || t.slides === null ? null : Number(t.slides),
@@ -156,31 +155,6 @@ async function postRecord(db, body) {
     return { key: ref.key };
 }
 
-async function postMix(db, body) {
-    const people = body.people;
-    if (!people || typeof people !== 'object' || Array.isArray(people)) throw new ApiError(400, 'people must be an object.');
-    const clean = {};
-    Object.entries(people).forEach(([k, p]) => {
-        if (!/^[a-z][-\w]{0,40}$/.test(k) || !p || typeof p !== 'object') throw new ApiError(400, `people: bad entry "${k}".`);
-        const types = {};
-        Object.entries(p.types || {}).forEach(([t, n]) => {
-            if (!KEY_RE.test(t) || !Number.isInteger(n) || n < 0) throw new ApiError(400, `people.${k}: bad count.`);
-            types[t] = n;
-        });
-        const entry = { name: String(p.name || '').slice(0, 80), n: Number.isInteger(p.n) ? p.n : 0, types };
-        if (Number.isInteger(p.pid)) entry.pid = p.pid;
-        clean[k] = entry;
-    });
-    const mix = {
-        at: Date.now(), by: 'excel',
-        cases: Number.isInteger(body.cases) ? body.cases : 0,
-        years: String(body.years || '').slice(0, 40),
-        people: clean,
-    };
-    await db.ref('scheduler/caseDist/specimenMix').set(mix);
-    return { ok: true, cases: mix.cases };
-}
-
 // One request → { status, body }. `key` is the shared secret.
 export async function handleCaseApi(req, { db, key, now = new Date() }) {
     try {
@@ -192,7 +166,6 @@ export async function handleCaseApi(req, { db, key, now = new Date() }) {
             const body = req.body && typeof req.body === 'object' ? req.body : {};
             assertNoCaseNumbers(body);
             if (op === 'record') return { status: 200, body: await postRecord(db, body) };
-            if (op === 'mix') return { status: 200, body: await postMix(db, body) };
         }
         throw new ApiError(404, 'Unknown request.');
     } catch (err) {
